@@ -10,6 +10,15 @@ Evidence-backed lessons for the parent and public host contracts; see the [AI wo
 
 ## Entries
 
+### HLS-001: Validate FFmpeg options against the actual input container; successful probing does not prove transcoding works
+
+- Scope: remote video HLS transcoding, songloft-org/songloft#541; baseline `041d34d7e9387b60ed8126022071f731a7268aa6`.
+- Failure evidence: on 2026-10-26, the initial implementation included the HLS demuxer option `-allowed_extensions ALL` in every input command. ffprobe successfully inspected a real H.264 + MP2 TS source, but ffmpeg failed before the first segment with `Option allowed_extensions not found`. Restoring this option through an isolated overlay made `TestHLSTranscodeRealFFmpeg` fail for the same reason in 0.41 seconds; log: `/tmp/songloft-541-negative-demux.log`.
+- Rule and fix: keep demuxer-specific options out of shared input arguments. Preserve allowed media suffixes in gateway resource URLs and apply common protocol/container restrictions; ordinary TS input does not need HLS-specific options. Tests execute both direct TS and master-playlist → media-playlist → TS input paths.
+- Done right: Linux amd64 / Go 1.26.0 / FFmpeg 5.1.7; unchanged per-packet video SHA-256 hashes, AAC-LC stereo 48kHz output, rolling windows, session reclamation, targeted race checks, and real backend HTTP verification passed. Log: `/tmp/songloft-541-race-complete.log`; actual child-process and temporary-directory reclamation: `/tmp/songloft-541-smoke-rln_xh54/result.json`. A second overlay removing session ownership checks failed as expected because another client could read the session; log: `/tmp/songloft-541-negative-owner.log`.
+- Not run: iPhone Safari, the reporter's actual IPTV source, or physical devices on other systems. Backend/media checks do not replace device playback acceptance.
+- Seen 1× (2026-10-26). Status: lesson; main-repository backend implementation and verification complete; release and Safari acceptance follow subsequent evidence on #541.
+
 ### PLAYLIST-001: Check built-in playlist display preferences separately from hidden-song semantics
 
 - Scope: home favorites cards, client menus and server playlist visibility, songloft-org/songloft#532.

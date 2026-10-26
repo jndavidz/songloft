@@ -10,6 +10,15 @@
 
 ## 条目
 
+### HLS-001：按真实输入容器验证 FFmpeg 参数，探测成功不代表转码命令可用
+
+- 范围：远程视频 HLS 转码，songloft-org/songloft#541；基线 `041d34d7e9387b60ed8126022071f731a7268aa6`。
+- 失败证据：2026-10-26，初版将 HLS demuxer 的 `-allowed_extensions ALL` 放到所有输入命令；ffprobe 对真实 H.264 + MP2 TS 源探测成功，ffmpeg 却在生成首片前报 `Option allowed_extensions not found`。隔离 overlay 恢复此参数，`TestHLSTranscodeRealFFmpeg` 在 0.41 秒按同样原因失败，日志 `/tmp/songloft-541-negative-demux.log`。
+- 规则与修复：不要把特定 demuxer 的选项放进共用输入参数；网关给改写资源保留允许的媒体后缀，使用通用协议/容器限制，普通 TS 输入无需 HLS 专属参数。测试分别覆盖直接 TS 与主列表→子列表→TS 分片的完整执行链。
+- Done right：Linux amd64 / Go 1.26.0 / FFmpeg 5.1.7，真实视频包 SHA-256 逐包不变、输出 AAC-LC 双声道 48kHz、滚动窗口、会话回收、定向 race 和实际后端 HTTP 验证通过。日志 `/tmp/songloft-541-race-complete.log`，实际进程与目录回收证据 `/tmp/songloft-541-smoke-rln_xh54/result.json`。另一个 overlay 去掉会话归属判断时，回归按预期因跨客户端读取成功而失败，日志 `/tmp/songloft-541-negative-owner.log`。
+- Not run：iPhone Safari、报告人的实际 IPTV 源及其他系统真机；后端/媒体验证不替代设备播放验收。
+- Seen 1× (2026-10-26)。状态：经验；主仓库后端实现与验证完成，发布及 Safari 实测以 #541 后续证据为准。
+
 ### PLAYLIST-001：内置歌单的展示偏好与隐藏歌曲语义必须分开核对
 
 - 范围：首页收藏展示、客户端菜单及服务端歌单可见性，songloft-org/songloft#532。
