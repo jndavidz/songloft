@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/songloft-org/plugin-toolchain/main/schemas/plugin.schema.json",
+  "name": "kwqq",
+  "version": "2026.10.28",
+  "description": "接入自建 kw-qq-music-api：酷我/QQ/千千/咪咕/网易/酷狗六源聚合搜索与 320k 播放，附歌词与封面提供者。需在设置页填 kwqq-api 地址。",
+  "author": "jndavidz",
+  "homepage": "https://github.com/jndavidz/musicdl",
+  "license": "Apache-2.0",
+  "entryPath": "kwqq",
+  "main": "main.js",
+  "minHostVersion": "2.9.0",
+  "permissions": [
+    "storage",
+    "net"
+  ],
+  "entryHash": "",
+  "zipHash": ""
+}

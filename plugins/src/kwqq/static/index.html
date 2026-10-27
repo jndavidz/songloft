@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>kwqq 音源</title>
+<style>
+  :root { color-scheme: light dark; --bd: #8884; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: calc(env(safe-area-inset-top) + 12px) 14px 24px; font-size: 15px; }
+  h2 { margin: 0 0 10px; font-size: 17px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .tabs button { flex: 1; padding: 9px; border: 1px solid var(--bd); border-radius: 10px; background: transparent; color: inherit; font-size: 15px; font-weight: 600; }
+  .tabs button.on { background: #3478f6; border-color: #3478f6; color: #fff; }
+  .searchbar { display: flex; gap: 8px; }
+  .searchbar input { flex: 1; padding: 11px; border: 1px solid var(--bd); border-radius: 10px; font-size: 15px; background: transparent; color: inherit; }
+  .searchbar button { padding: 0 18px; border: 0; border-radius: 10px; background: #3478f6; color: #fff; font-size: 15px; font-weight: 600; }
+  #status { font-size: 13px; color: #888; margin: 10px 2px; min-height: 18px; }
+  .song { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-bottom: 1px solid #8883; cursor: pointer; }
+  .song:active { background: #8882; }
+  .song img { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; background: #8883; flex: none; }
+  .song .meta { flex: 1; min-width: 0; }
+  .song .t { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .song .a { font-size: 13px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge { flex: none; font-size: 11px; padding: 3px 7px; border-radius: 10px; background: #3478f622; color: #3478f6; font-weight: 700; }
+  .badge.qq { background: #2e9e5b22; color: #2e9e5b; }
+  .badge.netease { background: #d6454522; color: #d64545; }
+  .badge.kugou { background: #3478f622; color: #3478f6; }
+  .badge.migu { background: #f6a23422; color: #c07708; }
+  .badge.qianqian { background: #8455e622; color: #8455e6; }
+  label { display: block; margin: 14px 0 4px; font-weight: 600; font-size: 14px; }
+  input[type=text], input[type=password] { width: 100%; padding: 10px; border: 1px solid var(--bd); border-radius: 8px; font-size: 15px; background: transparent; color: inherit; }
+  .srcs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .srcs label { font-weight: 400; margin: 0; display: flex; align-items: center; gap: 4px; padding: 6px 10px; border: 1px solid var(--bd); border-radius: 16px; font-size: 14px; }
+  .savebtn { margin-top: 18px; width: 100%; padding: 12px; border: 0; border-radius: 10px; font-size: 16px; font-weight: 600; background: #3478f6; color: #fff; }
+  #msg { margin-top: 12px; font-size: 14px; min-height: 20px; }
+  .ok { color: #2e9e5b; } .err { color: #d64545; }
+  .hint { color: #888; font-size: 13px; line-height: 1.6; margin: 8px 0 16px; }
+  .page { display: none; } .page.on { display: block; }
+</style>
+</head>
+<body>
+<div class="tabs">
+  <button id="tab-search" class="on">搜索</button>
+  <button id="tab-cfg">设置</button>
+</div>
+
+<div class="page on" id="page-search">
+  <div class="searchbar">
+    <input type="text" id="kw" placeholder="搜歌名 / 歌手（六源聚合）">
+    <button id="go">搜索</button>
+  </div>
+  <div id="status">点结果即导入曲库并播放（走宿主播放器，可直接投送 DLNA）</div>
+  <button id="playall" class="savebtn" style="display:none">▶ 播放全部（导入当前列表）</button>
+  <div id="list"></div>
+</div>
+
+<div class="page" id="page-cfg">
+  <h2>kwqq 音源设置</h2>
+  <p class="hint">
+    接自建 kw-qq-music-api。家庭内网（10.10.10.0/24）访问 <code>http://10.10.10.2:3003</code> 免 key；
+    外网 / WireGuard 场景需填 API key。
+  </p>
+  <label>kwqq-api 地址</label>
+  <input type="text" id="base" placeholder="http://10.10.10.2:3003">
+  <label>API key（内网可留空）</label>
+  <input type="password" id="key" placeholder="留空 = 不带 key">
+  <label>启用音源</label>
+  <div class="srcs" id="srcs"></div>
+  <label>音质封顶</label>
+  <input type="text" id="quality" placeholder="320k">
+  <button class="savebtn" id="save">保存</button>
+  <div id="msg"></div>
+</div>
+
+<script type="module">
+const ALL = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou'];
+const NAMES = { kuwo: '酷我', qq: 'QQ', qianqian: '千千', migu: '咪咕', netease: '网易云', kugou: '酷狗' };
+const $ = (id) => document.getElementById(id);
+const P = window.SongloftPlugin || {};
+
+// 插件路由鉴权：宿主把 access_token 注入 localStorage['songloft-auth']
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  try {
+    const a = JSON.parse(localStorage.getItem('songloft-auth') || 'null');
+    if (a && a.accessToken) h['Authorization'] = 'Bearer ' + a.accessToken;
+  } catch (e) { /* 匿名场景由宿主公共脚本兜底 */ }
+  return h;
+}
+async function pluginApi(path, opts) {
+  const res = await fetch('.' + path, Object.assign({}, opts, { headers: authHeaders(Object.assign({ 'Content-Type': 'application/json' }, (opts && opts.headers) || {})) }));
+  if (res.status === 401) throw new Error('401 未授权：请退出插件页重新进入');
+  const j = await res.json();
+  if (!res.ok) throw new Error(j.error || ('HTTP ' + res.status));
+  return j;
+}
+
+// ===== 搜索页 =====
+let lastResults = [];
+function renderList(items) {
+  $('list').innerHTML = '';
+  for (const it of items) {
+    const div = document.createElement('div');
+    div.className = 'song';
+    const img = document.createElement('img');
+    if (it.cover_url) img.src = it.cover_url;
+    const meta = document.createElement('div'); meta.className = 'meta';
+    meta.innerHTML = '<div class="t"></div><div class="a"></div>';
+    meta.children[0].textContent = it.title;
+    meta.children[1].textContent = it.artist + (it.album ? ' · ' + it.album : '') + ' · ' + fmtDur(it.duration);
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + (it.source_data.s || '');
+    badge.textContent = NAMES[it.source_data.s] || it.source_data.s;
+    div.appendChild(img); div.appendChild(meta); div.appendChild(badge);
+    div.onclick = () => playSong(it);
+    $('list').appendChild(div);
+  }
+}
+function fmtDur(s) { s = Number(s) || 0; return s ? Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') : '--:--'; }
+
+async function doSearch() {
+  const kw = $('kw').value.trim();
+  if (!kw) return;
+  $('status').textContent = '搜索中…';
+  $('list').innerHTML = '';
+  $('playall').style.display = 'none';
+  try {
+    const j = await pluginApi('/api/search', { method: 'POST', body: JSON.stringify({ keyword: kw, page: 1, page_size: 30 }) });
+    lastResults = j.results || [];
+    renderList(lastResults);
+    $('status').textContent = lastResults.length + ' 条结果（点任意一首播放）';
+    if (lastResults.length) $('playall').style.display = 'block';
+  } catch (e) {
+    $('status').textContent = '搜索失败：' + e; 
+  }
+}
+
+async function importAndQueue(items, label) {
+  $('status').textContent = '导入 ' + items.length + ' 首…';
+  const j = await pluginApi('/import', { method: 'POST', body: JSON.stringify({ items }) });
+  const songs = (j.songs || []).filter(s => s && s.id);
+  if (!songs.length) throw new Error('宿主未返回歌曲 id');
+  if (P.player && typeof P.player.setQueue === 'function') {
+    await P.player.setQueue(songs.map(s => s.id), { startIndex: 0 });
+    $('status').textContent = '▶ ' + label + '（宿主播放器，可投送）';
+  } else {
+    $('status').textContent = '已导入 ' + songs.length + ' 首（id: ' + songs.slice(0, 5).map(s => s.id).join(',') + '…）— 在宿主「歌曲」页播放';
+  }
+}
+
+async function playSong(it) {
+  $('status').textContent = '导入并播放「' + it.title + '」…';
+  try {
+    await importAndQueue([it], '正在播放「' + it.title + '」');
+  } catch (e) {
+    $('status').textContent = '播放失败：' + e;
+  }
+}
+
+async function playAll() {
+  if (!lastResults.length) return;
+  $('playall').disabled = true;
+  try {
+    await importAndQueue(lastResults.slice(0, 30), '播放全部 ' + Math.min(lastResults.length, 30) + ' 首');
+  } catch (e) {
+    $('status').textContent = '播放全部失败：' + e;
+  } finally {
+    $('playall').disabled = false;
+  }
+}
+$('playall').onclick = playAll;
+
+// ===== 设置页 =====
+function renderSrcs(active) {
+  $('srcs').innerHTML = '';
+  for (const s of ALL) {
+    const lb = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = s; cb.checked = active.indexOf(s) >= 0;
+    lb.appendChild(cb); lb.appendChild(document.createTextNode(NAMES[s]));
+    $('srcs').appendChild(lb);
+  }
+}
+async function loadCfg() {
+  try {
+    const cfg = await pluginApi('/config');
+    $('base').value = cfg.base || '';
+    $('key').value = '';
+    $('key').placeholder = cfg.has_key ? '已设置（留空保持不变）' : '留空 = 不带 key';
+    $('quality').value = cfg.quality || '320k';
+    renderSrcs(cfg.sources || ALL);
+  } catch (e) {
+    $('msg').textContent = '读取配置失败：' + e; $('msg').className = 'err';
+    renderSrcs(ALL);
+  }
+}
+$('save').onclick = async () => {
+  try {
+    const sources = Array.from($('srcs').querySelectorAll('input:checked')).map(i => i.value);
+    if (!sources.length) throw new Error('至少启用一个音源');
+    const body = { base: $('base').value.trim(), sources, quality: $('quality').value.trim() || '320k' };
+    const key = $('key').value.trim();
+    if (key) body.key = key;
+    await pluginApi('/config', { method: 'POST', body: JSON.stringify(body) });
+    $('msg').textContent = '已保存 ✓';
+    $('msg').className = 'ok';
+  } catch (e) {
+    $('msg').textContent = '保存失败：' + e; $('msg').className = 'err';
+  }
+};
+
+// ===== tabs =====
+$('tab-search').onclick = () => { setTab('search'); };
+$('tab-cfg').onclick = () => { setTab('cfg'); };
+function setTab(t) {
+  $('tab-search').className = t === 'search' ? 'on' : '';
+  $('tab-cfg').className = t === 'cfg' ? 'on' : '';
+  $('page-search').className = 'page' + (t === 'search' ? ' on' : '');
+  $('page-cfg').className = 'page' + (t === 'cfg' ? ' on' : '');
+  if (t === 'cfg') loadCfg();
+}
+
+$('go').onclick = doSearch;
+$('kw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+</script>
+</body>
+</html>

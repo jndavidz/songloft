@@ -1,0 +1,18 @@
+{
+  "name": "songloft-plugin-kwqq",
+  "version": "2026.10.28",
+  "description": "kw-qq-music-api (kwqq) 音源插件：六源聚合搜索、320k 播放直链、歌词/封面提供者",
+  "private": true,
+  "scripts": {
+    "build": "songloft-plugin build",
+    "dev": "songloft-plugin dev",
+    "validate": "songloft-plugin validate"
+  },
+  "devDependencies": {
+    "@songloft/plugin-builder": "^2.18.0",
+    "@songloft/plugin-sdk": "^2.18.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}

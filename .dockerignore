@@ -6,7 +6,7 @@ yarn.lock
 package-lock.json
 
 # Go
-bin
+# bin  # Dockerfile.nas 需要它作为构建上下文
 obj
 *.exe
 *.exe~
