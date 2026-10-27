@@ -3,7 +3,7 @@ services:
   # 本镜像为 fork 构建（无 UPX、开源构建无 Tracely 遥测、lite 版不嵌 Web 前端——管理走手机 App）。
   # 构建方式见仓库 Dockerfile.nas 注释。
   songloft:
-    image: songloft-fork:latest
+    image: songloft-fork:full
     container_name: songloft
     network_mode: host          # 58091 直绑宿主
     user: "1028:100"            # 不以 root 跑，避免 Synology ACL 000 权限问题
