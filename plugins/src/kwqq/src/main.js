@@ -275,6 +275,25 @@ router.get('/cover-search', async (req) => {
   return jsonResponse(payload)
 })
 
+// 专辑检索（消费 kwqq-api P6 `/{source}/album`；netease 先行，其余源 501 → UI 提示）
+router.get('/album', async (req) => {
+  const q = parseQuery(req.query)
+  const source = q.source || 'netease'
+  const name = q.name || ''
+  const artist = q.artist || ''
+  if (!name) return jsonResponse({ error: 'name required' }, 400)
+  const cfg = await getConfig()
+  try {
+    const data = await kwqq(cfg, '/' + source + '/album?name=' + encodeURIComponent(name) +
+      (artist ? '&artist=' + encodeURIComponent(artist) : ''), 12000)
+    return jsonResponse(data)
+  } catch (e) {
+    const msg = String(e && e.message || e)
+    if (msg.indexOf('501') >= 0) return jsonResponse({ error: 'source "' + source + '" 不支持专辑检索（kwqq-api 未实现）', unsupported: true }, 501)
+    return jsonResponse({ error: msg }, 502)
+  }
+})
+
 // ===== 配置端点（设置页用；插件路由默认带 JWT，外部无法改写） =====
 router.get('/config', async () => {
   const cfg = await getConfig()

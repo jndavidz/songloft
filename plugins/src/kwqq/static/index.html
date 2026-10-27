@@ -22,6 +22,9 @@
   .song .meta { flex: 1; min-width: 0; }
   .song .t { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .song .a { font-size: 13px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .album-link { color: #3478f6; text-decoration: underline; }
+  .trackno { flex: none; width: 22px; text-align: right; color: #888; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .backbtn { padding: 5px 12px; border: 1px solid var(--bd); border-radius: 8px; background: transparent; color: inherit; font-size: 13px; margin-bottom: 6px; }
   .badge { flex: none; font-size: 11px; padding: 3px 7px; border-radius: 10px; background: #3478f622; color: #3478f6; font-weight: 700; }
   .badge.qq { background: #2e9e5b22; color: #2e9e5b; }
   .badge.netease { background: #d6454522; color: #d64545; }
@@ -98,23 +101,87 @@ async function pluginApi(path, opts) {
 
 // ===== 搜索页 =====
 let lastResults = [];
+
+function songRow(it, opts) {
+  const div = document.createElement('div');
+  div.className = 'song';
+  if (opts && opts.trackno) {
+    const no = document.createElement('span');
+    no.className = 'trackno'; no.textContent = it.track_no || '';
+    div.appendChild(no);
+  }
+  const img = document.createElement('img');
+  if (it.cover_url) img.src = it.cover_url;
+  const meta = document.createElement('div'); meta.className = 'meta';
+  meta.innerHTML = '<div class="t"></div><div class="a"></div>';
+  meta.children[0].textContent = it.title;
+  // 专辑名可点 → 专辑视图（歌曲模式才可点；专辑视图里平铺展示）
+  const line2 = document.createElement('span');
+  line2.textContent = it.artist || '';
+  if (it.album) {
+    line2.appendChild(document.createTextNode(' · '));
+    const al = document.createElement('span');
+    al.textContent = it.album;
+    if (!opts || !opts.trackno) {
+      al.className = 'album-link';
+      al.onclick = (ev) => { ev.stopPropagation(); openAlbum(it.source_data.s, it.album, it.artist || ''); };
+    }
+    line2.appendChild(al);
+  }
+  line2.appendChild(document.createTextNode(' · ' + fmtDur(it.duration)));
+  meta.children[1].appendChild(line2);
+  const badge = document.createElement('span');
+  badge.className = 'badge ' + (it.source_data.s || '');
+  badge.textContent = NAMES[it.source_data.s] || it.source_data.s;
+  div.appendChild(img); div.appendChild(meta); div.appendChild(badge);
+  div.onclick = () => playSong(it);
+  return div;
+}
+
 function renderList(items) {
   $('list').innerHTML = '';
-  for (const it of items) {
-    const div = document.createElement('div');
-    div.className = 'song';
-    const img = document.createElement('img');
-    if (it.cover_url) img.src = it.cover_url;
-    const meta = document.createElement('div'); meta.className = 'meta';
-    meta.innerHTML = '<div class="t"></div><div class="a"></div>';
-    meta.children[0].textContent = it.title;
-    meta.children[1].textContent = it.artist + (it.album ? ' · ' + it.album : '') + ' · ' + fmtDur(it.duration);
-    const badge = document.createElement('span');
-    badge.className = 'badge ' + (it.source_data.s || '');
-    badge.textContent = NAMES[it.source_data.s] || it.source_data.s;
-    div.appendChild(img); div.appendChild(meta); div.appendChild(badge);
-    div.onclick = () => playSong(it);
-    $('list').appendChild(div);
+  for (const it of items) $('list').appendChild(songRow(it));
+}
+
+async function openAlbum(source, name, artist) {
+  $('status').textContent = '拉取专辑「' + name + '」…';
+  $('list').innerHTML = '';
+  $('playall').style.display = 'none';
+  try {
+    const j = await pluginApi('/album?source=' + encodeURIComponent(source) +
+      '&name=' + encodeURIComponent(name) + '&artist=' + encodeURIComponent(artist || ''));
+    const items = (j.items || []).map((it) => ({
+      title: it.name || it.title, artist: it.singer || it.artist,
+      album: it.album || name, duration: it.duration_s || it.duration || 0,
+      cover_url: it.cover || it.cover_url || '',
+      source_data: it.source_data || it.extra || {},
+      track_no: it.track_no,
+    }));
+    // kwqq /album 的 items 已是 SearchResultItem 形状（source_data 在 extra?）——统一兜底：
+    for (const it of items) {
+      if (!it.source_data || !it.source_data.s) it.source_data = { s: source, i: it.id || it.source_data?.i, n: it.title, a: it.artist, al: name };
+    }
+    const back = document.createElement('button');
+    back.className = 'backbtn'; back.textContent = '← 返回搜索结果';
+    back.onclick = () => { $('list').innerHTML = ''; renderList(lastResults); $('status').textContent = lastResults.length + ' 条结果'; $('playall').style.display = 'block'; };
+    const head = document.createElement('div');
+    head.className = 'backrow'; head.appendChild(back);
+    const ttl = document.createElement('span');
+    ttl.textContent = '♪ ' + (j.albums && j.albums[0] ? (j.albums[0].name + ' · ' + (j.albums[0].artist || '')) : name) + '（' + items.length + ' 首，官方曲序）';
+    head.appendChild(ttl);
+    $('list').appendChild(head);
+    for (const it of items) $('list').appendChild(songRow(it, { trackno: true }));
+    // 播放全部改为整张专辑
+    $('playall').onclick = async () => {
+      $('playall').disabled = true;
+      try { await importAndQueue(items, '播放专辑「' + name + '」全部 ' + items.length + ' 首'); }
+      catch (e) { $('status').textContent = '播放专辑失败：' + e; }
+      finally { $('playall').disabled = false; }
+    };
+    $('playall').style.display = 'block';
+    $('status').textContent = '专辑「' + name + '」' + items.length + ' 首（点任意一首播放，或播放全部）';
+  } catch (e) {
+    $('status').textContent = '专辑拉取失败：' + e;
   }
 }
 function fmtDur(s) { s = Number(s) || 0; return s ? Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') : '--:--'; }
@@ -125,6 +192,7 @@ async function doSearch() {
   $('status').textContent = '搜索中…';
   $('list').innerHTML = '';
   $('playall').style.display = 'none';
+  $('playall').onclick = playAll;   // 专辑视图可能改写过播放全部的目标
   try {
     const j = await pluginApi('/api/search', { method: 'POST', body: JSON.stringify({ keyword: kw, page: 1, page_size: 30 }) });
     lastResults = j.results || [];
