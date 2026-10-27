@@ -19,7 +19,11 @@ RUN apk add --no-cache ca-certificates tzdata ffmpeg su-exec
 ENV TZ=Asia/Shanghai
 WORKDIR /app
 
-COPY bin/songloft-linux-amd64 /app/songloft
+# bin/songloft-linux-amd64      = lite（无 Web 前端，-tags lite）
+# bin/songloft-linux-amd64-full = full（嵌入 Lynx Web：make build-frontend-web-embedded 后构建）
+# 构建变体：docker build -f Dockerfile.nas --build-arg SONGLOFT_BIN=bin/songloft-linux-amd64-full -t songloft-fork:full .
+ARG SONGLOFT_BIN=bin/songloft-linux-amd64
+COPY ${SONGLOFT_BIN} /app/songloft
 RUN chmod +x /app/songloft && mkdir -p /app/music /app/data
 
 EXPOSE 58091
