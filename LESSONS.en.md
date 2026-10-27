@@ -10,6 +10,15 @@ Evidence-backed lessons for the parent and public host contracts; see the [AI wo
 
 ## Entries
 
+### CI-002: Read ffprobe packet hashes by field rather than slicing CSV lines
+
+- Scope: video-copy verification in `TestHLSTranscodeRealFFmpeg`; baseline `af5a4b3873ba72e9918ddf661da87ae563448d36`.
+- Failure evidence: on 2026-10-27, [Quality](https://github.com/songloft-org/songloft/actions/runs/40443632206) reported `video packet 39 changed` on Ubuntu / FFmpeg 6.1.1; the same old test passed ten times locally with FFmpeg 5.1.7. Its CSV parser kept everything from `SHA256:` to the line end, including subsequent fields. Real source and first-segment packet 39 have the same hash, but the source packet carries an MPEG-TS Stream ID while the final segment packet does not. The [ffprobe 6.1.1 source](https://github.com/FFmpeg/FFmpeg/blob/n6.1.1/fftools/ffprobe.c) prints `data_hash` before side data, making the old comparison depend on output layout.
+- Rule and fix: compare compressed payloads through JSON `packets[].data_hash`, preserving packet order, nonempty output, SHA-256 field validation, and equality for every packet. Changes in CSV side metadata do not establish video reencoding. Do not skip the check, relax equality, or change production FFmpeg arguments.
+- Done right: Linux amd64 / Go 1.26.0 / FFmpeg 5.1.7; `CGO_ENABLED=0 go test -tags dev,lite ./...`, matching vet, 59 script tests, formatting, and diff checks pass. An isolated Go overlay replacing video copy with libx264 reencoding makes the updated test fail on packet 0 as expected, retaining detection of actual data changes. Logs, tool versions, and version-comparison evidence are under `/tmp/songloft-ci-hls-20261027/`; Ubuntu 6.1.1 and post-push CI results must be checked against the delivered SHA.
+- Not run: Safari, real IPTV sources, or physical-device playback. This only corrects test parsing and does not change server playback behavior.
+- Seen 1× (2026-10-27). Status: test-compatibility lesson, separate from missing FFmpeg dependencies in CI-001.
+
 ### CI-001: Install external tools explicitly in the quality job for media integration tests
 
 - Scope: parent Release/Quality and HLS transcoding tests; songloft-org/songloft#541 and songloft-org/songloft#542.

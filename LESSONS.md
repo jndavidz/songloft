@@ -10,6 +10,15 @@
 
 ## 条目
 
+### CI-002：ffprobe 包哈希必须按字段读取，不能截取整段 CSV
+
+- 范围：`TestHLSTranscodeRealFFmpeg` 的视频复制校验；基线 `af5a4b3873ba72e9918ddf661da87ae563448d36`。
+- 失败证据：2026-10-27，[Quality](https://github.com/songloft-org/songloft/actions/runs/40443632206) 在 Ubuntu / FFmpeg 6.1.1 报 `video packet 39 changed`；同一旧测试在本地 FFmpeg 5.1.7 重复十次通过。旧解析器从 CSV 的 `SHA256:` 截到行末，混入后续字段。真实源文件与首分片的第 39 包哈希相同，但源文件该包带 MPEG-TS Stream ID，分片末包不带；[ffprobe 6.1.1 源码](https://github.com/FFmpeg/FFmpeg/blob/n6.1.1/fftools/ffprobe.c)先输出 `data_hash` 再输出 side data，旧比较因此依赖输出布局。
+- 规则与修复：用 JSON 的 `packets[].data_hash` 比较压缩载荷，保留包顺序、非空输出、SHA-256 字段有效性及逐包相等校验。CSV 附加元数据变化不能当成视频重编码证据；不跳过检查、不放宽比较，也不改 FFmpeg 业务参数。
+- Done right：Linux amd64 / Go 1.26.0 / FFmpeg 5.1.7，`CGO_ENABLED=0 go test -tags dev,lite ./...`、同标签 vet、59 项脚本测试、格式及 diff 检查通过。隔离 Go overlay 将视频复制改为 libx264 重编码，新测试按预期因第 0 包哈希变化失败，证明仍能检测真实数据变化。日志、工具版本和版本对照证据位于 `/tmp/songloft-ci-hls-20261027/`；Ubuntu 6.1.1 及推送后同一 SHA 的 CI 结果按交付记录核对。
+- Not run：Safari、真实 IPTV 源及真机播放；本次仅修正测试解析，未改变服务端播放行为。
+- Seen 1× (2026-10-27)。状态：测试兼容性经验，与缺少 FFmpeg 依赖的 CI-001 分开记录。
+
 ### CI-001：媒体集成测试的外部工具必须在质量作业显式安装
 
 - 范围：主仓库 Release/Quality、HLS 转码测试；songloft-org/songloft#541、songloft-org/songloft#542。

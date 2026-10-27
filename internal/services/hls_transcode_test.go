@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -130,17 +129,28 @@ func TestHLSTranscodeRealFFmpeg(t *testing.T) {
 	if !video || !audio {
 		t.Fatalf("wrong codecs: %s", probe)
 	}
-	// 对比压缩视频包的 SHA-256，证明视频轨没有重新编码。
-	packetHashes := func(path string) [][]byte {
-		out, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_entries", "packet=data_hash", "-show_data_hash", "sha256", "-of", "csv=p=0", path).Output()
+	// 只比较压缩视频包的 SHA-256。CSV 可能在哈希后附加 MPEG-TS side data，
+	// 且分片末包与源文件的 side data 不同；JSON 字段避免把这些元数据当成视频数据。
+	packetHashes := func(path string) []string {
+		t.Helper()
+		out, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_entries", "packet=data_hash", "-show_data_hash", "sha256", "-of", "json", path).Output()
 		if err != nil {
 			t.Fatal(err)
 		}
-		var hashes [][]byte
-		for _, line := range bytes.Split(out, []byte("\n")) {
-			if i := bytes.Index(line, []byte("SHA256:")); i >= 0 {
-				hashes = append(hashes, bytes.TrimSpace(line[i:]))
+		var result struct {
+			Packets []struct {
+				DataHash string `json:"data_hash"`
+			} `json:"packets"`
+		}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		hashes := make([]string, 0, len(result.Packets))
+		for i, packet := range result.Packets {
+			if !strings.HasPrefix(packet.DataHash, "SHA256:") || len(packet.DataHash) != len("SHA256:")+64 {
+				t.Fatalf("video packet %d has invalid SHA-256: %q", i, packet.DataHash)
 			}
+			hashes = append(hashes, packet.DataHash)
 		}
 		return hashes
 	}
@@ -149,8 +159,8 @@ func TestHLSTranscodeRealFFmpeg(t *testing.T) {
 		t.Fatal("no video packets")
 	}
 	for i := range output {
-		if !bytes.Equal(original[i], output[i]) {
-			t.Fatalf("video packet %d changed", i)
+		if original[i] != output[i] {
+			t.Fatalf("video packet %d changed: input=%s output=%s", i, original[i], output[i])
 		}
 	}
 	var wg sync.WaitGroup
