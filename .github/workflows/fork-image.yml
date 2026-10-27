@@ -1,0 +1,53 @@
+name: build-fork-images
+
+# fork 定制：构建不带 UPX 的 NAS 兼容镜像（DSM 6.2/kernel 3.10 上官方 UPX 镜像段错误）。
+# 开源构建不注入 TRACELY_* → 遥测不初始化。触发：fork main push（手动可 workflow_dispatch）。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Build (lite, no UPX)
+        run: |
+          VERSION=$(git describe --tags --always)
+          COMMIT=$(git rev-parse --short HEAD)
+          BUILD_TIME=$(date -u +%Y-%m-%d_%H:%M:%S)
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOAMD64=v1 \
+            go build -tags lite \
+            -ldflags "-s -w -X songloft/internal/version.Version=$VERSION -X songloft/internal/version.GitCommit=$COMMIT -X songloft/internal/version.BuildTime=$BUILD_TIME" \
+            -o bin/songloft-linux-amd64 .
+
+      - name: Sanity check (must not be UPX-packed)
+        run: |
+          file bin/songloft-linux-amd64 || true
+          if grep -q "UPX!" bin/songloft-linux-amd64; then echo "binary is UPX-packed"; exit 1; fi
+          echo "not UPX-packed ✓"
+
+      - name: Docker build (Dockerfile.nas)
+        run: docker build -f Dockerfile.nas -t ghcr.io/jndavidz/songloft-fork:latest .
+
+      - name: Login ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image
+        run: docker push ghcr.io/jndavidz/songloft-fork:latest

@@ -59,7 +59,7 @@
   <h2>kwqq 音源设置</h2>
   <p class="hint">
     接自建 kw-qq-music-api。家庭内网（10.10.10.0/24）访问 <code>http://10.10.10.2:3003</code> 免 key；
-    外网 / WireGuard 场景需填 API key。
+    外网 / WireGuard 场景需填 API key。<b>B站</b>源仅 App 内试听（fMP4），DLNA 投送不可用，默认关闭。
   </p>
   <label>kwqq-api 地址</label>
   <input type="text" id="base" placeholder="http://10.10.10.2:3003">
@@ -74,8 +74,8 @@
 </div>
 
 <script type="module">
-const ALL = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou'];
-const NAMES = { kuwo: '酷我', qq: 'QQ', qianqian: '千千', migu: '咪咕', netease: '网易云', kugou: '酷狗' };
+const ALL = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou', 'bilibili'];
+const NAMES = { kuwo: '酷我', qq: 'QQ', qianqian: '千千', migu: '咪咕', netease: '网易云', kugou: '酷狗', bilibili: 'B站' };
 const $ = (id) => document.getElementById(id);
 const P = window.SongloftPlugin || {};
 

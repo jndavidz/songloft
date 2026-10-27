@@ -11,14 +11,18 @@ import {
   createMusicUrlHandler,
 } from '@songloft/plugin-sdk'
 
-const ALL_SOURCES = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou']
+const ALL_SOURCES = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou', 'bilibili']
 // 歌词回搜顺序：酷我歌词链路最稳（qianqian by-id 不支持歌词，跳过）
 const LYRIC_SOURCES = ['kuwo', 'qq', 'netease', 'migu', 'kugou']
+
+// 默认源 = 六个 mp3 源。bilibili 在设置页手动启用（默认关）：
+//   App 内试听可用（宿主代理会带 Referer/UA 拉 fMP4/m4s），但 **DLNA 投送不可用**（音箱解不了 fMP4 分片）。
+const DEFAULT_SOURCES = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou']
 
 const DEFAULTS = {
   base: 'http://10.10.10.2:3003',
   key: '',
-  sources: ALL_SOURCES,
+  sources: DEFAULT_SOURCES,
   quality: '320k',
 }
 
