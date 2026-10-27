@@ -1,0 +1,31 @@
+services:
+  # Songloft fork（jndavidz/songloft）：官方镜像 UPX 壳在 DSM 6.2/kernel 3.10 上段错误，
+  # 本镜像为 fork 构建（无 UPX、开源构建无 Tracely 遥测、lite 版不嵌 Web 前端——管理走手机 App）。
+  # 构建方式见仓库 Dockerfile.nas 注释。
+  songloft:
+    image: songloft-fork:latest
+    container_name: songloft
+    network_mode: host          # 58091 直绑宿主
+    user: "1028:100"            # 不以 root 跑，避免 Synology ACL 000 权限问题
+    volumes:
+      - /volume1/music:/app/music                  # 曲库共享（\\10.10.10.2\music）
+      - /volume2/docker/songloft/data:/app/data    # DB + JS 插件 + 封面缓存
+    restart: unless-stopped
+    environment:
+      - DB_PATH=/app/data/songloft.db
+      - MUSIC_DIR=/app/music
+      - LISTEN_PORT=58091
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=songloft2026
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:58091/"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
