@@ -10,6 +10,14 @@
 
 ## 条目
 
+### CI-001：媒体集成测试的外部工具必须在质量作业显式安装
+
+- 范围：主仓库 Release/Quality、HLS 转码测试；songloft-org/songloft#541、songloft-org/songloft#542。
+- 失败证据：2026-10-27，指针提交 `b4ceafab36c6d6ec6e29df260f95a081f8c0acd5` 的 [Quality](https://github.com/songloft-org/songloft/actions/runs/40440501499) 未安装 ffmpeg，HLS 失败/取消/关闭测试在探测上游前返回「ffmpeg 未配置」，真实媒体夹具也无法运行，后续打包全部跳过。
+- 规则与修复：涉及真实 ffmpeg/ffprobe 的测试，CI 在运行测试前显式安装并输出两者版本；不能用扩充 Skip 或改预期状态码掩盖缺失依赖。`release.yml` 的 Quality 统一安装 Ubuntu ffmpeg 包。
+- Done right：Linux amd64 / Go 1.26.0 / FFmpeg 5.1.7，`CGO_ENABLED=0 go test -tags dev,lite ./...`、对应 vet、59 项脚本测试及 actionlint v1.7.12 通过；Go 测试复用同源缓存。日志 `/tmp/songloft-542-quality-{go,vet,scripts}.log`、`/tmp/songloft-542-actionlint.log`。CI 新运行的实际安装、测试与打包状态以修复提交的 GitHub 记录为准。
+- Seen 1× (2026-10-27)。状态：经验；本次只补 CI 依赖，不改 HLS 业务行为。
+
 ### HLS-001：按真实输入容器验证 FFmpeg 参数，探测成功不代表转码命令可用
 
 - 范围：远程视频 HLS 转码，songloft-org/songloft#541；基线 `041d34d7e9387b60ed8126022071f731a7268aa6`。

@@ -10,6 +10,14 @@ Evidence-backed lessons for the parent and public host contracts; see the [AI wo
 
 ## Entries
 
+### CI-001: Install external tools explicitly in the quality job for media integration tests
+
+- Scope: parent Release/Quality and HLS transcoding tests; songloft-org/songloft#541 and songloft-org/songloft#542.
+- Failure evidence: on 2026-10-27, [Quality](https://github.com/songloft-org/songloft/actions/runs/40440501499) for gitlink commit `b4ceafab36c6d6ec6e29df260f95a081f8c0acd5` had no ffmpeg. HLS failure/cancellation/shutdown tests returned “ffmpeg not configured” before contacting the upstream; real media fixtures could not run either, and subsequent packaging jobs were skipped.
+- Rule and fix: explicitly install ffmpeg/ffprobe and report both versions before tests using the real tools. Do not mask missing dependencies by adding skips or changing expected status codes. Quality in `release.yml` installs Ubuntu's ffmpeg package.
+- Done right: Linux amd64 / Go 1.26.0 / FFmpeg 5.1.7; `CGO_ENABLED=0 go test -tags dev,lite ./...`, matching vet, 59 script tests and actionlint v1.7.12 pass. Go tests reuse the cache for unchanged sources. Logs: `/tmp/songloft-542-quality-{go,vet,scripts}.log` and `/tmp/songloft-542-actionlint.log`. Actual installation, test and packaging status follow GitHub records for the fix commit.
+- Seen 1× (2026-10-27). Status: lesson; this change supplies CI dependencies without changing HLS behavior.
+
 ### HLS-001: Validate FFmpeg options against the actual input container; successful probing does not prove transcoding works
 
 - Scope: remote video HLS transcoding, songloft-org/songloft#541; baseline `041d34d7e9387b60ed8126022071f731a7268aa6`.
