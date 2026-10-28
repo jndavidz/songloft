@@ -13,6 +13,7 @@
 | API 响应格式 / Swagger UI | [docs/api_response.md](docs/api_response.md) / 开发模式 `/swagger/index.html` |
 | 前端踩坑 / UI 验证 | [docs/frontend_gotchas.md](docs/frontend_gotchas.md) |
 | 文档站维护 | [docs/development.md](docs/development.md) |
+| 待办 / 后续优化 | [docs/plan/](docs/plan/)（当前：[投送时歌词不跟随](docs/plan/dlna-lyrics-follow.md)） |
 | JS 插件 / 插件源 | [插件开发指南](docs/js-plugin-development-guide.md)、[插件源制作](docs/plugin_registry.md)、`plugins/toolchain/README.md` |
 
 ---
