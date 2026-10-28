@@ -42,5 +42,10 @@ Tracely 上报由**构建期 ldflags 注入**（`internal/tracelycfg`，`AppID/A
   插件宿主 API 契约（`/api/v1/songs/remote`、`/api/music/url`、lyric/cover provider）③ DSM 老内核
   依赖（若上游引入新 syscall）。
 - **Web 前端**：`-tags lite` 不嵌 `clients/player-build/web-embedded`（需 `make build-frontend-web-embedded`，
-  Lynx/rspeedy 工具链）；嵌入后即为 full 版。管理端当前走手机 App。
+  Lynx/rspeedy 工具链）；嵌入后即为 full 版。生产已部署 **full 版（含 Web 管理 UI）**，lite 仅用于 CI 产物/备用。
 - 本地插件开发：`plugins/src/kwqq` 内 `npm install && npx songloft-plugin build` → 上传 `.jsplugin.zip`。
+
+## 5. 部署与生态集成现状
+
+NAS 生产部署（host 网络 :58091、full 版、kwqq 插件安装）、与 musicdl（kwqq-api）和 open-xiaoai（bridge/LX06）的交互、队列归属与缺口，详见：
+[`docs/plan/songloft-deployment-and-integration-20261028.md`](docs/plan/songloft-deployment-and-integration-20261028.md)。
