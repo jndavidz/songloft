@@ -14,6 +14,18 @@ import (
 type contextKey string
 
 const clientIDKey contextKey = "client_id"
+const credentialTypeKey contextKey = "credential_type"
+
+// RequireLoginSession 限制凭证管理仅由正常登录的访问令牌操作。
+func RequireLoginSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Context().Value(credentialTypeKey) != "access" {
+			respondAuthError(w, http.StatusForbidden, "请通过账号登录后管理 Token", nil)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // ClientIDFromContext 从请求上下文中提取 clientID。
 func ClientIDFromContext(ctx context.Context) string {
@@ -96,6 +108,7 @@ func AuthMiddleware(authService *services.AuthService, publicPathCheckers ...Pub
 
 			// 将 claims 信息添加到请求上下文
 			ctx := context.WithValue(r.Context(), clientIDKey, claims.ClientID)
+			ctx = context.WithValue(ctx, credentialTypeKey, claims.CredentialType)
 
 			// 认证成功，继续处理请求
 			next.ServeHTTP(w, r.WithContext(ctx))

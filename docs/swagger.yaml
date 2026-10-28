@@ -706,6 +706,29 @@ definitions:
     - key
     - value
     type: object
+  models.CreatePersonalTokenRequest:
+    properties:
+      name:
+        example: Home Assistant
+        type: string
+    type: object
+  models.CreatePersonalTokenResponse:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      last_used_at:
+        type: string
+      name:
+        type: string
+      prefix:
+        type: string
+      revoked_at:
+        type: string
+      token:
+        type: string
+    type: object
   models.ErrorResponse:
     properties:
       detail:
@@ -780,6 +803,34 @@ definitions:
         description: Token 类型
         example: Bearer
         type: string
+    type: object
+  models.PersonalToken:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      last_used_at:
+        type: string
+      name:
+        type: string
+      prefix:
+        type: string
+      revoked_at:
+        type: string
+    type: object
+  models.PersonalTokenListResponse:
+    properties:
+      limit:
+        type: integer
+      offset:
+        type: integer
+      tokens:
+        items:
+          $ref: '#/definitions/models.PersonalToken'
+        type: array
+      total:
+        type: integer
     type: object
   models.PlayHistoryEntry:
     properties:
@@ -1600,7 +1651,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: 用户登出，撤销当前访问令牌
+      description: 用户登出，撤销当前访问令牌。仅正常登录的 Access Token 可调用，插件、永久令牌和 Refresh Token 返回
+        403。
       produces:
       - application/json
       responses:
@@ -1612,6 +1664,10 @@ paths:
           description: 未授权
           schema:
             $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: 需要正常登录会话
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: 服务器错误
           schema:
@@ -1619,6 +1675,119 @@ paths:
       security:
       - BearerAuth: []
       summary: 用户登出
+      tags:
+      - 认证管理
+  /auth/personal-tokens:
+    get:
+      description: 仅正常登录会话可操作。返回含已撤销记录的元数据、真实总数及分页；不返回完整凭证或哈希。last_used_at 最多每分钟更新一次，null
+        表示尚未使用。
+      parameters:
+      - default: 20
+        description: 每页数量
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: 偏移量
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 令牌管理信息
+          schema:
+            $ref: '#/definitions/models.PersonalTokenListResponse'
+        "401":
+          description: 未授权
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: 需要正常登录会话
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: 查询失败
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 获取永久访问 Token 列表
+      tags:
+      - 认证管理
+    post:
+      consumes:
+      - application/json
+      description: 仅正常登录会话可操作。名称为 1 至 80 个字符。令牌永久有效，拥有管理员业务 API 权限，不能管理 Token。完整凭证仅本次返回，数据库只存哈希。重启或退出登录不使其失效。
+      parameters:
+      - description: 令牌名称
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreatePersonalTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: 仅此次返回完整凭证，请妥善保存
+          schema:
+            $ref: '#/definitions/models.CreatePersonalTokenResponse'
+        "400":
+          description: 名称或请求无效
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: 未授权
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: 需要正常登录会话
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: 创建失败
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 创建永久访问 Token
+      tags:
+      - 认证管理
+  /auth/personal-tokens/{id}:
+    delete:
+      description: 仅正常登录会话可操作。撤销后后续认证立即失败，不中断已开始的请求。重复撤销成功，不存在的 ID 返回 404。无需请求体。
+      parameters:
+      - description: 令牌管理 ID，不是完整凭证
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: 撤销成功
+        "401":
+          description: 未授权
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: 需要正常登录会话
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Token 不存在
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: 撤销失败
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 撤销永久访问 Token
       tags:
       - 认证管理
   /auth/refresh:
@@ -1659,7 +1828,8 @@ paths:
     get:
       consumes:
       - application/json
-      description: 获取当前用户的所有活跃令牌列表
+      description: 获取当前用户的所有活跃令牌列表，仅正常登录的 Access Token 可调用；插件、永久令牌和 Refresh Token
+        返回 403。
       parameters:
       - description: 令牌类型
         enum:
@@ -1690,6 +1860,10 @@ paths:
           description: 未授权
           schema:
             $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: 需要正常登录会话
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: 服务器错误
           schema:
@@ -1703,7 +1877,7 @@ paths:
     delete:
       consumes:
       - application/json
-      description: 撤销指定的令牌
+      description: 撤销指定的令牌，仅正常登录的 Access Token 可调用；插件、永久令牌和 Refresh Token 返回 403。
       parameters:
       - description: 令牌ID
         in: path
@@ -1729,6 +1903,10 @@ paths:
             $ref: '#/definitions/models.ErrorResponse'
         "401":
           description: 未授权
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: 需要正常登录会话
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":

@@ -62,6 +62,16 @@ type JsPlugin struct {
 	RenderEngine   string
 }
 
+type PersonalToken struct {
+	ID         string
+	Name       string
+	TokenHash  string
+	Prefix     string
+	CreatedAt  time.Time
+	LastUsedAt sql.NullTime
+	RevokedAt  sql.NullTime
+}
+
 type PlayHistory struct {
 	ID          int64
 	ContextType string

@@ -63,7 +63,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 // Logout 用户登出
 // @Summary 用户登出
-// @Description 用户登出，撤销当前访问令牌
+// @Description 用户登出，撤销当前访问令牌。仅正常登录的 Access Token 可调用，插件、永久令牌和 Refresh Token 返回 403。
 // @Tags 认证管理
 // @Accept json
 // @Produce json
@@ -72,6 +72,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} models.ErrorResponse "服务器错误"
 // @Security BearerAuth
 // @Router /auth/logout [post]
+// @Failure 403 {object} models.ErrorResponse "需要正常登录会话"
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -134,7 +135,7 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 
 // ListTokens 列出活跃令牌
 // @Summary 列出活跃令牌
-// @Description 获取当前用户的所有活跃令牌列表
+// @Description 获取当前用户的所有活跃令牌列表，仅正常登录的 Access Token 可调用；插件、永久令牌和 Refresh Token 返回 403。
 // @Tags 认证管理
 // @Accept json
 // @Produce json
@@ -146,6 +147,7 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} models.ErrorResponse "服务器错误"
 // @Security BearerAuth
 // @Router /auth/tokens [get]
+// @Failure 403 {object} models.ErrorResponse "需要正常登录会话"
 func (h *AuthHandler) ListTokens(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -179,7 +181,7 @@ func (h *AuthHandler) ListTokens(w http.ResponseWriter, r *http.Request) {
 
 // RevokeToken 撤销令牌
 // @Summary 撤销令牌
-// @Description 撤销指定的令牌
+// @Description 撤销指定的令牌，仅正常登录的 Access Token 可调用；插件、永久令牌和 Refresh Token 返回 403。
 // @Tags 认证管理
 // @Accept json
 // @Produce json
@@ -191,6 +193,7 @@ func (h *AuthHandler) ListTokens(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} models.ErrorResponse "服务器错误"
 // @Security BearerAuth
 // @Router /auth/tokens/{token_id} [delete]
+// @Failure 403 {object} models.ErrorResponse "需要正常登录会话"
 func (h *AuthHandler) RevokeToken(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tokenID := chi.URLParam(r, "token_id")

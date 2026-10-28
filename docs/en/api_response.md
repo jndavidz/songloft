@@ -2,6 +2,25 @@
 
 This project adopts a **RESTful direct-return style** and does not use a unified `{code, data, message}` envelope.
 
+## Permanent access tokens (Home Assistant / ESPHome)
+
+Open token management in client settings (Flutter: Settings → Account → Permanent access tokens; Lynx: Settings → Permanent access tokens), enter a device name, and create a token. Copy the token or the complete `Authorization: Bearer <token>` header. The complete credential is shown only once and cannot be recovered after closing. If copying fails, select and copy it manually in the current dialog.
+
+- Permanent tokens have no expiry and need no refresh. They survive server restarts, Docker updates and client logout. Recreate them if the database is lost or restored to a backup from before their creation.
+- The initial version grants administrator access to business APIs, including plugin controls and resources. Token management requires a regular signed-in Access Token; permanent tokens, Refresh Tokens and plugin system tokens receive `403` there.
+- Use a separate token per device. Revocation immediately makes subsequent authentication return `401`; requests already in progress are not interrupted. Other tokens remain valid.
+- The database stores only a SHA-256 credential hash. Lists expose neither the complete credential nor its hash. Last-use time is updated at most once per minute and is `null` until first use.
+
+| Endpoint | Request / response |
+| --- | --- |
+| `POST /api/v1/auth/personal-tokens` | `{"name":"Home Assistant"}` → `201`, metadata plus a one-time `token` |
+| `GET /api/v1/auth/personal-tokens?limit=20&offset=0` | `200`, `{"tokens":[...],"total":1,"limit":20,"offset":0}`, including revoked entries |
+| `DELETE /api/v1/auth/personal-tokens/{id}` | No body; success and repeated revocation return `204`, unknown IDs return `404` |
+
+Devices send `Authorization: Bearer sl_pat_...`. Image/audio clients that cannot set headers can use `?access_token=sl_pat_...`, just like ordinary access tokens. The management ID and full credential are separate values.
+
+Creation and list responses use `Cache-Control: no-store`. Names must contain 1–80 characters after trimming, with no control characters; invalid requests return `400`. Ordinary sign-in retains its existing 7-day Access Token and 30-day Refresh Token behavior.
+
 ---
 
 ## Success Responses

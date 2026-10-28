@@ -10,6 +10,14 @@
 
 ## 条目
 
+### AUTH-001：永久设备凭证必须与登录会话区分身份
+
+- 范围：认证中间件、Token 管理与两客户端永久访问 Token；songloft-org/songloft#546，基线 `022a56cebe4b4b6bc1ff7ca043f56d426bddaf71`。
+- 风险核对（非线上事故）：现有 `/auth/tokens` 返回完整登录凭证，原路由只有通用认证。新增永久 Token 若直接复用通用认证即可调用该接口，会绕过「只能用正常登录会话管理 Token」的产品边界；仅保护新增创建接口不足。
+- 规则与实现：认证服务从持久记录确定凭证类型，中间件把身份类别传入上下文；旧、新 Token 管理及退出登录路由都用 `RequireLoginSession`。永久凭证每次查库，不复用 JWT 的有效状态缓存，保证撤销影响后续请求。
+- Done right：真实 SQLite 服务/HTTP 测试覆盖 Access/Refresh/插件/永久凭证、两种认证传法、跨实例立即撤销及重启。隔离 overlay 移除登录身份检查，`TestPersonalTokenHTTP` 因创建返回 201 而非 403 失败；移除撤销检查，生命周期测试因已撤销凭证仍被接受失败。正向及 race 通过，证据 `/tmp/songloft-546-negative-{session,revocation}.log`、`/tmp/songloft-546-go-race.log`，最终源码身份见 `/tmp/songloft-546-verification.json`。
+- Seen 1× (2026-10-28)。状态：新功能的身份与撤销边界验证经验；提交、推送及 CI 按本批交付记录核对，真实设备边界见 [#546](docs/issue-546.md)。
+
 ### CI-002：ffprobe 包哈希必须按字段读取，不能截取整段 CSV
 
 - 范围：`TestHLSTranscodeRealFFmpeg` 的视频复制校验；基线 `af5a4b3873ba72e9918ddf661da87ae563448d36`。
