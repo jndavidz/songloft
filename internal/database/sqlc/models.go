@@ -62,6 +62,19 @@ type JsPlugin struct {
 	RenderEngine   string
 }
 
+type ListeningEvent struct {
+	Seq            int64
+	IdempotencyKey string
+	Type           string
+	RefDigest      string
+	Entry          string
+	LeaseID        string
+	Session        string
+	Payload        string
+	CreatedAt      int64
+	Acknowledged   int64
+}
+
 type ManagedPrepareOp struct {
 	ID             int64
 	Issuer         string

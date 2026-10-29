@@ -86,21 +86,38 @@ func (m *Manager) persist(op *PrepareOp) {
 }
 
 // RefFromSourceData 把插件 source_data（kwqq 形态 {"s","i","c",...}）构造为
-// TrackRef。c 字段只在 migu 源有身份意义（契约：copyrightId，kwqq 源会被
-// 白名单丢弃）；bilibili 需 cid/page，source_data 缺失时明确失败——
-// 「缺身份明确失败，不静默错配」。sources 非空时同时校验注册表。
+// TrackRef。身份 extra 按契约逐字段透传：migu copyrightId（c 字段）、
+// bilibili cid/page（存在即带，缺失时明确失败——不静默错配）。
+// sources 非空时同时校验注册表。
 func RefFromSourceData(sourceData string, sources []string) (*Ref, error) {
 	var sd struct {
-		S string `json:"s"`
-		I any    `json:"i"`
-		C any    `json:"c"`
+		S           string         `json:"s"`
+		I           any            `json:"i"`
+		C           any            `json:"c"`
+		CID         any            `json:"cid"`
+		Page        any            `json:"page"`
+		CopyrightID any            `json:"copyrightId"`
+		Extra       map[string]any `json:"extra"`
 	}
 	if err := json.Unmarshal([]byte(sourceData), &sd); err != nil {
 		return nil, fmt.Errorf("managed: source_data is not a valid identity payload: %w", err)
 	}
 	extra := map[string]any{}
-	if v := strings.TrimSpace(toStr(sd.C)); v != "" {
-		extra["copyrightId"] = v
+	setIf := func(key string, v any) {
+		if v == nil {
+			return
+		}
+		if s, ok := v.(string); ok && strings.TrimSpace(s) == "" {
+			return
+		}
+		extra[key] = v
+	}
+	setIf("copyrightId", sd.C)
+	setIf("copyrightId", sd.CopyrightID)
+	setIf("cid", sd.CID)
+	setIf("page", sd.Page)
+	for k, v := range sd.Extra {
+		setIf(k, v)
 	}
 	return MakeRef(sd.S, toStr(sd.I), extra, sources)
 }

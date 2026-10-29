@@ -10,6 +10,7 @@ import (
 )
 
 type Querier interface {
+	AckListeningEventsUpTo(ctx context.Context, seq int64) error
 	AddSongToPlaylist(ctx context.Context, arg AddSongToPlaylistParams) error
 	AddSongToPlaylistIgnore(ctx context.Context, arg AddSongToPlaylistIgnoreParams) (int64, error)
 	CleanExpiredTokens(ctx context.Context, expiresAt time.Time) (int64, error)
@@ -38,6 +39,7 @@ type Querier interface {
 	DeleteByCueSource(ctx context.Context, cueSourcePath string) (int64, error)
 	DeleteConfig(ctx context.Context, key string) (int64, error)
 	DeleteJSPlugin(ctx context.Context, id int64) error
+	DeleteListeningEventsBelow(ctx context.Context, seq int64) error
 	DeletePlayHistoryEntry(ctx context.Context, arg DeletePlayHistoryEntryParams) (int64, error)
 	DeletePlaylist(ctx context.Context, id int64) (int64, error)
 	DeletePlaylistSongsByPlaylistID(ctx context.Context, playlistID int64) error
@@ -56,6 +58,7 @@ type Querier interface {
 	GetConfig(ctx context.Context, key string) (Config, error)
 	GetJSPluginByEntryPath(ctx context.Context, entryPath string) (JsPlugin, error)
 	GetJSPluginByID(ctx context.Context, id int64) (JsPlugin, error)
+	GetListeningEventSeq(ctx context.Context, idempotencyKey string) (int64, error)
 	GetMaxPlaylistPosition(ctx context.Context) (int64, error)
 	GetMediaTicketByHash(ctx context.Context, tokenHash string) (MediaTicket, error)
 	GetPlaylistByID(ctx context.Context, arg GetPlaylistByIDParams) (GetPlaylistByIDRow, error)
@@ -71,6 +74,7 @@ type Querier interface {
 	GetThemePackByThemeID(ctx context.Context, themeID string) (ThemePack, error)
 	GetTokenByID(ctx context.Context, tokenID string) (GetTokenByIDRow, error)
 	InsertAutoCreatedPlaylist(ctx context.Context, arg InsertAutoCreatedPlaylistParams) (int64, error)
+	InsertListeningEvent(ctx context.Context, arg InsertListeningEventParams) (ListeningEvent, error)
 	InsertManagedPrepareOp(ctx context.Context, arg InsertManagedPrepareOpParams) error
 	InsertMediaTicket(ctx context.Context, arg InsertMediaTicketParams) error
 	IsTokenRevoked(ctx context.Context, arg IsTokenRevokedParams) (bool, error)
@@ -90,6 +94,7 @@ type Querier interface {
 	ListLocalSongsWithRelativePaths(ctx context.Context) ([]ListLocalSongsWithRelativePathsRow, error)
 	ListLocalWithoutFingerprint(ctx context.Context) ([]ListLocalWithoutFingerprintRow, error)
 	ListManagedPrepareOpsByEntry(ctx context.Context, arg ListManagedPrepareOpsByEntryParams) ([]ManagedPrepareOp, error)
+	ListPendingListeningEvents(ctx context.Context, arg ListPendingListeningEventsParams) ([]ListeningEvent, error)
 	ListPlayHistory(ctx context.Context, arg ListPlayHistoryParams) ([]ListPlayHistoryRow, error)
 	ListPlaylistsContainingSong(ctx context.Context, songID int64) ([]int64, error)
 	ListPluginStorageEntryPaths(ctx context.Context) ([]string, error)
@@ -99,7 +104,9 @@ type Querier interface {
 	ListSongsWithCache(ctx context.Context) ([]Song, error)
 	ListThemePacks(ctx context.Context) ([]ThemePack, error)
 	MarkFingerprintAttempted(ctx context.Context, arg MarkFingerprintAttemptedParams) error
+	MaxListeningEventSeq(ctx context.Context) (interface{}, error)
 	MaxPositionInPlaylist(ctx context.Context, playlistID int64) (int64, error)
+	MinAckedListeningEventSeq(ctx context.Context, seq int64) (int64, error)
 	RecordPlay(ctx context.Context, arg RecordPlayParams) error
 	RemoveSongFromPlaylist(ctx context.Context, arg RemoveSongFromPlaylistParams) (int64, error)
 	RenewMediaTicket(ctx context.Context, arg RenewMediaTicketParams) error
