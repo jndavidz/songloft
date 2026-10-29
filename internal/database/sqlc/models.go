@@ -35,6 +35,18 @@ type Config struct {
 	UpdatedAt time.Time
 }
 
+type IngestNotification struct {
+	ID        int64
+	NotifID   string
+	FilePath  string
+	Identity  string
+	State     string
+	Attempts  int64
+	LastError string
+	CreatedAt int64
+	UpdatedAt int64
+}
+
 type JsPlugin struct {
 	ID             int64
 	Name           string

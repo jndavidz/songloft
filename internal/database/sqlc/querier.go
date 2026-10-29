@@ -56,6 +56,7 @@ type Querier interface {
 	GetArtistByNormalizedKey(ctx context.Context, normalizedKey string) (Artist, error)
 	GetArtistsBySongID(ctx context.Context, songID int64) ([]GetArtistsBySongIDRow, error)
 	GetConfig(ctx context.Context, key string) (Config, error)
+	GetIngestNotificationState(ctx context.Context, notifID string) (string, error)
 	GetJSPluginByEntryPath(ctx context.Context, entryPath string) (JsPlugin, error)
 	GetJSPluginByID(ctx context.Context, id int64) (JsPlugin, error)
 	GetListeningEventSeq(ctx context.Context, idempotencyKey string) (int64, error)
@@ -74,6 +75,7 @@ type Querier interface {
 	GetThemePackByThemeID(ctx context.Context, themeID string) (ThemePack, error)
 	GetTokenByID(ctx context.Context, tokenID string) (GetTokenByIDRow, error)
 	InsertAutoCreatedPlaylist(ctx context.Context, arg InsertAutoCreatedPlaylistParams) (int64, error)
+	InsertIngestNotification(ctx context.Context, arg InsertIngestNotificationParams) (IngestNotification, error)
 	InsertListeningEvent(ctx context.Context, arg InsertListeningEventParams) (ListeningEvent, error)
 	InsertManagedPrepareOp(ctx context.Context, arg InsertManagedPrepareOpParams) error
 	InsertMediaTicket(ctx context.Context, arg InsertMediaTicketParams) error
@@ -94,6 +96,7 @@ type Querier interface {
 	ListLocalSongsWithRelativePaths(ctx context.Context) ([]ListLocalSongsWithRelativePathsRow, error)
 	ListLocalWithoutFingerprint(ctx context.Context) ([]ListLocalWithoutFingerprintRow, error)
 	ListManagedPrepareOpsByEntry(ctx context.Context, arg ListManagedPrepareOpsByEntryParams) ([]ManagedPrepareOp, error)
+	ListPendingIngestNotifications(ctx context.Context, limit int64) ([]IngestNotification, error)
 	ListPendingListeningEvents(ctx context.Context, arg ListPendingListeningEventsParams) ([]ListeningEvent, error)
 	ListPlayHistory(ctx context.Context, arg ListPlayHistoryParams) ([]ListPlayHistoryRow, error)
 	ListPlaylistsContainingSong(ctx context.Context, songID int64) ([]int64, error)
@@ -124,6 +127,7 @@ type Querier interface {
 	UnlinkSongTag(ctx context.Context, arg UnlinkSongTagParams) error
 	UpdateAutoCreatedPlaylistMeta(ctx context.Context, arg UpdateAutoCreatedPlaylistMetaParams) (int64, error)
 	UpdateCachePath(ctx context.Context, arg UpdateCachePathParams) error
+	UpdateIngestNotificationResult(ctx context.Context, arg UpdateIngestNotificationResultParams) error
 	UpdateJSPlugin(ctx context.Context, arg UpdateJSPluginParams) error
 	UpdateJSPluginHashes(ctx context.Context, arg UpdateJSPluginHashesParams) error
 	UpdateJSPluginStatus(ctx context.Context, arg UpdateJSPluginStatusParams) error
