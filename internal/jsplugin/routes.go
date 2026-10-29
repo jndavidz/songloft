@@ -803,7 +803,14 @@ func (m *Manager) handleServeFileDirective(w http.ResponseWriter, r *http.Reques
 		if song.IsHLSStream() {
 			playPath += ".m3u8"
 		}
-		target := playPath + "?access_token=" + m.pluginToken
+		// 用插件自身的短期票据转发，scope 仍受 manifest 约束（上面的
+		// songs.read 检查已通过）。不使用任何全局管理票据。
+		token, err := m.tokenForEntry(r.Context(), entryPath)
+		if err != nil {
+			http.Error(w, "credential unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		target := playPath + "?access_token=" + token
 		// 清除 chi RouteContext 让 router 重新路由到 play 端点
 		cleanCtx := context.WithValue(r.Context(), chi.RouteCtxKey, nil)
 		proxyReq, _ := http.NewRequestWithContext(cleanCtx, r.Method, target, nil)

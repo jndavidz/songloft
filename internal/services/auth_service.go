@@ -14,6 +14,7 @@ import (
 
 	"songloft/internal/database"
 	"songloft/internal/models"
+	"songloft/internal/plugincred"
 )
 
 // TokenRepository 认证令牌仓储接口（AuthService 依赖）。
@@ -36,18 +37,36 @@ type TokenCacheEntry struct {
 // AuthService 认证服务
 type AuthService struct {
 	tokens       TokenRepository
+	configs      ConfigRepository
 	secret       []byte
 	username     string
 	passwordHash []byte
-	// Token 内存缓存，key 为 token 字符串，value 为缓存条目
+	// Token 内存缓存，key 为 token 字符串，value 为缓存条目。
+	// 仅用于用户票据；插件/系统票据按请求校验，撤销立刻生效。
 	tokenCache sync.Map // map[string]*TokenCacheEntry
 	done       chan struct{}
 	closeOnce  sync.Once
+
+	// 插件凭据代次（S-02），见 plugin_credentials.go。
+	pluginStateMu    sync.RWMutex
+	pluginState      pluginCredentialState
+	pluginStateReady bool
 }
 
 // Claims JWT声明结构
 type Claims struct {
 	ClientID string `json:"client_id"`
+	// Kind 区分票据类别：空=历史用户票据，plugin=插件票据，system=宿主内部调用。
+	Kind string `json:"kind,omitempty"`
+	// PluginEntry 是插件票据的插件主体（entry_path）。
+	PluginEntry string `json:"plugin_entry,omitempty"`
+	// Scopes 是插件票据的 HTTP 授权范围（manifest 权限展开后的具体值）。
+	Scopes []string `json:"scopes,omitempty"`
+	// Gen / PluginGen 是签发时的全局与插件代次，任一不匹配即撤销/重启失效。
+	Gen       int64 `json:"gen,omitempty"`
+	PluginGen int64 `json:"plugin_gen,omitempty"`
+	// Legacy 标记为窗口内被接受的旧 plugin-system 票据（非签发主体）。
+	Legacy bool `json:"-"`
 	jwt.RegisteredClaims
 }
 
@@ -81,6 +100,7 @@ func NewAuthService(configs ConfigRepository, tokens TokenRepository, username, 
 
 	s := &AuthService{
 		tokens:       tokens,
+		configs:      configs,
 		secret:       secret,
 		username:     username,
 		passwordHash: passwordHash,
@@ -359,12 +379,8 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken, clientInfo
 
 // ValidateToken 验证 Token
 func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*Claims, error) {
-	// 先尝试从缓存获取
-	if cacheEntry, found := s.getCachedToken(tokenString); found {
-		return cacheEntry.Claims, nil
-	}
-
-	// 缓存未命中，解析 Token 获取 claims
+	// 先解析签名与过期时间。插件/系统票据不查缓存：撤销必须立刻生效，
+	// 且代次校验是内存读取，成本可接受。
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		return s.secret, nil
 	})
@@ -378,12 +394,32 @@ func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*C
 		return nil, fmt.Errorf("invalid token claims")
 	}
 
-	// 如果是插件系统的 Token，跳过数据库撤销检查
-	// 因为插件 Token 不保存在数据库中
-	if claims.ClientID == "plugin-system" {
-		// 插件 Token 也缓存起来，使用 token 的过期时间
-		s.setTokenCache(tokenString, claims, claims.ExpiresAt.Time, false)
+	switch claims.Kind {
+	case KindPlugin:
+		if err := s.validatePluginCredential(ctx, claims); err != nil {
+			return nil, err
+		}
 		return claims, nil
+	case KindSystem:
+		return claims, nil
+	}
+
+	// 历史 plugin-system 票据（百年签名、跳过 DB 撤销）只在持久的兼容窗口内
+	// 被接受，且降级为最小插件 scope；窗口结束即拒绝。新票据一律走代次模型。
+	if claims.ClientID == "plugin-system" {
+		if err := s.legacyPluginWindowOpen(ctx); err != nil {
+			return nil, err
+		}
+		claims.Kind = KindPlugin
+		claims.Legacy = true
+		claims.ClientID = "plugin:legacy"
+		claims.Scopes = plugincred.HTTPPluginScopes
+		return claims, nil
+	}
+
+	// 用户票据先查缓存。
+	if cacheEntry, found := s.getCachedToken(tokenString); found {
+		return cacheEntry.Claims, nil
 	}
 
 	// 对于普通用户 Token，检查是否被撤销
@@ -417,48 +453,6 @@ func (s *AuthService) RevokeToken(ctx context.Context, tokenID, revokedBy, reaso
 		s.deleteTokenCache(tokenID)
 	}
 	return err
-}
-
-// GeneratePluginToken 生成插件专用的永久 JWT Token
-// 这个 Token 不会过期，专门用于插件内部调用主程序 API
-// 注意：此 Token 不保存到数据库，仅在内存中使用，程序重启后会重新生成
-func (s *AuthService) GeneratePluginToken(ctx context.Context) (string, error) {
-	clientID := "plugin-system"
-
-	// 生成一个 100 年后过期的 Token（实际上相当于永久）
-	expirationTime := time.Now().Add(100 * 365 * 24 * time.Hour)
-
-	tokenID, err := generateRandomString(32)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate token ID: %w", err)
-	}
-
-	claims := &Claims{
-		ClientID: clientID,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			ID:        tokenID,
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString(s.secret)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate plugin token: %w", err)
-	}
-
-	// 注意：插件 Token 不保存到数据库，因为：
-	// 1. 数据库的 token_type 约束只允许 'access' 和 'refresh'
-	// 2. 插件 Token 是内部使用，不需要持久化
-	// 3. 程序重启后会自动重新生成
-	//
-	// 这样做的好处：
-	// - 不需要修改数据库 schema
-	// - 不需要数据库迁移
-	// - Token 验证仍然通过 JWT 签名保证安全性
-
-	return tokenString, nil
 }
 
 // generateToken 生成JWT Token

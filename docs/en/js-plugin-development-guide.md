@@ -252,7 +252,8 @@ static/              # Static assets directory (optional)
 | `license` | string | No | License |
 | `entryPath` | string | Yes | Route prefix (lowercase letters + digits + hyphens, e.g. `my-plugin`) |
 | `main` | string | Yes | Entry file path (must end in `.js`) |
-| `minHostVersion` | string | No | Minimum host version requirement |
+| `minHostVersion` | string | No | Minimum host version. Install, update and load fail closed when the host is older; `dev` builds satisfy any requirement |
+| `capabilities` | string[] | No | Required host execution capabilities (`music-source`, `lyrics-provider`, `cover-provider`, `page`, `command`, `inter-plugin`). Declaring an unsupported capability fails install/update/load closed; omitted means no requirement |
 | `permissions` | string[] | Yes | Permission list (may be an empty array `[]`) |
 | `renderEngine` | string | No | Engine the client uses to render the plugin UI: `webview` / `lynx`; missing or empty string means `webview`. See [renderEngine — Declaring the Rendering Engine](#renderengine--declaring-the-rendering-engine) |
 | `updateUrl` | string | No | Remote update check URL |
@@ -743,8 +744,13 @@ async function getMusicUrl(songId) {
 ```
 
 **Method reference:**
-- `getToken()` — returns the currently valid JWT access_token string, usable for accessing the host's protected APIs
+- `getToken()` — returns the current short-lived plugin credential (about one hour) for protected host APIs. Credentials are issued per plugin, scoped by `permissions`, and re-issued by the host before expiry; plugins do not need to cache or refresh them
 - `getHostUrl()` — returns the base URL of the host service, used to build complete API or resource addresses
+
+> A plugin credential can only reach the data plane (songs/playlists/tags/proxy) and its own
+> `/api/v1/jsplugin/{entryPath}/*`. Settings, configs, scanning, upgrade and plugin-management
+> endpoints have no matching scope and are never reachable. Updating, disabling, uninstalling a
+> plugin or an administrator revocation invalidates old credentials immediately; a host restart does too.
 
 ### songloft.lyrics — Lyrics Provider
 
@@ -982,6 +988,34 @@ Declare only the permissions you actually need to reduce security risk:
   "permissions": ["storage", "songs.read"]
 }
 ```
+
+### HTTP scopes match the manifest
+
+The credential from `plugin.getToken()` only carries HTTP scopes declared in the manifest:
+
+| Path | Method | Required scope |
+|---|---|---|
+| `/api/v1/songs*` (including play/lyric/cover) | GET/HEAD | `songs.read` |
+| `/api/v1/songs*` | others | `songs.write` |
+| `/api/v1/playlists*` | GET/HEAD | `playlists.read` |
+| `/api/v1/playlists*` | others | `playlists.write` |
+| `/api/v1/song-tags*`, `/api/v1/songs/{id}/song-tags` | GET/HEAD | `tags.read` |
+| same | others | `tags.write` |
+| `/api/v1/play-history` | GET | `songs.read` |
+| `/api/v1/proxy*` | any | `net` |
+| `/api/v1/jsplugin/{own entryPath}/*` | any | no extra scope |
+
+Unclassified paths are rejected with 403, including `/api/v1/settings/*`, `/api/v1/configs/*`,
+`/api/v1/scan`, `/api/v1/auth/*`, `/api/v1/upgrade/*` and `/api/v1/jsplugins/*`. Wildcards
+(`songs.*` etc.) are expanded at issue time.
+
+> Compatibility window: for a bounded period after upgrade (14 days by default, controlled by
+> `plugin_credential_legacy_until`), the host still accepts the legacy `plugin-system` century
+> token and new tokens carrying all plugin scopes. A fresh install has no legacy consumers, so the
+> window is closed immediately and manifest scopes apply from day one. Inside the window the legacy
+> token keeps its old data-plane behaviour (including plugin self paths) but can never reach
+> management endpoints; after the window it is rejected outright.
+> `POST /api/v1/jsplugins/revoke-all-credentials` revokes everything and closes the window at once.
 
 ---
 
@@ -1562,8 +1596,18 @@ A new permission constant must be added in three places, or plugins cannot use i
 1. `AllPermissions` in the host's `internal/jsplugin/permissions.go`
 2. `VALID_PERMISSIONS` in `plugins/toolchain/packages/plugin-builder/src/manifest.ts` — **this one hard-fails at build time** (`unknown permission: xxx`), so missing it means the plugin cannot even produce an artifact
 3. `AVAILABLE_PERMISSIONS` in `plugins/toolchain/packages/create-songloft-plugin/src/index.ts` (the scaffold's checklist)
+4. If the permission gates plugin-credential HTTP access: the scope constant and `HTTPPluginScopes` in `internal/plugincred/scopes.go`, plus the `RequiredScope` path mapping; a `jsplugin` test locks scopes to permission constants
 
-`ValidatePermissions` deliberately **only warns on unknown permissions rather than rejecting**: it sits on the mandatory install/update path, and rejecting would make a plugin declaring a new permission uninstallable on older hosts. `minHostVersion` is purely informational and never enforced; still wait for host adoption before shipping a plugin that needs the new permission.
+`ValidatePermissions` deliberately **only warns on unknown permissions rather than rejecting**: it sits on the mandatory install/update path, and rejecting would make a plugin declaring a new permission uninstallable on older hosts. `minHostVersion` and `capabilities` are different: they are execution gates (S-02). When the host version is too old or the capability surface is unsupported, install, upload, registry install, update, auto-update, startup load and lazy load all fail closed; UI hints are not a security boundary.
+
+### Plugin credentials (S-02)
+
+- Credentials are issued per plugin principal (`plugin:<entryPath>`), valid for one hour by default, and carry a global generation and a per-plugin generation; any mismatch is rejected.
+- The global generation increments on every host start (persisted at `configs.plugin_credential_state`), so old signatures die immediately on restart instead of pretending a restart is revocation.
+- Plugin update, disable, uninstall and administrator revocation bump the plugin generation and clear the host cache; revocation never takes a DB-query bypass.
+- Scopes come from the manifest (`strict`) or all plugin scopes (`legacy`). The profile is managed at `/api/v1/jsplugins/credential-policy`, defaulting to `auto`: `legacy` inside the window and `strict` after it closes.
+- Scope checks live in `internal/plugincred`; the middleware fails closed on unclassified paths and a plugin credential can never act as an admin credential.
+- **Never** log or persist `access_token`; credentials are short-lived and revocable, call `plugin.getToken()` again when needed.
 
 ### Runtime projection of `net:insecure-tls`
 

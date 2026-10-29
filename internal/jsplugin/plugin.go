@@ -26,22 +26,26 @@ const (
 // @songloft/plugin-builder 打包时自动写入，后端在 InstallFromUpload /
 // Update / Load 中都会校验实际内容与字段值严格一致。
 type PluginManifest struct {
-	Schema         string   `json:"$schema,omitempty"`
-	Name           string   `json:"name"`
-	Version        string   `json:"version"`
-	Description    string   `json:"description"`
-	Author         string   `json:"author"`
-	Homepage       string   `json:"homepage,omitempty"`
-	License        string   `json:"license,omitempty"`
-	EntryPath      string   `json:"entryPath"`
-	Main           string   `json:"main"`
-	MinHostVersion string   `json:"minHostVersion,omitempty"`
-	Permissions    []string `json:"permissions"`
-	PublicPaths    []string `json:"publicPaths,omitempty"`
-	ExternalPaths  []string `json:"externalPaths,omitempty"`
-	Icon           string   `json:"icon,omitempty"`
-	UpdateURL      string   `json:"updateUrl,omitempty"`
-	DownloadURL    string   `json:"download_url,omitempty"`
+	Schema         string `json:"$schema,omitempty"`
+	Name           string `json:"name"`
+	Version        string `json:"version"`
+	Description    string `json:"description"`
+	Author         string `json:"author"`
+	Homepage       string `json:"homepage,omitempty"`
+	License        string `json:"license,omitempty"`
+	EntryPath      string `json:"entryPath"`
+	Main           string `json:"main"`
+	MinHostVersion string `json:"minHostVersion,omitempty"`
+	// Capabilities 声明插件需要宿主提供的执行能力（可选）。
+	// 宿主能力面见 HostPluginCapabilities；声明了宿主不支持的能力时，
+	// 安装/更新/加载一律失败关闭（S-02）。
+	Capabilities  []string `json:"capabilities,omitempty"`
+	Permissions   []string `json:"permissions"`
+	PublicPaths   []string `json:"publicPaths,omitempty"`
+	ExternalPaths []string `json:"externalPaths,omitempty"`
+	Icon          string   `json:"icon,omitempty"`
+	UpdateURL     string   `json:"updateUrl,omitempty"`
+	DownloadURL   string   `json:"download_url,omitempty"`
 	// EntryHash 为入口文件（main.js 或 main.jsc）的 sha256，64 位小写 hex，必填。
 	EntryHash string `json:"entryHash"`
 	// ZipHash 为 zip 内除 plugin.json 外所有文件的规范化 sha256，必填。

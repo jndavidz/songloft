@@ -3,10 +3,13 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 
+	"songloft/internal/plugincred"
 	"songloft/internal/services"
 	"songloft/internal/services/requestidentity"
 )
@@ -91,18 +94,75 @@ func AuthMiddleware(authService *services.AuthService, publicPathCheckers ...Pub
 				return
 			}
 
-			// 身份统一经 requestidentity 写入（本中间件是唯一写入方）。
-			// 真实认证请求缺主体（client_id 为空）必须失败关闭，
-			// 不得产出会落入共享零值桶的身份（S-01）。
-			identity, err := requestidentity.User(claims.ClientID)
-			if err != nil {
-				respondAuthError(w, http.StatusUnauthorized, "token 缺少 client_id", nil)
-				return
+			// 插件票据：按 manifest scope 做路由级授权（S-02）。管理面、
+			// 鉴权面与未归类路径一律拒绝；插件只能访问自己的子路径。
+			if claims.Kind == services.KindPlugin {
+				if err := authorizePluginRequest(claims, r); err != nil {
+					respondAuthError(w, http.StatusForbidden, "插件凭据权限不足", err)
+					return
+				}
 			}
-			ctx := requestidentity.WithIdentity(r.Context(), identity)
+
+			var ctx context.Context
+			if claims.Kind == services.KindSystem {
+				// 系统票据是宿主内部调用凭据（URL resolver 等），只接受回环来源。
+				// 它不是任何外部消费者的通行证，被带到外部请求上必须拒绝。
+				if !isLoopbackRequest(r) {
+					respondAuthError(w, http.StatusUnauthorized, "系统票据仅限本机调用", nil)
+					return
+				}
+				ctx = requestidentity.SystemContext(r.Context())
+			} else {
+				// 身份统一经 requestidentity 写入（本中间件是唯一写入方）。
+				// 真实认证请求缺主体（client_id 为空）必须失败关闭，
+				// 不得产出会落入共享零值桶的身份（S-01）。
+				identity, err := requestidentity.User(claims.ClientID)
+				if err != nil {
+					respondAuthError(w, http.StatusUnauthorized, "token 缺少 client_id", nil)
+					return
+				}
+				ctx = requestidentity.WithIdentity(r.Context(), identity)
+			}
 
 			// 认证成功，继续处理请求
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// authorizePluginRequest 按插件票据 scope 判定本次请求是否允许。
+//
+// 语义：scope 精确匹配（签发侧已把 manifest 通配符展开）；无法归类的路径
+// 拒绝而不是放行——插件票据永不该触达管理面。
+func authorizePluginRequest(claims *services.Claims, r *http.Request) error {
+	if entry, ok := plugincred.PluginSelfEntry(r.URL.Path); ok {
+		// 旧 plugin-system 票据没有插件主体，窗口内保留旧行为（可访问任意插件
+		// 自身路径）；新票据只能访问自己的 entry。
+		if claims.Legacy {
+			return nil
+		}
+		if claims.PluginEntry == "" || entry != claims.PluginEntry {
+			return fmt.Errorf("plugin %q cannot access %q", claims.PluginEntry, r.URL.Path)
+		}
+		return nil
+	}
+
+	required, ok := plugincred.RequiredScope(r.Method, r.URL.Path)
+	if !ok {
+		return fmt.Errorf("path %q is outside plugin credential scope", r.URL.Path)
+	}
+	if !plugincred.HasScope(claims.Scopes, required) {
+		return fmt.Errorf("missing scope %q", required)
+	}
+	return nil
+}
+
+// isLoopbackRequest 判断请求是否来自回环地址。
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }

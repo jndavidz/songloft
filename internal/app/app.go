@@ -324,8 +324,9 @@ func (a *App) Init() error {
 	// 创建音源健康度指标收集器(纯内存滚动窗口,Fetcher 上报、Resolver 排序、admin API 消费)
 	a.sourceMetrics = source.NewSourceMetrics(source.DefaultMetricsOpts())
 
-	// 为内部 HTTP 调用准备 access_token,用于解析 JS 插件代理的相对路径
-	internalToken, err := a.authService.GeneratePluginToken(context.Background())
+	// 为内部 HTTP 调用准备系统票据（解析 JS 插件代理的相对路径）。
+	// 与插件票据分离：内部调用不伪装成插件主体，也不获得插件 scope。
+	internalToken, _, err := a.authService.IssueSystemToken(services.SystemCredentialTTL)
 	if err != nil {
 		return fmt.Errorf("生成内部 token 失败: %w", err)
 	}

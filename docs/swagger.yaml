@@ -118,6 +118,13 @@ definitions:
           $ref: '#/definitions/services.AudioTrackInfo'
         type: array
     type: object
+  handlers.credentialPolicyRequest:
+    properties:
+      legacy_until:
+        type: string
+      mode:
+        type: string
+    type: object
   handlers.dirValidateRequest:
     properties:
       path:
@@ -525,6 +532,15 @@ definitions:
       loudness:
         example: -16
         type: number
+    type: object
+  jsplugin.CredentialPolicy:
+    properties:
+      effective_mode:
+        type: string
+      legacy_until:
+        type: string
+      mode:
+        type: string
     type: object
   jsplugin.JSPlugin:
     properties:
@@ -2730,6 +2746,40 @@ paths:
       summary: 启用 JS 插件
       tags:
       - JS插件管理
+  /jsplugins/{id}/revoke-credentials:
+    post:
+      description: 立即撤销指定插件的全部已签发票据（按插件代次递增），并清空宿主缓存；插件下次调用时重新签发。
+      parameters:
+      - description: 插件ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 撤销成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 无效的插件ID
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: 插件不存在
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: 服务器错误
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 撤销插件凭据
+      tags:
+      - JS插件管理
   /jsplugins/{id}/update:
     post:
       consumes:
@@ -2764,6 +2814,57 @@ paths:
       security:
       - BearerAuth: []
       summary: 下载并更新 JS 插件
+      tags:
+      - JS插件管理
+  /jsplugins/credential-policy:
+    get:
+      description: 返回插件票据的模式（auto/legacy/strict）、兼容窗口截止时间与当前生效档位。auto 档在窗口内使用 legacy
+        scope，到期自动切换 strict。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/jsplugin.CredentialPolicy'
+        "500":
+          description: 服务器错误
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 读取插件凭据策略
+      tags:
+      - JS插件管理
+    put:
+      consumes:
+      - application/json
+      description: 设置插件票据模式（auto/legacy/strict）与兼容窗口截止时间（RFC3339）。切换后立即吊销全部已签发插件票据，下一条调用链重新签发。
+      parameters:
+      - description: 凭据策略
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.credentialPolicyRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新后的策略
+          schema:
+            $ref: '#/definitions/jsplugin.CredentialPolicy'
+        "400":
+          description: 参数无效
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: 服务器错误
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 更新插件凭据策略
       tags:
       - JS插件管理
   /jsplugins/registry/install:
@@ -2843,6 +2944,26 @@ paths:
       security:
       - BearerAuth: []
       summary: 刷新插件注册表
+      tags:
+      - JS插件管理
+  /jsplugins/revoke-all-credentials:
+    post:
+      description: 递增全局代次，令所有已签发插件票据立即失效，并把旧 plugin-system 票据兼容窗口关闭（legacy_until=now）。用于需要立刻停用旧消费方的场景。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 撤销成功
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器错误
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 撤销全部插件凭据
       tags:
       - JS插件管理
   /jsplugins/storage/cleanup:

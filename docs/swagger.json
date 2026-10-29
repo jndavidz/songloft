@@ -1448,6 +1448,86 @@
                 }
             }
         },
+        "/jsplugins/credential-policy": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回插件票据的模式（auto/legacy/strict）、兼容窗口截止时间与当前生效档位。auto 档在窗口内使用 legacy scope，到期自动切换 strict。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "JS插件管理"
+                ],
+                "summary": "读取插件凭据策略",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/jsplugin.CredentialPolicy"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器错误",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "设置插件票据模式（auto/legacy/strict）与兼容窗口截止时间（RFC3339）。切换后立即吊销全部已签发插件票据，下一条调用链重新签发。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "JS插件管理"
+                ],
+                "summary": "更新插件凭据策略",
+                "parameters": [
+                    {
+                        "description": "凭据策略",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.credentialPolicyRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新后的策略",
+                        "schema": {
+                            "$ref": "#/definitions/jsplugin.CredentialPolicy"
+                        }
+                    },
+                    "400": {
+                        "description": "参数无效",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器错误",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/jsplugins/registry/install": {
             "post": {
                 "security": [
@@ -1555,6 +1635,38 @@
                     },
                     "500": {
                         "description": "拉取注册表失败",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/jsplugins/revoke-all-credentials": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "递增全局代次，令所有已签发插件票据立即失效，并把旧 plugin-system 票据兼容窗口关闭（legacy_until=now）。用于需要立刻停用旧消费方的场景。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "JS插件管理"
+                ],
+                "summary": "撤销全部插件凭据",
+                "responses": {
+                    "200": {
+                        "description": "撤销成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器错误",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -2022,6 +2134,59 @@
                     },
                     "401": {
                         "description": "未授权",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "插件不存在",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器错误",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/jsplugins/{id}/revoke-credentials": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "立即撤销指定插件的全部已签发票据（按插件代次递增），并清空宿主缓存；插件下次调用时重新签发。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "JS插件管理"
+                ],
+                "summary": "撤销插件凭据",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "插件ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "撤销成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "无效的插件ID",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -10594,6 +10759,17 @@
                 }
             }
         },
+        "handlers.credentialPolicyRequest": {
+            "type": "object",
+            "properties": {
+                "legacy_until": {
+                    "type": "string"
+                },
+                "mode": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.dirValidateRequest": {
             "type": "object",
             "properties": {
@@ -11190,6 +11366,20 @@
                 "loudness": {
                     "type": "number",
                     "example": -16
+                }
+            }
+        },
+        "jsplugin.CredentialPolicy": {
+            "type": "object",
+            "properties": {
+                "effective_mode": {
+                    "type": "string"
+                },
+                "legacy_until": {
+                    "type": "string"
+                },
+                "mode": {
+                    "type": "string"
                 }
             }
         },

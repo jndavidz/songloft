@@ -47,8 +47,10 @@ type Manager struct {
 	pluginsDataDir    string   // data/jsplugins_data/
 	basePath          string   // URL 基础路径，用于反向代理子路径部署
 	router            chi.Router
-	db                database.DB                 // 数据库访问
-	authService       *services.AuthService       // 用于生成插件 JWT Token
+	db                database.DB           // 数据库访问
+	authService       *services.AuthService // 用于签发插件短期票据（S-02）
+	credentialMu      sync.Mutex
+	credentialCache   map[string]cachedCredential // entryPath -> 短期票据缓存
 	songDownloader    *services.SongDownloader    // 歌曲下载服务（bridge songs.download 用）
 	songService       *services.SongService       // 歌曲服务（bridge songs.create/update/delete 用）
 	playlistService   *services.PlaylistService   // 歌单服务（bridge playlists.* 写操作用）
@@ -56,7 +58,6 @@ type Manager struct {
 	metadataRefresher *services.MetadataRefresher // 元数据刷新服务（bridge songs.refreshMetadata 用）
 	configService     *services.ConfigService     // 配置服务（keep-alive 白名单等）
 	cacheService      *services.CacheService      // 缓存服务（serveFile seek 流）
-	pluginToken       string                      // 插件专用的永久 JWT Token（启动时生成一次）
 	port              string                      // 服务器监听端口
 	healthChecker     *HealthChecker
 	hotReloader       *HotReloader
@@ -82,16 +83,21 @@ type Manager struct {
 // NewManager 创建 JS 插件管理器
 func NewManager(repo Repository, pluginsDir, pluginsDataDir, basePath string, router chi.Router, db database.DB) *Manager {
 	m := &Manager{
-		repo:           repo,
-		packager:       NewPackageManager(pluginsDir, pluginsDataDir, repo),
-		scheduler:      NewServiceScheduler(1),
-		jsManager:      jsruntime.NewJSEnvManager(),
-		pluginsDir:     pluginsDir,
-		pluginsDataDir: pluginsDataDir,
-		basePath:       basePath,
-		router:         router,
-		db:             db,
+		repo:            repo,
+		packager:        NewPackageManager(pluginsDir, pluginsDataDir, repo),
+		scheduler:       NewServiceScheduler(1),
+		jsManager:       jsruntime.NewJSEnvManager(),
+		pluginsDir:      pluginsDir,
+		pluginsDataDir:  pluginsDataDir,
+		basePath:        basePath,
+		router:          router,
+		db:              db,
+		credentialCache: make(map[string]cachedCredential),
 	}
+	// 插件包变更（更新/卸载）后撤销该插件的旧票据，避免旧版本权限继续生效。
+	m.packager.SetOnPluginChanged(func(entryPath string) {
+		m.revokePluginCredentials(entryPath)
+	})
 	return m
 }
 
@@ -140,21 +146,11 @@ func detectIconInDir(dir string) string {
 	return ""
 }
 
-// SetAuthService 设置认证服务和端口，并生成插件专用的永久 JWT Token（参考 WASM 插件的做法，启动时只生成一次）
+// SetAuthService 设置认证服务和端口。插件票据按插件主体、短期签发，
+// 不再在启动时生成一枚百年有效的全局 token（S-02）。
 func (m *Manager) SetAuthService(authService *services.AuthService, port string) {
 	m.authService = authService
 	m.port = port
-
-	// 生成插件专用的永久 JWT Token
-	if authService != nil {
-		token, err := authService.GeneratePluginToken(context.Background())
-		if err != nil {
-			slog.Error("生成 JS 插件 JWT Token 失败", "error", err)
-			return
-		}
-		m.pluginToken = token
-		slog.Info("JS 插件 JWT Token 已生成")
-	}
 }
 
 // SetSongDownloader 注入歌曲下载服务（bridge songs.download 调用）。
@@ -172,6 +168,9 @@ func (m *Manager) SetServices(songService *services.SongService, playlistService
 // SetConfigService 注入配置服务（keep-alive 白名单等）。
 func (m *Manager) SetConfigService(cs *services.ConfigService) {
 	m.configService = cs
+	// 立即固化凭据兼容窗口：插件管理器异步 Start，HTTP 路由可能先于它
+	// 触发插件加载与票据签发，不能让窗口默认值随读随算或缺失。
+	m.ensureCredentialPolicyDefaults()
 }
 
 // SetCacheService 注入缓存服务（serveFile seek 流）。
@@ -206,6 +205,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.healthChecker = NewHealthChecker(m)
 	m.hotReloader = NewHotReloader(m)
 	m.autoUpdater = NewAutoUpdater(m)
+
+	// 固化插件凭据兼容窗口（S-02），后续读取不再随 time.Now 漂移。
+	m.ensureCredentialPolicyDefaults()
 
 	// 创建内部 context
 	internalCtx, cancel := context.WithCancel(ctx)
@@ -311,11 +313,21 @@ func (m *Manager) LoadPlugin(ctx context.Context, plugin *JSPlugin) error {
 		return fmt.Errorf("create plugins data dir: %w", err)
 	}
 
+	// 兼容门（S-02）：启动加载、懒加载、启用与热重载都经过这里。
+	// 不兼容插件不得执行；DB 记录可以保留（启动加载失败会标记 error）。
+	capabilities, err := readCapabilitiesFromPluginZip(filepath.Join(m.pluginsDir, plugin.FilePath))
+	if err != nil {
+		return fmt.Errorf("plugin %q compatibility check: %w", plugin.EntryPath, err)
+	}
+	if err := CheckPluginRecordCompatibility(plugin, capabilities); err != nil {
+		return fmt.Errorf("plugin %q incompatible with host: %w", plugin.EntryPath, err)
+	}
+
 	// 1. 创建 JSService
 	service := NewJSService(plugin, m.scheduler, m.jsManager)
 
 	// 2. 创建并关联 BridgeHandler
-	bridgeHandler := NewBridgeHandler(service, dataDir, m.db, m.songDownloader, m.songService, m.playlistService, m.songTagService, m.metadataRefresher, m.pluginToken, m.getPort())
+	bridgeHandler := NewBridgeHandler(service, dataDir, m.db, m.songDownloader, m.songService, m.playlistService, m.songTagService, m.metadataRefresher, m.tokenProviderFor(plugin), m.getPort())
 	bridgeHandler.onPlayEventRegister = m.RegisterPlayEvent
 	bridgeHandler.onPlayEventUnregister = m.UnregisterPlayEvent
 	bridgeHandler.onLyricProviderRegister = m.RegisterLyricProvider
@@ -465,6 +477,9 @@ func (m *Manager) EnablePlugin(ctx context.Context, id int64) error {
 		m.healthChecker.ClearRecovery(plugin.EntryPath)
 	}
 
+	// 重新启用后旧票据不再代表当前状态，撤销并让下一次调用重新签发。
+	m.revokePluginCredentials(plugin.EntryPath)
+
 	m.RefreshPublicPaths()
 	return nil
 }
@@ -494,6 +509,9 @@ func (m *Manager) DisablePlugin(ctx context.Context, id int64) error {
 	if err := m.repo.UpdateStatus(ctx, id, JSPluginStatusInactive); err != nil {
 		return fmt.Errorf("update plugin status: %w", err)
 	}
+
+	// 禁用即撤销该插件的全部票据（S-02）。
+	m.revokePluginCredentials(plugin.EntryPath)
 
 	m.RefreshPublicPaths()
 	return nil
@@ -846,10 +864,8 @@ func (m *Manager) logPluginStaticURLs(plugins []*JSPlugin) {
 			continue
 		}
 
+		// 不再把 access_token 打进日志：凭据不落日志（S-02）。
 		url := fmt.Sprintf("http://localhost:%s/api/v1/jsplugin/%s", port, plugin.EntryPath)
-		if m.pluginToken != "" {
-			url += "?access_token=" + m.pluginToken
-		}
 		slog.Info("JS plugin static page available", "plugin", plugin.EntryPath, "url", url)
 	}
 }

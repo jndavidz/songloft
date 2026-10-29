@@ -439,3 +439,16 @@ handler 无损降级为从头 `ServeFile`）。
 客户端约定：`SettingsApi`（`clients/player/lib/features/settings/data/settings_api.dart`）封装所有 `/settings/*` 调用，业务 Provider 一律走它；`ConfigApi` 只在 `config_manager.dart` 和「列出所有配置」这类 admin UI 中使用。
 
 历史背景：该规范在 2026-06 引入——`hls_proxy_enabled` 默认未预置导致 PUT `/configs/{key}` 返回 404，暴露出 `/configs`、`/settings/*`、`/cache-manage/config` 三种风格并存。最终确定业务端点是用户可见入口的唯一来源，通用 KV 退化为 admin 后门。
+
+<a id="plugin-credentials"></a>
+
+## 插件执行门与凭据（S-02）
+
+- **执行门必须覆盖全部入口**：安装、上传、商店安装、更新、自动更新、启动加载、懒加载都调用同一套 `CheckManifestCompatibility`（minHostVersion + manifest `capabilities`）。只做 UI 提示或只在安装时检查都不算数：已安装的旧插件仍可能在升级后的宿主上启动。
+- **`minHostVersion` 是 fail-closed 字段**：格式非法、宿主版本更低都拒绝；`dev` 构建视为满足任意版本。`capabilities` 只接受 `HostPluginCapabilities` 中的值，缺失表示不要求。
+- **插件票据不再百年**：`plugin.getToken` 返回按插件主体（`plugin:<entryPath>`）签发的 1 小时票据，带全局代次与插件代次。全局代次每次进程启动递增（持久化在 `configs.plugin_credential_state`），插件代次在更新/禁用/卸载/管理员撤销时递增；任一不匹配立即拒绝。**不要**再用重启或长签名冒充撤销。
+- **不要给插件票据做缓存旁路**：`AuthService.ValidateToken` 只对用户票据走 tokenCache；插件票据每次校验代次（内存读），否则撤销要等缓存过期。
+- **manifest 与 HTTP 授权一致**：scope 来自 manifest 权限（strict）或全插件 scope（legacy 兼容档），由 `internal/plugincred` 按方法与路径判定；管理面/配置面/插件管理面没有 scope，永远不可达；插件只能访问自己的 `/api/v1/jsplugin/{entryPath}/*`。
+- **兼容窗口是有界的**：`plugin_credential_mode`（auto/legacy/strict）与 `plugin_credential_legacy_until` 持久化；auto 在窗口内用 legacy scope，到期自动 strict。**全新安装直接关闭窗口**（无存量消费方），升级才给默认 14 天。旧 `plugin-system` 百年票据只在窗口内被接受，窗口内保留旧数据面行为（含插件自身路径，管理面仍不可达），窗口缺失/非法或 strict 档立即拒绝；`POST /jsplugins/revoke-all-credentials` 可立即吊销全部票据并关闭窗口。通用 `PUT /configs/{key}` 修改这两个配置时，`configHandler.SetOnConfigChanged` 必须同步触发吊销（否则旧 scope 活到自然过期）。
+- **系统票据只限本机**：内部 HTTP 调用使用独立 system 票据（`IssueSystemToken`），中间件只接受回环来源；它不是插件或外部消费者的通行证。
+- **凭据不落日志**：静态页 URL 日志与内部转发都不再拼接 `access_token`。内部 HTTP 调用使用独立的 system 票据，不伪装成插件主体。

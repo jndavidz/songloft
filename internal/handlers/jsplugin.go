@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -74,6 +75,10 @@ func (h *JSPluginHandler) RegisterRoutes(r chi.Router) {
 		r.Put("/{id}", h.handleUpdate)
 		r.Delete("/{id}", h.handleDelete)
 		r.Post("/storage/cleanup", h.handleCleanupOrphanStorage)
+		r.Get("/credential-policy", h.handleGetCredentialPolicy)
+		r.Put("/credential-policy", h.handleUpdateCredentialPolicy)
+		r.Post("/revoke-all-credentials", h.handleRevokeAllCredentials)
+		r.Post("/{id}/revoke-credentials", h.handleRevokePluginCredentials)
 		r.Post("/{id}/enable", h.handleEnable)
 		r.Post("/{id}/disable", h.handleDisable)
 		r.Get("/{id}/check-update", h.handleCheckUpdate)
@@ -453,6 +458,120 @@ func (h *JSPluginHandler) removePluginOrderEntry(entryPath string) {
 	if err := h.configService.SetJSON(pluginOrderKey, cfg); err != nil {
 		slog.Warn("卸载插件：清理 plugin_order 条目失败", "entryPath", entryPath, "error", err)
 	}
+}
+
+// handleGetCredentialPolicy 返回插件凭据策略
+// @Summary 读取插件凭据策略
+// @Description 返回插件票据的模式（auto/legacy/strict）、兼容窗口截止时间与当前生效档位。auto 档在窗口内使用 legacy scope，到期自动切换 strict。
+// @Tags JS插件管理
+// @Produce json
+// @Success 200 {object} jsplugin.CredentialPolicy
+// @Failure 500 {object} models.ErrorResponse "服务器错误"
+// @Security BearerAuth
+// @Router /jsplugins/credential-policy [get]
+func (h *JSPluginHandler) handleGetCredentialPolicy(w http.ResponseWriter, r *http.Request) {
+	if h.manager == nil {
+		respondError(w, http.StatusInternalServerError, "插件管理器不可用", nil)
+		return
+	}
+	respondJSON(w, http.StatusOK, h.manager.GetCredentialPolicy())
+}
+
+// handleUpdateCredentialPolicy 更新插件凭据策略
+// @Summary 更新插件凭据策略
+// @Description 设置插件票据模式（auto/legacy/strict）与兼容窗口截止时间（RFC3339）。切换后立即吊销全部已签发插件票据，下一条调用链重新签发。
+// @Tags JS插件管理
+// @Accept json
+// @Produce json
+// @Param request body credentialPolicyRequest true "凭据策略"
+// @Success 200 {object} jsplugin.CredentialPolicy "更新后的策略"
+// @Failure 400 {object} models.ErrorResponse "参数无效"
+// @Failure 500 {object} models.ErrorResponse "服务器错误"
+// @Security BearerAuth
+// @Router /jsplugins/credential-policy [put]
+func (h *JSPluginHandler) handleUpdateCredentialPolicy(w http.ResponseWriter, r *http.Request) {
+	if h.manager == nil {
+		respondError(w, http.StatusInternalServerError, "插件管理器不可用", nil)
+		return
+	}
+	var req credentialPolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "请求体不是合法 JSON", err)
+		return
+	}
+	if req.Mode == "" {
+		respondError(w, http.StatusBadRequest, "mode 不能为空", nil)
+		return
+	}
+	if err := jsplugin.ValidateCredentialPolicyInput(req.Mode, req.LegacyUntil); err != nil {
+		respondError(w, http.StatusBadRequest, "凭据策略参数无效", err)
+		return
+	}
+	if err := h.manager.UpdateCredentialPolicy(r.Context(), req.Mode, req.LegacyUntil); err != nil {
+		respondError(w, http.StatusInternalServerError, "更新凭据策略失败", err)
+		return
+	}
+	respondJSON(w, http.StatusOK, h.manager.GetCredentialPolicy())
+}
+
+// credentialPolicyRequest 是 PUT /jsplugins/credential-policy 的请求体。
+type credentialPolicyRequest struct {
+	Mode        string `json:"mode"`
+	LegacyUntil string `json:"legacy_until,omitempty"`
+}
+
+// handleRevokePluginCredentials 撤销某插件的全部票据
+// @Summary 撤销插件凭据
+// @Description 立即撤销指定插件的全部已签发票据（按插件代次递增），并清空宿主缓存；插件下次调用时重新签发。
+// @Tags JS插件管理
+// @Produce json
+// @Param id path int true "插件ID"
+// @Success 200 {object} map[string]interface{} "撤销成功"
+// @Failure 400 {object} models.ErrorResponse "无效的插件ID"
+// @Failure 404 {object} models.ErrorResponse "插件不存在"
+// @Failure 500 {object} models.ErrorResponse "服务器错误"
+// @Security BearerAuth
+// @Router /jsplugins/{id}/revoke-credentials [post]
+func (h *JSPluginHandler) handleRevokePluginCredentials(w http.ResponseWriter, r *http.Request) {
+	pluginID, err := h.parseID(r)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "无效的插件ID", err)
+		return
+	}
+	if h.manager == nil {
+		respondError(w, http.StatusInternalServerError, "插件管理器不可用", nil)
+		return
+	}
+	if err := h.manager.RevokePluginCredentials(r.Context(), pluginID); err != nil {
+		if errors.Is(err, database.ErrNotFound) {
+			respondError(w, http.StatusNotFound, "插件不存在", err)
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "撤销插件凭据失败", err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{"message": "插件凭据已撤销"})
+}
+
+// handleRevokeAllCredentials 撤销全部插件票据并关闭旧票据兼容窗口
+// @Summary 撤销全部插件凭据
+// @Description 递增全局代次，令所有已签发插件票据立即失效，并把旧 plugin-system 票据兼容窗口关闭（legacy_until=now）。用于需要立刻停用旧消费方的场景。
+// @Tags JS插件管理
+// @Produce json
+// @Success 200 {object} map[string]interface{} "撤销成功"
+// @Failure 500 {object} models.ErrorResponse "服务器错误"
+// @Security BearerAuth
+// @Router /jsplugins/revoke-all-credentials [post]
+func (h *JSPluginHandler) handleRevokeAllCredentials(w http.ResponseWriter, r *http.Request) {
+	if h.manager == nil {
+		respondError(w, http.StatusInternalServerError, "插件管理器不可用", nil)
+		return
+	}
+	if err := h.manager.RevokeAllCredentials(r.Context()); err != nil {
+		respondError(w, http.StatusInternalServerError, "撤销全部插件凭据失败", err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{"message": "全部插件凭据已撤销，旧票据窗口已关闭"})
 }
 
 // handleEnable 启用插件

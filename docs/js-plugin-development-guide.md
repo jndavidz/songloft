@@ -252,7 +252,8 @@ static/              # 静态资源目录（可选）
 | `license` | string | 否 | 许可证 |
 | `entryPath` | string | 是 | 路由前缀（小写字母+数字+连字符，如 `my-plugin`） |
 | `main` | string | 是 | 入口文件路径（必须以 `.js` 结尾） |
-| `minHostVersion` | string | 否 | 最低宿主版本要求 |
+| `minHostVersion` | string | 否 | 最低宿主版本要求。宿主版本低于该值时，安装、更新与加载均失败关闭；`dev` 构建视为满足任意要求 |
+| `capabilities` | string[] | 否 | 需要的宿主执行能力，如 `music-source`、`lyrics-provider`、`cover-provider`、`page`、`command`、`inter-plugin`。声明宿主不支持的能力时安装/更新/加载失败关闭；缺失表示不要求 |
 | `permissions` | string[] | 是 | 权限列表（可为空数组 `[]`） |
 | `renderEngine` | string | 否 | 客户端渲染插件 UI 所用的引擎，`webview` / `lynx`，缺失或空串等同 `webview`。详见 [renderEngine 渲染引擎声明](#renderengine-渲染引擎声明) |
 | `updateUrl` | string | 否 | 远程更新检查 URL |
@@ -741,8 +742,12 @@ async function getMusicUrl(songId) {
 ```
 
 **方法说明：**
-- `getToken()` — 返回当前有效的 JWT access_token 字符串，可用于访问宿主的受保护 API
+- `getToken()` — 返回当前有效的短期插件票据（约 1 小时），可用于访问宿主的受保护 API。票据按插件主体签发，scope 来自 `permissions`；宿主会在过期前自动重签，插件无需缓存或自行续期
 - `getHostUrl()` — 返回宿主服务的基础 URL，用于构建完整的 API 或资源地址
+
+> 插件票据只能访问数据面（歌曲/歌单/标签/资源代理）与自己的 `/api/v1/jsplugin/{entryPath}/*`。
+> 设置、配置、扫描、升级、插件管理等管理端点没有对应 scope，插件票据永远无法访问。
+> 插件更新、禁用、卸载或管理员撤销后，旧票据立即失效；宿主重启也会让旧票据失效。
 
 ### songloft.lyrics — 歌词提供者
 
@@ -980,6 +985,31 @@ globalThis.onHTTPRequest = (req: HTTPRequest) => router.handle(req);
   "permissions": ["storage", "songs.read"]
 }
 ```
+
+### HTTP scope 与 manifest 一致
+
+`plugin.getToken()` 拿到的票据只携带 manifest 已声明的 HTTP scope：
+
+| 路径 | 方法 | 需要的 scope |
+|---|---|---|
+| `/api/v1/songs*`（含 play/lyric/cover） | GET/HEAD | `songs.read` |
+| `/api/v1/songs*` | 其他 | `songs.write` |
+| `/api/v1/playlists*` | GET/HEAD | `playlists.read` |
+| `/api/v1/playlists*` | 其他 | `playlists.write` |
+| `/api/v1/song-tags*`、`/api/v1/songs/{id}/song-tags` | GET/HEAD | `tags.read` |
+| 同上 | 其他 | `tags.write` |
+| `/api/v1/play-history` | GET | `songs.read` |
+| `/api/v1/proxy*` | 任意 | `net` |
+| `/api/v1/jsplugin/{自己的 entryPath}/*` | 任意 | 无需额外 scope |
+
+未归类路径一律 403，包括 `/api/v1/settings/*`、`/api/v1/configs/*`、`/api/v1/scan`、`/api/v1/auth/*`、
+`/api/v1/upgrade/*` 与 `/api/v1/jsplugins/*`。通配符糖（`songs.*` 等）在签发时展开为具体 scope。
+
+> 兼容窗口：升级后的有界窗口内（默认 14 天，`plugin_credential_legacy_until` 控制），宿主仍接受旧的
+> `plugin-system` 百年票据与全插件 scope 的新票据，方便存量插件迁移；全新安装没有存量插件，
+> 窗口直接关闭，从第一天起就是 manifest 最小 scope。窗口内旧票据保留原有数据面行为（含插件自身路径），
+> 但管理面始终不可达；窗口结束后旧票据彻底拒绝。`POST /api/v1/jsplugins/revoke-all-credentials`
+> 可立即吊销全部票据并关闭窗口。
 
 ---
 
@@ -1560,8 +1590,18 @@ async function useTranslation(text) {
 1. 宿主 `internal/jsplugin/permissions.go` 的 `AllPermissions`
 2. `plugins/toolchain/packages/plugin-builder/src/manifest.ts` 的 `VALID_PERMISSIONS`——它在 build 时硬失败（`unknown permission: xxx`），漏了这处插件连产物都出不来
 3. `plugins/toolchain/packages/create-songloft-plugin/src/index.ts` 的 `AVAILABLE_PERMISSIONS`（脚手架勾选列表）
+4. 若该权限要作用于插件票据的 HTTP 面：`internal/plugincred/scopes.go` 的 scope 常量与 `HTTPPluginScopes`，并补 `RequiredScope` 路径映射；`jsplugin` 测试会锁定 scope 与权限常量一致
 
-`ValidatePermissions` 对未知权限**只 warn 不拒绝**：它挂在安装/更新的必经路径上，拒绝会让声明新权限的插件在旧宿主上直接装不上。`minHostVersion` 是纯信息字段，宿主从不强制；新权限仍需等宿主版本铺开后再发插件。
+`ValidatePermissions` 对未知权限**只 warn 不拒绝**：它挂在安装/更新的必经路径上，拒绝会让声明新权限的插件在旧宿主上直接装不上。`minHostVersion` 与 `capabilities` 则完全不同——二者是执行门（S-02）：宿主版本不足或能力面不支持时，安装、上传、商店安装、更新、自动更新、启动加载与懒加载全部失败关闭；UI 提示不是安全边界。
+
+### 插件凭据（S-02）
+
+- 票据按插件主体（`plugin:<entryPath>`）签发，默认 1 小时，带全局代次与插件代次；任一代次不匹配即拒绝。
+- 全局代次每次宿主启动递增（持久化在 `configs.plugin_credential_state`），所以重启后旧签名立即失效，不再依赖“重启即撤销”的假象。
+- 插件更新、禁用、卸载、管理员撤销都会递增该插件代次并清空宿主缓存；撤销不走 DB 查询旁路。
+- 票据 scope 来自 manifest（`strict`）或兼容档全插件 scope（`legacy`）。档位由 `/api/v1/jsplugins/credential-policy` 管理，默认 `auto`：窗口内 `legacy`，到期自动 `strict`。
+- scope 判定在 `internal/plugincred`，中间件对无法归类的路径 fail closed；插件票据不能被当作管理票据使用。
+- **不要**把 `access_token` 写进日志或长期持久化；票据短期且可撤销，需要时重新调用 `plugin.getToken()`。
 
 ### `net:insecure-tls` 的运行时投影
 

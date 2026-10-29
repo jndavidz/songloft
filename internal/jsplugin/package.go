@@ -37,6 +37,8 @@ type PackageManager struct {
 	pluginsDir string // data/jsplugins/ 存放 zip 的目录
 	dataDir    string // 插件数据目录（static 解压位置）
 	repo       Repository
+	// onPluginChanged 在插件更新/卸载成功后回调（用于撤销旧凭据）。
+	onPluginChanged func(entryPath string)
 }
 
 // NewPackageManager 构造函数
@@ -46,6 +48,11 @@ func NewPackageManager(pluginsDir, dataDir string, repo Repository) *PackageMana
 		dataDir:    dataDir,
 		repo:       repo,
 	}
+}
+
+// SetOnPluginChanged 注册插件包变更回调。
+func (pm *PackageManager) SetOnPluginChanged(fn func(entryPath string)) {
+	pm.onPluginChanged = fn
 }
 
 // InstallOptions 控制安装时的冲突处理策略。
@@ -99,6 +106,11 @@ func (pm *PackageManager) InstallFromUploadWithOptions(zipData []byte, opts Inst
 	// [3] 验证权限
 	if err := ValidatePermissions(manifest.Permissions); err != nil {
 		return nil, false, fmt.Errorf("validate permissions: %w", err)
+	}
+
+	// [3.1] 兼容门：minHostVersion / capabilities 不满足时失败关闭（S-02）。
+	if err := CheckManifestCompatibility(manifest); err != nil {
+		return nil, false, fmt.Errorf("plugin incompatible with host: %w", err)
 	}
 
 	// [4] 检查 entryPath 是否已存在：存在则走更新路径，作为手动更新
@@ -244,6 +256,11 @@ func (pm *PackageManager) Update(pluginID int64, zipData []byte) (*JSPlugin, err
 		return nil, fmt.Errorf("validate permissions: %w", err)
 	}
 
+	// [4.1] 兼容门：更新同样不得绕过（S-02）。
+	if err := CheckManifestCompatibility(manifest); err != nil {
+		return nil, fmt.Errorf("plugin incompatible with host: %w", err)
+	}
+
 	// [5] entryPath 必须匹配
 	if manifest.EntryPath != existing.EntryPath {
 		return nil, fmt.Errorf("entryPath mismatch: existing=%q, new=%q", existing.EntryPath, manifest.EntryPath)
@@ -314,6 +331,10 @@ func (pm *PackageManager) Update(pluginID int64, zipData []byte) (*JSPlugin, err
 	}
 
 	slog.Info("plugin updated", "entryPath", existing.EntryPath, "version", existing.Version)
+	// 权限/主体可能变化，旧票据立即作废（S-02）。
+	if pm.onPluginChanged != nil {
+		pm.onPluginChanged(existing.EntryPath)
+	}
 	return existing, nil
 }
 
@@ -348,6 +369,10 @@ func (pm *PackageManager) Uninstall(pluginID int64, keepData bool) error {
 	}
 
 	slog.Info("plugin uninstalled", "entryPath", plugin.EntryPath, "keepData", keepData)
+	// 卸载后旧票据必须失效（S-02）。
+	if pm.onPluginChanged != nil {
+		pm.onPluginChanged(plugin.EntryPath)
+	}
 	return nil
 }
 

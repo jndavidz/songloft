@@ -679,19 +679,19 @@ func GetBootstrapCode() string {
 type BridgeHandler struct {
 	service                   *JSService
 	permissions               []string
-	dataDir                   string                      // data/jsplugins_data/
-	db                        database.DB                 // 数据库访问（用于 songs/playlists 查询）
-	songDownloader            *services.SongDownloader    // 歌曲下载服务（songs.download bridge 调用）
-	songService               *services.SongService       // 歌曲服务（songs.create/update/delete）
-	playlistService           *services.PlaylistService   // 歌单服务（playlists 写操作）
-	songTagService            *services.SongTagService    // 标签服务（tags.* bridge 调用）
-	metadataRefresher         *services.MetadataRefresher // 元数据刷新服务（songs.refreshMetadata bridge 调用）
-	pluginToken               string                      // 插件专用的永久 JWT Token
-	port                      string                      // 服务器监听端口（用于构造宿主 URL）
-	processes                 sync.Map                    // map[name]*managedProcess — 后台进程跟踪
-	udpSockets                sync.Map                    // map[socketID]*managedUDPSocket — UDP socket 跟踪
-	tcpSockets                sync.Map                    // map[socketID]*managedTCPSocket — 出站 TCP 连接跟踪
-	socketIDSeq               atomic.Uint64               // UDP/TCP socket ID 共享的递增序号
+	dataDir                   string                                // data/jsplugins_data/
+	db                        database.DB                           // 数据库访问（用于 songs/playlists 查询）
+	songDownloader            *services.SongDownloader              // 歌曲下载服务（songs.download bridge 调用）
+	songService               *services.SongService                 // 歌曲服务（songs.create/update/delete）
+	playlistService           *services.PlaylistService             // 歌单服务（playlists 写操作）
+	songTagService            *services.SongTagService              // 标签服务（tags.* bridge 调用）
+	metadataRefresher         *services.MetadataRefresher           // 元数据刷新服务（songs.refreshMetadata bridge 调用）
+	tokenProvider             func(context.Context) (string, error) // 插件短期票据提供方（S-02）
+	port                      string                                // 服务器监听端口（用于构造宿主 URL）
+	processes                 sync.Map                              // map[name]*managedProcess — 后台进程跟踪
+	udpSockets                sync.Map                              // map[socketID]*managedUDPSocket — UDP socket 跟踪
+	tcpSockets                sync.Map                              // map[socketID]*managedTCPSocket — 出站 TCP 连接跟踪
+	socketIDSeq               atomic.Uint64                         // UDP/TCP socket ID 共享的递增序号
 	httpMu                    sync.Mutex
 	httpStreams               map[string]*managedHTTPStream
 	httpClosed                bool
@@ -706,7 +706,7 @@ type BridgeHandler struct {
 }
 
 // NewBridgeHandler 创建桥接处理器
-func NewBridgeHandler(service *JSService, dataDir string, db database.DB, songDownloader *services.SongDownloader, songService *services.SongService, playlistService *services.PlaylistService, songTagService *services.SongTagService, metadataRefresher *services.MetadataRefresher, pluginToken string, port string) *BridgeHandler {
+func NewBridgeHandler(service *JSService, dataDir string, db database.DB, songDownloader *services.SongDownloader, songService *services.SongService, playlistService *services.PlaylistService, songTagService *services.SongTagService, metadataRefresher *services.MetadataRefresher, tokenProvider func(context.Context) (string, error), port string) *BridgeHandler {
 	return &BridgeHandler{
 		service:           service,
 		permissions:       service.plugin.Permissions,
@@ -717,9 +717,17 @@ func NewBridgeHandler(service *JSService, dataDir string, db database.DB, songDo
 		playlistService:   playlistService,
 		songTagService:    songTagService,
 		metadataRefresher: metadataRefresher,
-		pluginToken:       pluginToken,
+		tokenProvider:     tokenProvider,
 		port:              port,
 	}
+}
+
+// pluginToken 取当前插件的一次性短期票据（宿主侧缓存，过期自动重签）。
+func (h *BridgeHandler) pluginToken(ctx context.Context) (string, error) {
+	if h.tokenProvider == nil {
+		return "", fmt.Errorf("plugin credential provider unavailable")
+	}
+	return h.tokenProvider(ctx)
 }
 
 func (h *BridgeHandler) postHostEvent(eventType, id, data string) error {
@@ -1752,7 +1760,7 @@ func (h *BridgeHandler) handleTags(action, data string) (string, error) {
 func (h *BridgeHandler) handlePlugin(action, data string) (string, error) {
 	switch action {
 	case "plugin.getToken":
-		return h.pluginToken, nil
+		return h.pluginToken(context.Background())
 
 	case "plugin.getHostUrl":
 		port := h.port
@@ -1778,8 +1786,12 @@ func (h *BridgeHandler) handlePlugin(action, data string) (string, error) {
 		if req.FilePath == "" {
 			return "", fmt.Errorf("plugin.getFileUrl: filePath is required")
 		}
+		token, err := h.pluginToken(context.Background())
+		if err != nil {
+			return "", fmt.Errorf("plugin.getFileUrl: %w", err)
+		}
 		url := fmt.Sprintf("/api/v1/jsplugin/%s/files/%s?access_token=%s",
-			h.service.plugin.EntryPath, req.FilePath, h.pluginToken)
+			h.service.plugin.EntryPath, req.FilePath, token)
 		return fmt.Sprintf(`{"url":%q}`, url), nil
 
 	case "plugin.registerPlayEvent":

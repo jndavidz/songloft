@@ -9,6 +9,7 @@ import (
 
 	"songloft/internal/handlers"
 	app_middleware "songloft/internal/middleware"
+	"songloft/internal/plugincred"
 	"songloft/internal/services"
 
 	"github.com/hanxi/tracely/sdk/go/tracely"
@@ -82,6 +83,10 @@ func (a *App) setupAPIV1Router() {
 		case "auto_scan":
 			cfg := a.autoScanner.GetConfig()
 			a.autoScanner.ApplyConfig(cfg)
+		case plugincred.ModeConfigKey, plugincred.LegacyUntilConfigKey:
+			// 通用 /configs 入口也能改凭据策略，必须补齐业务端点的吊销副作用，
+			// 否则旧 scope 票据还能活到自然过期（S-02）。
+			a.jsPluginManager.ApplyCredentialPolicyConfigChange()
 		}
 	})
 	versionHandler := handlers.NewVersionHandler()

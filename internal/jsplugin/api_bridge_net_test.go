@@ -1,6 +1,7 @@
 package jsplugin
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"testing"
@@ -31,7 +32,7 @@ func newTestNetBridgeHandler(t *testing.T) *BridgeHandler {
 	}
 
 	dataDir := t.TempDir()
-	return NewBridgeHandler(svc, dataDir, db, nil, nil, nil, nil, nil, "", "")
+	return NewBridgeHandler(svc, dataDir, db, nil, nil, nil, nil, nil, func(context.Context) (string, error) { return "", nil }, "")
 }
 
 type discardHandler struct{}
