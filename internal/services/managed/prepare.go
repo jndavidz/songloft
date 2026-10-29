@@ -69,6 +69,8 @@ type PrepareDeps struct {
 // Manager 维护准备操作表。
 type Manager struct {
 	deps PrepareDeps
+	// store 可选持久化（SQLiteStateStore）；nil = 纯内存（测试）。
+	store StateStore
 
 	mu      sync.Mutex
 	ops     map[string]*PrepareOp // key: issuer + "|" + OpKey.String()
@@ -81,6 +83,34 @@ func NewManager(deps PrepareDeps) *Manager {
 		ops:     map[string]*PrepareOp{},
 		current: map[string]string{},
 	}
+}
+
+// WithStore 挂接持久化；必须在任何 StartPrepare 之前调用。
+// Insert 在 StartPrepare 内同步执行（崩溃恢复的前提），Update 异步。
+func (m *Manager) WithStore(s StateStore) *Manager {
+	m.store = s
+	return m
+}
+
+// RecoverOnRestart 把持久层里 state=preparing 的行显式转为 interrupted：
+// 恢复元数据、绝不自动续跑、绝不自动出声（S-03 恢复语义）。返回行数。
+func (m *Manager) RecoverOnRestart(ctx context.Context) (int, error) {
+	if m.store == nil {
+		return 0, nil
+	}
+	rows, err := m.store.ListActive(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, row := range rows {
+		row.State = StateInterrupted
+		row.UpdatedAt = time.Now()
+		if err := m.store.Update(ctx, row); err == nil {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func opID(issuer string, k OpKey) string {
@@ -100,6 +130,7 @@ func (m *Manager) startFinish(op *PrepareOp, state OpState, errMsg string) bool 
 	}
 	close(op.Done)
 	op.cancel() // 真实 worker 退出：取消/失败/完成都不留跑着的下载
+	m.persist(op)
 	return true
 }
 
@@ -142,6 +173,21 @@ func (m *Manager) StartPrepare(issuer string, key OpKey, ref *Ref) (*PrepareOp, 
 	m.ops[id] = op
 	m.current[curKey] = id
 	m.mu.Unlock()
+
+	if m.store != nil {
+		insCtx, insCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := m.store.Insert(insCtx, op); err != nil {
+			insCancel()
+			m.mu.Lock()
+			delete(m.ops, id)
+			delete(m.current, curKey)
+			m.mu.Unlock()
+			op.cancel()
+			close(op.Done)
+			return nil, fmt.Errorf("managed: persist prepare op: %w", err)
+		}
+		insCancel()
+	}
 
 	go m.run(op, ref)
 	return op, nil

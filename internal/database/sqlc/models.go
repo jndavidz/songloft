@@ -62,6 +62,21 @@ type JsPlugin struct {
 	RenderEngine   string
 }
 
+type ManagedPrepareOp struct {
+	ID             int64
+	Issuer         string
+	Session        string
+	Epoch          int64
+	Entry          string
+	RefDigest      string
+	State          string
+	Error          string
+	ResolvedSource string
+	FallbackReason string
+	CreatedAt      int64
+	UpdatedAt      int64
+}
+
 type PlayHistory struct {
 	ID          int64
 	ContextType string

@@ -70,9 +70,11 @@ type Querier interface {
 	GetThemePackByThemeID(ctx context.Context, themeID string) (ThemePack, error)
 	GetTokenByID(ctx context.Context, tokenID string) (GetTokenByIDRow, error)
 	InsertAutoCreatedPlaylist(ctx context.Context, arg InsertAutoCreatedPlaylistParams) (int64, error)
+	InsertManagedPrepareOp(ctx context.Context, arg InsertManagedPrepareOpParams) error
 	IsTokenRevoked(ctx context.Context, arg IsTokenRevokedParams) (bool, error)
 	LinkSongArtist(ctx context.Context, arg LinkSongArtistParams) error
 	LinkSongTag(ctx context.Context, arg LinkSongTagParams) error
+	ListActiveManagedPrepareOps(ctx context.Context) ([]ManagedPrepareOp, error)
 	ListAllDuplicateSongs(ctx context.Context) ([]ListAllDuplicateSongsRow, error)
 	ListAllPlaylistNames(ctx context.Context) ([]string, error)
 	ListAutoCreatedPlaylists(ctx context.Context) ([]ListAutoCreatedPlaylistsRow, error)
@@ -84,6 +86,7 @@ type Querier interface {
 	ListLocalSongPaths(ctx context.Context) ([]ListLocalSongPathsRow, error)
 	ListLocalSongsWithRelativePaths(ctx context.Context) ([]ListLocalSongsWithRelativePathsRow, error)
 	ListLocalWithoutFingerprint(ctx context.Context) ([]ListLocalWithoutFingerprintRow, error)
+	ListManagedPrepareOpsByEntry(ctx context.Context, arg ListManagedPrepareOpsByEntryParams) ([]ManagedPrepareOp, error)
 	ListPlayHistory(ctx context.Context, arg ListPlayHistoryParams) ([]ListPlayHistoryRow, error)
 	ListPlaylistsContainingSong(ctx context.Context, songID int64) ([]int64, error)
 	ListPluginStorageEntryPaths(ctx context.Context) ([]string, error)
@@ -110,6 +113,7 @@ type Querier interface {
 	UpdateJSPlugin(ctx context.Context, arg UpdateJSPluginParams) error
 	UpdateJSPluginHashes(ctx context.Context, arg UpdateJSPluginHashesParams) error
 	UpdateJSPluginStatus(ctx context.Context, arg UpdateJSPluginStatusParams) error
+	UpdateManagedPrepareOpState(ctx context.Context, arg UpdateManagedPrepareOpStateParams) error
 	UpdatePlaylist(ctx context.Context, arg UpdatePlaylistParams) (int64, error)
 	UpdatePlaylistPosition(ctx context.Context, arg UpdatePlaylistPositionParams) (int64, error)
 	UpdatePlaylistSort(ctx context.Context, arg UpdatePlaylistSortParams) (int64, error)
