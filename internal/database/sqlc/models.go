@@ -77,6 +77,23 @@ type ManagedPrepareOp struct {
 	UpdatedAt      int64
 }
 
+type MediaTicket struct {
+	ID                int64
+	TokenHash         string
+	LeaseID           string
+	RefDigest         string
+	Representation    string
+	Session           string
+	Epoch             int64
+	Entry             string
+	Target            string
+	Subject           string
+	IssuedAt          int64
+	ExpiresAt         int64
+	AbsoluteExpiresAt int64
+	Revoked           int64
+}
+
 type PlayHistory struct {
 	ID          int64
 	ContextType string

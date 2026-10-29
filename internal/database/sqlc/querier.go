@@ -57,6 +57,7 @@ type Querier interface {
 	GetJSPluginByEntryPath(ctx context.Context, entryPath string) (JsPlugin, error)
 	GetJSPluginByID(ctx context.Context, id int64) (JsPlugin, error)
 	GetMaxPlaylistPosition(ctx context.Context) (int64, error)
+	GetMediaTicketByHash(ctx context.Context, tokenHash string) (MediaTicket, error)
 	GetPlaylistByID(ctx context.Context, arg GetPlaylistByIDParams) (GetPlaylistByIDRow, error)
 	GetPlaylistSongs(ctx context.Context, playlistID int64) ([]Song, error)
 	GetPlaylistSongsPaginated(ctx context.Context, arg GetPlaylistSongsPaginatedParams) ([]Song, error)
@@ -71,10 +72,12 @@ type Querier interface {
 	GetTokenByID(ctx context.Context, tokenID string) (GetTokenByIDRow, error)
 	InsertAutoCreatedPlaylist(ctx context.Context, arg InsertAutoCreatedPlaylistParams) (int64, error)
 	InsertManagedPrepareOp(ctx context.Context, arg InsertManagedPrepareOpParams) error
+	InsertMediaTicket(ctx context.Context, arg InsertMediaTicketParams) error
 	IsTokenRevoked(ctx context.Context, arg IsTokenRevokedParams) (bool, error)
 	LinkSongArtist(ctx context.Context, arg LinkSongArtistParams) error
 	LinkSongTag(ctx context.Context, arg LinkSongTagParams) error
 	ListActiveManagedPrepareOps(ctx context.Context) ([]ManagedPrepareOp, error)
+	ListActiveMediaTicketsByLease(ctx context.Context, arg ListActiveMediaTicketsByLeaseParams) ([]MediaTicket, error)
 	ListAllDuplicateSongs(ctx context.Context) ([]ListAllDuplicateSongsRow, error)
 	ListAllPlaylistNames(ctx context.Context) ([]string, error)
 	ListAutoCreatedPlaylists(ctx context.Context) ([]ListAutoCreatedPlaylistsRow, error)
@@ -99,7 +102,11 @@ type Querier interface {
 	MaxPositionInPlaylist(ctx context.Context, playlistID int64) (int64, error)
 	RecordPlay(ctx context.Context, arg RecordPlayParams) error
 	RemoveSongFromPlaylist(ctx context.Context, arg RemoveSongFromPlaylistParams) (int64, error)
+	RenewMediaTicket(ctx context.Context, arg RenewMediaTicketParams) error
 	ResetFailedFingerprintAttempts(ctx context.Context) error
+	RevokeMediaTicketByHash(ctx context.Context, tokenHash string) error
+	RevokeMediaTicketsByEntry(ctx context.Context, arg RevokeMediaTicketsByEntryParams) error
+	RevokeMediaTicketsByLease(ctx context.Context, leaseID string) error
 	RevokeToken(ctx context.Context, arg RevokeTokenParams) (int64, error)
 	SetConfig(ctx context.Context, arg SetConfigParams) error
 	SetPlaylistPinned(ctx context.Context, arg SetPlaylistPinnedParams) (int64, error)
