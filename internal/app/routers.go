@@ -23,6 +23,11 @@ func (a *App) setupRouter() {
 	// 设置基础路由（含中间件注册）
 	a.setupBaseRouter()
 
+	// 票据媒体端点：公开注册（票据即鉴权，设备播放器无法带 JWT 头）
+	if a.managedHandler != nil {
+		a.router.Get("/media", a.managedHandler.MediaHandler)
+	}
+
 	// API v1 路由组
 	a.setupAPIV1Router()
 
@@ -135,6 +140,11 @@ func (a *App) setupAPIV1Router() {
 		// 需要授权的路由组
 		r.Group(func(r chi.Router) {
 			r.Use(app_middleware.AuthMiddleware(a.authService))
+
+			// 托管播放入口（S-03…S-09）
+			if a.managedHandler != nil {
+				a.managedHandler.RegisterRoutes(r)
+			}
 
 			// 认证相关
 			r.Post("/auth/logout", authHandler.Logout)

@@ -1,0 +1,80 @@
+package app
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+
+	"songloft/internal/handlers"
+	"songloft/internal/services"
+	"songloft/internal/services/managed"
+)
+
+// setupManaged 装配托管播放组件（S-03…S-09）：票据签发、当前项准备、
+// 听音事件、ingest 队列、BFF 状态机与票据媒体服务。
+// kwqq v2 解析凭证经配置下发（缺省时 prepare 失败关闭，不影响其他路径）。
+func (a *App) setupManaged() {
+	dataDir := filepath.Dir(a.config.DBPath)
+	workDir := filepath.Join(dataDir, "managed")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		slog.Error("managed: 创建工作目录失败", "error", err)
+		return
+	}
+
+	sqldb, ok := a.db.(interface{ DB() *sql.DB })
+	if !ok {
+		slog.Error("managed: 底层 DB 不支持导出 *sql.DB，托管组件未装配")
+		return
+	}
+
+	issuer := managed.NewTicketIssuer(sqldb.DB())
+	store := managed.NewSQLiteStateStore(sqldb.DB())
+	resolver := &managed.KwqqClient{
+		BaseURL: a.configService.GetString("kwqq_v2_base_url", "http://10.10.10.2:3003"),
+		Token:   a.configService.GetString("kwqq_service_token", ""),
+	}
+	downloader := func(ctx context.Context, result *managed.ResolveResult, destDir string) (string, int64, error) {
+		return managed.DownloadToFile(ctx, result, destDir, managed.DownloadLimits{
+			HostChecker: func(host string) error {
+				if services.IsHostnameAllowed(host) {
+					return nil
+				}
+				return fmt.Errorf("host %q refused by private-network policy", host)
+			},
+		})
+	}
+	mgr := managed.NewManager(managed.PrepareDeps{
+		Resolver:   resolver,
+		Downloader: downloader,
+		Transcoder: func(ctx context.Context, input, destDir string) (string, error) {
+			return managed.TranscodeToMP3(ctx, input, destDir, managed.TranscoderLimits{})
+		},
+		WorkDir: workDir,
+	}).WithStore(store)
+	if n, err := mgr.RecoverOnRestart(context.Background()); err != nil {
+		slog.Warn("managed: 重启恢复准备操作失败", "error", err)
+	} else if n > 0 {
+		slog.Info("managed: 重启恢复", "interrupted_ops", n)
+	}
+
+	events := managed.NewEventLog(sqldb.DB())
+	roots := []string{}
+	if a.config.MusicDir != "" {
+		roots = append(roots, a.config.MusicDir)
+	}
+	ingest := managed.NewIngestQueue(sqldb.DB(), managed.IngestLimits{LibraryRoots: roots})
+	bff := managed.NewManagedBFF(issuer)
+	media := managed.NewMediaServer(issuer, workDir)
+
+	h := handlers.NewManagedHandler(bff, mgr, issuer, events, ingest, media)
+	h.SetIngestScanFunc(func(ctx context.Context, n *managed.IngestNotification) error {
+		// 单文件入库：扫其所在目录（导入按文件幂等）
+		_, err := a.scanner.ScanFilesWithCueInDirs(ctx, []string{filepath.Dir(n.FilePath)}, nil)
+		return err
+	})
+	a.managedHandler = h
+	slog.Info("managed: 托管播放组件已装配", "workdir", workDir)
+}

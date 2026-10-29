@@ -61,6 +61,7 @@ type App struct {
 	metadataRefresher   *services.MetadataRefresher
 	downloadActivity    *services.DownloadActivity // 下载活动闸门，导入探测据此让路（issue #265）
 	playActivity        *playactivity.Registry     // 跨 song/会话 cancel 的全局表，处理快速切歌时旧请求的让位（issue #79）
+	managedHandler      *handlers.ManagedHandler   // 托管播放入口（S-03…S-09）：BFF/准备/票据媒体/事件/ingest
 	webDist             embed.FS
 	tracelyClient       *tracely.Client
 	logLevelVar         *slog.LevelVar        // 全局 slog 等级动态切换；由 /settings/log-level 即时 Set
@@ -157,6 +158,9 @@ func (a *App) Init() error {
 	}
 	a.db = db
 	slog.Info("数据库初始化成功", "path", a.config.DBPath)
+
+	// 托管播放组件（S-03…S-09）
+	a.setupManaged()
 
 	// 创建配置服务
 	configRepo := db.ConfigRepository()
