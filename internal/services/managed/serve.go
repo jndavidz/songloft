@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -148,8 +149,34 @@ func (s *MediaServer) ServeMedia(w http.ResponseWriter, r *http.Request) {
 		gr.expiresAt = time.Unix(rec.ExpiresAt, 0)
 	}
 
+	// 固定表示语义（S-05）：只支持 single-range。多段 Range 请求按 RFC 9110
+	// 「服务器可忽略 Range」处理——剥掉头部，返回 200 完整同一表示，
+	// 绝不拼接出第二个表示。
+	if isMultipartRange(r.Header.Get("Range")) {
+		r.Header.Del("Range")
+	}
+	// 表示身份：ETag 由 ref digest + 尺寸构成（表示不可变 ⇒ 冷暖同字节同 ETag）。
+	w.Header().Set("ETag", `"`+repETag(rep, st.Size())+`"`)
+
 	// ServeContent：GET/HEAD/Range/If-Range（RFC 9110），Content-Type 由扩展名推断。
 	http.ServeContent(w, r, path.Base(diskPath), st.ModTime(), gr)
+}
+
+// isMultipartRange 报告 Range 头是否请求多个区间（顶层逗号分隔）。
+func isMultipartRange(h string) bool {
+	h = strings.TrimSpace(strings.TrimPrefix(h, "bytes="))
+	if h == "" {
+		return false
+	}
+	return strings.Contains(h, ",")
+}
+
+func repETag(rep string, size int64) string {
+	return "rep-" + hashToken(rep + ":" + fmtInt(size))[:24]
+}
+
+func fmtInt(n int64) string {
+	return strconv.FormatInt(n, 10)
 }
 
 // RevokeHook 供 TicketIssuer 撤销时同步广播进程内撤销。

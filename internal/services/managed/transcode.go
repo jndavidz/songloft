@@ -16,11 +16,9 @@ import (
 type TranscoderLimits struct {
 	FfmpegPath string // 空 = PATH 中的 ffmpeg
 	Timeout    time.Duration
-	// Sem 限制并发转码的通道；nil = 包级单进程串行（与现有转码语义一致，防 CPU 风暴）。
+	// Sem 测试注入的信号量；nil = 走进程级预算 cache 分区。
 	Sem chan struct{}
 }
-
-var transcodeSem = make(chan struct{}, 1)
 
 // TranscodeToMP3 把 input 转码为 destDir/intermediate.mp3。
 // 只产出中间命名——只有 VerifyMP3 通过后才允许以 ready/最终名投送。
@@ -41,8 +39,13 @@ func TranscodeToMP3(ctx context.Context, input, destDir string, limits Transcode
 			return "", ctx.Err()
 		}
 	} else {
-		transcodeSem <- struct{}{}
-		defer func() { <-transcodeSem }()
+		// 预算分区（S-05）：转码占 cache 分区，满载明确失败而非无限排队；
+		// release 在 ffmpeg 子进程真实退出后才调用。
+		rel, err := ProcessBudget().Acquire(ctx, "cache")
+		if err != nil {
+			return "", fmt.Errorf("transcode budget: %w", err)
+		}
+		defer rel()
 	}
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
