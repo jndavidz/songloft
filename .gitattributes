@@ -1,0 +1,56 @@
+# 行尾与二进制规则（2026-10-29 补）
+#
+# 本仓是 songloft（Go 服务端 + Vue/JS 前端 + 文档站）。
+# 补此文件前仓内无 .gitattributes，全部文件走 core.autocrlf，
+# 曾导致 Windows 侧检出为 CRLF、WSL 侧（autocrlf 未设）整片显示幻影 modified。
+#
+# clients/* 是 gitlink（子模块），本文件对其无作用。
+
+# ---- 源码/文档/配置：LF ----
+*.go    text eol=lf
+*.mod   text eol=lf
+*.sum   text eol=lf
+*.md    text eol=lf
+*.sql   text eol=lf
+*.vue   text eol=lf
+*.ts    text eol=lf
+*.mts   text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.css   text eol=lf
+*.json  text eol=lf
+*.html  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.sh    text eol=lf
+*.txt   text eol=lf
+*.npmrc text eol=lf
+Dockerfile      text eol=lf
+Dockerfile.*    text eol=lf
+Makefile        text eol=lf
+.dockerignore   text eol=lf
+.gitignore      text eol=lf
+LICENSE         text eol=lf
+NOTICE          text eol=lf
+*.example text eol=lf
+
+# ---- Windows 侧执行：必须 CRLF ----
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# ---- 二进制资源（文档站图片与字体）----
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.woff2 binary
+*.woff  binary
+*.ttf   binary
+*.mp3   binary
+*.zip   binary
+*.gz    binary
+
+# ---- SVG 是文本，不当二进制 ----
+*.svg   text eol=lf
