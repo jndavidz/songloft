@@ -35,6 +35,15 @@ type Config struct {
 	UpdatedAt time.Time
 }
 
+type GcTombstone struct {
+	ID            int64
+	SongID        int64
+	RefDigest     string
+	Reason        string
+	QuarantinedAt int64
+	RestoredAt    sql.NullInt64
+}
+
 type IngestNotification struct {
 	ID        int64
 	NotifID   string

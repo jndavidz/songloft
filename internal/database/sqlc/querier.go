@@ -21,6 +21,7 @@ type Querier interface {
 	ClearPlayHistoryByPlaylist(ctx context.Context, contextKey string) (int64, error)
 	ClearPlayHistoryByTag(ctx context.Context, contextKey string) (int64, error)
 	CountArtistSongs(ctx context.Context, artistID int64) (int64, error)
+	CountGCTombstones(ctx context.Context) (int64, error)
 	CountLocalFingerprints(ctx context.Context) (CountLocalFingerprintsRow, error)
 	CountPlayHistory(ctx context.Context, arg CountPlayHistoryParams) (int64, error)
 	CountPlaylistSongs(ctx context.Context, playlistID int64) (int64, error)
@@ -75,6 +76,7 @@ type Querier interface {
 	GetThemePackByThemeID(ctx context.Context, themeID string) (ThemePack, error)
 	GetTokenByID(ctx context.Context, tokenID string) (GetTokenByIDRow, error)
 	InsertAutoCreatedPlaylist(ctx context.Context, arg InsertAutoCreatedPlaylistParams) (int64, error)
+	InsertGCTombstone(ctx context.Context, arg InsertGCTombstoneParams) error
 	InsertIngestNotification(ctx context.Context, arg InsertIngestNotificationParams) (IngestNotification, error)
 	InsertListeningEvent(ctx context.Context, arg InsertListeningEventParams) (ListeningEvent, error)
 	InsertManagedPrepareOp(ctx context.Context, arg InsertManagedPrepareOpParams) error
@@ -91,6 +93,7 @@ type Querier interface {
 	ListCueSources(ctx context.Context) ([]string, error)
 	ListDuplicateFingerprints(ctx context.Context) ([]ListDuplicateFingerprintsRow, error)
 	ListFailedFingerprints(ctx context.Context) ([]ListFailedFingerprintsRow, error)
+	ListGCTombstonedSongIDs(ctx context.Context) ([]int64, error)
 	ListJSPlugins(ctx context.Context) ([]JsPlugin, error)
 	ListLocalSongPaths(ctx context.Context) ([]ListLocalSongPathsRow, error)
 	ListLocalSongsWithRelativePaths(ctx context.Context) ([]ListLocalSongsWithRelativePathsRow, error)
@@ -114,6 +117,7 @@ type Querier interface {
 	RemoveSongFromPlaylist(ctx context.Context, arg RemoveSongFromPlaylistParams) (int64, error)
 	RenewMediaTicket(ctx context.Context, arg RenewMediaTicketParams) error
 	ResetFailedFingerprintAttempts(ctx context.Context) error
+	RestoreGCTombstone(ctx context.Context, arg RestoreGCTombstoneParams) error
 	RevokeMediaTicketByHash(ctx context.Context, tokenHash string) error
 	RevokeMediaTicketsByEntry(ctx context.Context, arg RevokeMediaTicketsByEntryParams) error
 	RevokeMediaTicketsByLease(ctx context.Context, leaseID string) error
