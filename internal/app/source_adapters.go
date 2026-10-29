@@ -80,7 +80,7 @@ type reassignAdapter struct {
 }
 
 func (a *reassignAdapter) AsyncReassign(songID int64, sk playactivity.SessionKey) {
-	a.orch.AsyncReassign(songID, source.ReassignSessionKey{ClientID: sk.ClientID}, func(ctx context.Context, id int64) (*source.SongInfo, error) {
+	a.orch.AsyncReassign(songID, source.ReassignSessionKey{ClientID: sk.ClientID, System: sk.System}, func(ctx context.Context, id int64) (*source.SongInfo, error) {
 		song, err := a.s.GetByID(ctx, id)
 		if err != nil || song == nil {
 			return nil, err
@@ -121,5 +121,5 @@ func (t *playActivityReassignTracker) Track(parent context.Context, sk source.Re
 	if t == nil || t.reg == nil {
 		return parent, func() {}
 	}
-	return t.reg.Track(parent, playactivity.SessionKey{ClientID: sk.ClientID}, songID, playactivity.CatReassign)
+	return t.reg.Track(parent, playactivity.SessionKey{ClientID: sk.ClientID, System: sk.System}, songID, playactivity.CatReassign)
 }

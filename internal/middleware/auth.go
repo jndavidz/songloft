@@ -8,17 +8,14 @@ import (
 	"strings"
 
 	"songloft/internal/services"
+	"songloft/internal/services/requestidentity"
 )
 
-// contextKey 是 context value key 的专用类型，避免跨包碰撞。
-type contextKey string
-
-const clientIDKey contextKey = "client_id"
-
-// ClientIDFromContext 从请求上下文中提取 clientID。
+// ClientIDFromContext 从请求上下文中提取认证主体（client_id）。
+// 经 requestidentity 统一读取；仅认证后的用户身份有值，系统身份与缺身份返回空串。
 func ClientIDFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value(clientIDKey).(string); ok {
-		return v
+	if id, ok := requestidentity.FromContext(ctx); ok && id.Kind == requestidentity.KindUser {
+		return id.ClientID
 	}
 	return ""
 }
@@ -94,8 +91,15 @@ func AuthMiddleware(authService *services.AuthService, publicPathCheckers ...Pub
 				return
 			}
 
-			// 将 claims 信息添加到请求上下文
-			ctx := context.WithValue(r.Context(), clientIDKey, claims.ClientID)
+			// 身份统一经 requestidentity 写入（本中间件是唯一写入方）。
+			// 真实认证请求缺主体（client_id 为空）必须失败关闭，
+			// 不得产出会落入共享零值桶的身份（S-01）。
+			identity, err := requestidentity.User(claims.ClientID)
+			if err != nil {
+				respondAuthError(w, http.StatusUnauthorized, "token 缺少 client_id", nil)
+				return
+			}
+			ctx := requestidentity.WithIdentity(r.Context(), identity)
 
 			// 认证成功，继续处理请求
 			next.ServeHTTP(w, r.WithContext(ctx))

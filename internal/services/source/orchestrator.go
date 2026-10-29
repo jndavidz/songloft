@@ -35,6 +35,7 @@ type SongUpdater interface {
 // 通过这个最小映射类型把会话信息透到 ReassignTracker.Track。
 type ReassignSessionKey struct {
 	ClientID string
+	System   bool
 }
 
 // ReassignTracker 把 AsyncReassign 的 60s ctx 注册进上层 cancel 表，

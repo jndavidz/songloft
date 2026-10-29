@@ -7,8 +7,11 @@ package playactivity
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
+
+	"songloft/internal/services/requestidentity"
 )
 
 // Category 标记一条 entry 的工作类型。Activate 在判断"是否取消"时按 cat 区分行为。
@@ -23,26 +26,54 @@ const (
 
 // SessionKey 把 Registry 按客户端会话分桶，防止多客户端同时登录时相互 cancel。
 //
-// 当前来自 r.Context() 里的 client_id（见 internal/middleware/auth.go）。
+// 由 requestidentity.FromContext 派生（见 SessionFromContext）：
+//   - 用户会话：ClientID = 认证主体，System=false；
+//   - 显式系统工作：System=true（与所有用户桶相互隔离）；
+//   - 缺身份：一次性独立桶（anon 字段标记，ClientID="anon:<n>"），绝不共享；
+//     该桶按调用一次性派发，同一请求需要多次取用并关联时必须先建立身份。
+//
 // 未来加 UserID 多用户化时直接添加字段即可，调用点只需要更新 SessionFromContext。
 type SessionKey struct {
 	ClientID string
+	System   bool
+
+	// anon 标记一次性缺身份桶；只由本包 SessionFromContext 设置。
+	// 外部构造的 SessionKey（如 adapter 映射）不会也不应带它。
+	anon bool
 }
 
-// ctxClientIDKey 与 middleware/auth.go 里 context.WithValue 用的 key 保持一致。
-// 这里的 key 类型是 string，对应 r.Context().Value("client_id") 的查询。
-const ctxClientIDKey = "client_id"
+// String 输出可诊断的桶标识："user:<id>" / "system" / "anon:<n>"。
+func (k SessionKey) String() string {
+	switch {
+	case k.System:
+		return "system"
+	case k.anon:
+		return k.ClientID
+	case k.ClientID == "":
+		return "user:<empty>"
+	default:
+		return "user:" + k.ClientID
+	}
+}
 
-// SessionFromContext 从请求 ctx 里抽出 client_id 构造 SessionKey；
-// 没有 client_id（系统任务、未走鉴权中间件的内部调用）时返回零值，落到独立"系统桶"。
+// anonSeq 给缺身份请求派发一次性独立桶序号：缺身份请求不得落入共享零值桶（S-01），
+// 但仍需要互不共享、可诊断的桶。
+var anonSeq atomic.Uint64
+
+// SessionFromContext 从请求 ctx 里经 requestidentity 统一读取身份并构造 SessionKey。
+// 身份由 middleware 唯一写入（requestidentity.WithIdentity）；ctx 未携带身份时
+// （未走鉴权中间件的公开路径、未显式声明身份的内部调用）返回一次性独立桶，
+// 绝不返回可共享的零值桶。
 func SessionFromContext(ctx context.Context) SessionKey {
-	if ctx == nil {
-		return SessionKey{}
+	if id, ok := requestidentity.FromContext(ctx); ok {
+		switch {
+		case id.Kind == requestidentity.KindSystem:
+			return SessionKey{System: true}
+		case id.ClientID != "":
+			return SessionKey{ClientID: id.ClientID}
+		}
 	}
-	if v, ok := ctx.Value(ctxClientIDKey).(string); ok {
-		return SessionKey{ClientID: v}
-	}
-	return SessionKey{}
+	return SessionKey{ClientID: fmt.Sprintf("anon:%d", anonSeq.Add(1)), anon: true}
 }
 
 // entry 内部记录单条已注册工作。

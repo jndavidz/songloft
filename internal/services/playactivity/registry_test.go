@@ -5,20 +5,60 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"songloft/internal/services/requestidentity"
 )
 
 func TestSessionFromContext(t *testing.T) {
-	t.Run("ctx 无 client_id → 空 sk", func(t *testing.T) {
-		sk := SessionFromContext(context.Background())
-		if sk.ClientID != "" {
-			t.Fatalf("背景 ctx 应返回空 SessionKey，got %+v", sk)
+	t.Run("ctx 无身份 → 一次性独立桶，不共享", func(t *testing.T) {
+		sk1 := SessionFromContext(context.Background())
+		sk2 := SessionFromContext(context.Background())
+		if sk1.ClientID == "" || sk2.ClientID == "" {
+			t.Fatalf("缺身份应得到非空 anon 桶，got %+v / %+v", sk1, sk2)
+		}
+		if sk1 == sk2 {
+			t.Fatalf("两次缺身份调用不得共享同一桶（S-01）：%v", sk1)
 		}
 	})
-	t.Run("ctx 带 client_id → 提取出 ClientID", func(t *testing.T) {
-		ctx := context.WithValue(context.Background(), ctxClientIDKey, "client-A")
+	t.Run("ctx 带 user 身份 → 提取出 ClientID", func(t *testing.T) {
+		id, err := requestidentity.User("client-A")
+		if err != nil {
+			t.Fatalf("User: %v", err)
+		}
+		ctx := requestidentity.WithIdentity(context.Background(), id)
 		sk := SessionFromContext(ctx)
-		if sk.ClientID != "client-A" {
-			t.Fatalf("应提取 client-A，got %+v", sk)
+		if sk.ClientID != "client-A" || sk.System {
+			t.Fatalf("应提取 user:client-A，got %+v", sk)
+		}
+		if sk.String() != "user:client-A" {
+			t.Fatalf("String()=%q", sk.String())
+		}
+	})
+	t.Run("ctx 带 system 身份 → 显式系统桶", func(t *testing.T) {
+		ctx := requestidentity.SystemContext(context.Background())
+		sk := SessionFromContext(ctx)
+		if !sk.System || sk.ClientID != "" {
+			t.Fatalf("应为显式系统桶，got %+v", sk)
+		}
+		if sk.String() != "system" {
+			t.Fatalf("String()=%q", sk.String())
+		}
+		// 系统桶与用户桶互相隔离
+		id, _ := requestidentity.User("client-B")
+		userSk := SessionFromContext(requestidentity.WithIdentity(context.Background(), id))
+		if userSk == sk {
+			t.Fatalf("系统桶与用户桶不得相同")
+		}
+	})
+	t.Run("user 身份缺主体（防御）→ 一次性独立桶", func(t *testing.T) {
+		// WithIdentity 只该由 middleware 调用且 User() 已拒绝空主体；
+		// 这里直接写零 ClientID 的 user 身份，验证消费方兜底不落共享桶。
+		ctx := requestidentity.WithIdentity(context.Background(),
+			requestidentity.Identity{Kind: requestidentity.KindUser})
+		sk1 := SessionFromContext(ctx)
+		sk2 := SessionFromContext(ctx)
+		if sk1.System || sk1 == (SessionKey{}) || sk1 == sk2 {
+			t.Fatalf("缺主体 user 身份应落到一次性独立桶，got %+v / %+v", sk1, sk2)
 		}
 	})
 }
