@@ -1,6 +1,6 @@
 # S-08: 实现下载完成增量扫描与失败补偿
 
-Status: ready-for-agent
+Status: done（域内，2026-10-30：ingest 去重/拒绝矩阵/重试补偿落地；K-05 端到端联调 Not run 见 Comments）
 Type: task
 Blocked by: 06
 External blocked by: musicdl K-05（原子发布／outbox 联调）
@@ -29,3 +29,11 @@ External blocked by: musicdl K-05（原子发布／outbox 联调）
 仅隔离测试库和离线文件 fixture；不扫描或修改正式曲库，真实入库另行批准。
 
 ## Comments
+
+### 实施（2026-10-30，域内）
+
+songloft f448907：IngestQueue（migration 0043）——根目录白名单+穿越拒绝、临时/半文件/
+加密件（ncm/kgm/mflac/mgg/qmc 系）永久拒绝且落审计行、未发布拒绝、notif_id 幂等（重复
+投递一次入库）、乱序稳定序、有界重试（达上限 failed 保留现场）、pending 持久化重启续跑
+（CompensateInterrupted+ProcessAll）。Not run：K-05 端到端联调（musicdl outbox→本队列）、
+真实曲库扫描服务接线。

@@ -1,6 +1,6 @@
 # S-07: 完成 image-only 升级与 Songloft 发布验收
 
-Status: ready-for-agent
+Status: in-progress（2026-10-30：线下恢复矩阵与发布证据完成；NAS 实际升级待批准窗口，见 Comments）
 Type: task
 Blocked by: 02, 06, 08
 External blocked by: open-xiaoai B-05/B-06，musicdl K-06（跨区发布联调）
@@ -30,3 +30,12 @@ External blocked by: open-xiaoai B-05/B-06，musicdl K-06（跨区发布联调�
 不含镜像推送、NAS 实际升级、客户端发布或真机操作；分别授权。
 
 ## Comments
+
+### 线下验收（2026-10-30）
+
+songloft 223d189 恢复矩阵：旧"进程"（票据/准备/ingest）→ "重启"（同持久层新实例）→
+准备 interrupted 不自动续播、过期票失败关闭、有效 lease 恢复、ingest 续跑、新旧表共存
+（additive 契约：0040-0044 全部含 Down，DSF 升级测试覆盖 DownTo 回滚）。
+Not run：**NAS 实际 image-only 升级与运行身份回读**（需批准窗口：WSL 侧 docker 构建 +
+NAS 部署 + 回读版本；运行手册见 bridge/deploy/REBUILD.md 模式）；Swagger/ADR 同步随
+app 层接线；客户端兼容矩阵需客户端构建。

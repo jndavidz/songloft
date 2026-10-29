@@ -71,7 +71,20 @@ External blocked by: —
   实测 PASS（ok_pkgs=3）；`songloft-offline`（go test ./...）在本机如实 BLOCKED（ffmpeg 缺失），
   需在 WSL/带 ffmpeg 环境跑全量作最终验收。
 
-Not run：WSL 侧全量 go test（ffmpeg 环境）、真实客户端验证。
+Not run：真实客户端验证。
+
+### Not run 收口（2026-10-29 补）
+
+- 本机补装 ffmpeg 后（`D:\PortableApps\_AV\ffmpeg-9.0.2-full_build`，gyan 9.0.2 构建）复跑
+  `go test ./...`：失败集合缩小为 **Windows 平台性预存失败**——`/bin/echo` Unix 路径假设
+  （StreamSeekedMP3*）、POSIX 权限语义（jsplugin ResolveFSPath*）、ffmpeg 9.0.2 构建变体
+  （ExtractCoverFromVideoFile*）、seek/transcode 流式用例的平台假设（GetSongPlaySeek*/…Live）。
+  均位于本票未触碰的包，与改动无关（置信度高：stash 归因 + 失败点全在平台假设上）。
+  **全量绿需 Linux 环境**：WSL 侧当前无 go（用户工具链基线），是否安装由用户决定。
+- runner 连带修复一个 Windows 缺陷：`subprocess text=True` 在 Windows locale 下遇 go 测试输出
+  非 UTF-8 字节会解码崩溃 → `proc.stdout=None` → TypeError；已在 open-xiaoai `e068792` 修复
+  （全 subprocess 显式 utf-8/errors=replace）。修复后 songloft-offline case 如实 FAIL 并给出
+  上述归因清单。
 
 ### code-review 收口（2026-10-29，Standards/Spec 双轴并行）
 

@@ -1,6 +1,6 @@
 # S-03: 实现 TrackRef 当前项准备并禁止在线预取
 
-Status: in-progress（2026-10-29 首切片落地：managed 域核心 + 契约锁定 + 状态机；剩余切片见 Comments 末尾）
+Status: done（域内，2026-10-30：持久化/source_data 适配/收口完成；投送层与 bridge 联调 Not run 见 Comments）
 Type: task
 Blocked by: 01
 External blocked by: musicdl K-01/K-02（契约联调）
@@ -83,3 +83,9 @@ code-review 双轴（并行 sub-agent）修复：double-close panic（startFinis
 6. rollback 开关（关闭 managed capability）随接线切片落地。
 
 Not run：真实上游联调（K-01/K-02 已 resolved 待联调窗口）、客户端构建、NAS。
+### 收口（2026-10-30，域内完成）
+
+songloft 提交链：e4b470b（首切片）→ 持久化收口（SQLiteStateStore + migration 0040 +
+RecoverOnRestart + RefFromSourceData/WithExtra）→ 投送域语义在 S-04/S-05/S-06 中落地。
+测试 40+ 项全绿（10 连跑）；runner case `songloft-managed-prepare` PASS。
+Not run：真实上游联调（K-01/K-02 已 resolved，待联调窗口）、bridge 端到端、真机。

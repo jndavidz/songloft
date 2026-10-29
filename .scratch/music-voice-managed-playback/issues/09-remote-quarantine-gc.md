@@ -1,6 +1,6 @@
 # S-09: 后续实施非破坏性 remote 隔离与 GC 预览
 
-Status: ready-for-agent
+Status: done（域内，2026-10-30：排除矩阵/tombstone/恢复落地；曲库视图接线与 GC 执行窗口另行授权，见 Comments）
 Type: task
 Blocked by: 07
 External blocked by: —
@@ -28,3 +28,11 @@ External blocked by: —
 禁止直接 DELETE、清缓存目录或清理用户下载；永久删除另行批准。
 
 ## Comments
+
+### 实施（2026-10-30，域内）
+
+songloft 2d6e51c：AnalyzeOrphans 纯分析器（八类排除条件表驱动 + legacy 保护名单；判定
+只看引用与状态，不看名称/播放次数——播放一次不清的误删负例锁定）+ TombstoneStore
+（migration 0044：幂等隔离、restored_at 可恢复、store 全方法无 DELETE——非破坏性契约）。
+Not run：真实曲库视图接线（SongRepository/PlayHistory/活动队列引用查询）、GC 执行窗口
+（运行预览需单独授权；物理删除永远不在本票）。

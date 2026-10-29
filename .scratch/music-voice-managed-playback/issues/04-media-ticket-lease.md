@@ -1,6 +1,6 @@
 # S-04: 实现可撤销短期媒体票据与独立 lease
 
-Status: ready-for-agent
+Status: done（域内，2026-10-30：票据/lease/续期/撤销/在途终止全落地；BFF 接线与真机 Not run 见 Comments）
 Type: task
 Blocked by: 03
 External blocked by: —
@@ -30,3 +30,10 @@ External blocked by: —
 仅本地服务与离线测试；不改变公网反代、防火墙或 NAS 配置。
 
 ## Comments
+
+### 实施（2026-10-30，域内）
+
+songloft 1461ca7：TicketIssuer（CSPRNG opaque token 只存 SHA-256、全绑定维度、独立 lease、
+换代撤销、续期绝对上限）+ MediaServer（ServeContent RFC 9110、穿越拒绝、guardReader 在途
+终止：过期即断/lease 秒断/DB 撤销 1s 内、日志脱敏）+ migration 0041。测试 8 项 + 在途终止
+单测。Not run：app 层路由接线（随托管入口上 app）、真机 GET/Range 行为。

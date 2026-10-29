@@ -1,6 +1,6 @@
 # S-06: 实现托管 BFF、手机 handoff 与听音事件
 
-Status: ready-for-agent
+Status: done（域内，2026-10-30：BFF 状态机/handoff/听音事件/四源专辑身份落地；bridge 联调与真机 handoff Not run 见 Comments）
 Type: task
 Blocked by: 05
 External blocked by: open-xiaoai B-05（命令／SSE 联调）
@@ -31,3 +31,11 @@ External blocked by: open-xiaoai B-05（命令／SSE 联调）
 不发布客户端、不操作真实手机或 LX06；这些验收另行批准。
 
 ## Comments
+
+### 实施（2026-10-30，域内）
+
+songloft a3d7a3b：ManagedBFF 两段式 handoff（未确认 Stop 不得播）、旧 epoch 全拒、换代
+不恢复 owner、stop 优先并撤票；EventLog（幂等去重、recordable 白名单防预听为记已听、
+Last-Event-ID replay、Ack 有界清理、migration 0042）；MapAlbum 四源逐项身份（单项缺字段
+显式失败可见）。Not run：bridge SSE 联调（B-05/B-06）、Flutter/Lynx 客户端、真实手机
+handoff、app 层 BFF 路由。

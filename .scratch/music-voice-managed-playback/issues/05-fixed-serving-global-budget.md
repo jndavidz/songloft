@@ -1,6 +1,6 @@
 # S-05: 固定表示媒体服务与全局资源预算
 
-Status: ready-for-agent
+Status: done（域内，2026-10-30：RFC 9110 语义与七分区预算落地；既有服务全量接线与 NAS 压测 Not run 见 Comments）
 Type: task
 Blocked by: 04
 External blocked by: —
@@ -30,3 +30,11 @@ External blocked by: —
 离线测试无需部署；真实 AAC、NAS 压测和资源限制变更分别批准。
 
 ## Comments
+
+### 实施（2026-10-30，域内）
+
+songloft bfbf2bc：固定表示语义（single-Range、多段回退 200 完整、416 bytes */N、If-Range
+匹配/失配、ETag 表示身份、冷暖同字节、HEAD 无体无副作用）+ 七分区静态预算（FIFO 等待、
+AcquirePriority 插队、满载 ErrBudgetFull→503、ctx 取消无泄漏、真实 worker 持槽断言）+
+transcode 接 cache 分区。局限：既有 cache_service/HLS/电台生产者的全量分区接线是独立重构
+切片；NAS 压测（CPU/RSS/I/O wait）需授权环境。
