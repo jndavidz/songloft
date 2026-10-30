@@ -98,3 +98,6 @@ Not run：真实上游联调（K-01/K-02 已 resolved，待联调窗口）、bri
   （`bytes 0-9467006/9467007` + 尾部 128 字节探测），即准备→投送→设备解码全链打通。
 - 失败关闭：无凭据 `/api/v1/managed/prepare` → 401（runner `quality-profile` 断言）。
 - 仍未验：真实上游换源失败矩阵在设备侧的逐源结果（离线矩阵已覆盖）。
+- 2026-10-30 追加：`ready` 响应新增 `duration_s`（MP3 帧验证得到的可信时长）——
+  bridge 侧 HTTP/App 入队没有时长，EOF 判定必须靠它，否则一首播完永不推进
+  （30 分钟长稳观测暴露）。commit `badf303`。
