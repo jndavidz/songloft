@@ -99,3 +99,31 @@ func TestVerifyMP3_ProberCrossCheck(t *testing.T) {
 		}
 	})
 }
+
+// TestVerifyMP3_RealWorldJunk：真实世界厂商填充（kuwo 尾部垃圾+TAG）必须通过；
+// 帧间小间隙重同步通过；无标记大块垃圾仍拒绝（截断防线）。
+func TestVerifyMP3_RealWorldJunk(t *testing.T) {
+	t.Run("尾部厂商垃圾 + TAG 标记", func(t *testing.T) {
+		rep, err := VerifyMP3(fixturePath(t, "tail_junk_tag.mp3"), VerifyExpectation{})
+		if err != nil {
+			t.Fatalf("厂商尾部垃圾应通过（有界重同步）: %v", err)
+		}
+		if rep.TrailingJunkBytes == 0 {
+			t.Error("应记录尾部垃圾字节数")
+		}
+	})
+	t.Run("帧间小间隙重同步", func(t *testing.T) {
+		rep, err := VerifyMP3(fixturePath(t, "mid_gap.mp3"), VerifyExpectation{})
+		if err != nil {
+			t.Fatalf("帧间小间隙应重同步通过: %v", err)
+		}
+		if rep.DurationEstSec < 1.0 {
+			t.Errorf("重同步后时长估计应完整，got %.2f", rep.DurationEstSec)
+		}
+	})
+	t.Run("无标记截断仍拒绝", func(t *testing.T) {
+		if _, err := VerifyMP3(fixturePath(t, "truncated.mp3"), VerifyExpectation{}); err == nil {
+			t.Fatal("截断帧流（无标签标记）必须拒绝")
+		}
+	})
+}
