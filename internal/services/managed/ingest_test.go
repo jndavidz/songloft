@@ -112,6 +112,28 @@ func TestIngest_RejectMatrix(t *testing.T) {
 	}
 }
 
+// TestIngest_DuplicateRejected：被拒通知重复投递仍返回拒绝原因，
+// 不得退化成 sql.ErrNoRows（那会让 HTTP 层变成 500 而不是 422）。
+func TestIngest_DuplicateRejected(t *testing.T) {
+	root, _ := newIngestFixture(t)
+	q := newIngestQueue(t, root)
+	outside := t.TempDir()
+	bad := filepath.Join(outside, "evil.mp3")
+	if err := os.WriteFile(bad, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		st, err := q.Submit(context.Background(),
+			&IngestNotification{NotifID: "dup-reject", FilePath: bad})
+		if st != IngestRejected {
+			t.Fatalf("submit %d state=%s want %s", i, st, IngestRejected)
+		}
+		if !errors.Is(err, ErrPathOutsideLibrary) {
+			t.Fatalf("submit %d 应返回拒绝原因，got %v", i, err)
+		}
+	}
+}
+
 // TestIngest_RetryThenCompensate：扫描失败重试有界；重启后 pending 续跑。
 func TestIngest_RetryThenCompensate(t *testing.T) {
 	root, published := newIngestFixture(t)

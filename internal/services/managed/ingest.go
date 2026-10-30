@@ -132,9 +132,13 @@ func (q *IngestQueue) Submit(ctx context.Context, notif *IngestNotification) (st
 	})
 	if err != nil {
 		// ON CONFLICT DO NOTHING：重复投递（ErrNoRows）→ 查既有状态，
-		// 不产生第二次逻辑入库
-		if errors.Is(err, sql.ErrNoRows) && state == IngestPending {
+		// 不产生第二次逻辑入库；被拒通知重复投递也要原样返回拒绝原因，
+		// 不能退化成 SQL 错误（调用方会当 500）。
+		if errors.Is(err, sql.ErrNoRows) {
 			if st, gerr := q.q.GetIngestNotificationState(ctx, notif.NotifID); gerr == nil {
+				if state == IngestRejected {
+					return st, rejectErr
+				}
 				return st, nil
 			}
 		}

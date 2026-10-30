@@ -74,7 +74,7 @@ func (a *App) setupManaged() {
 	}
 	ingest := managed.NewIngestQueue(sqldb.DB(), managed.IngestLimits{LibraryRoots: roots})
 	bff := managed.NewManagedBFF(issuer)
-	media := managed.NewMediaServer(issuer, workDir)
+	media := managed.NewMediaServer(issuer, dataDir) // 表示记录已含 managed/ 前缀，Root 是其父目录
 
 	h := handlers.NewManagedHandler(bff, mgr, issuer, events, ingest, media)
 	h.SetIngestScanFunc(func(ctx context.Context, n *managed.IngestNotification) error {
