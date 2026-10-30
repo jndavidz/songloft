@@ -72,3 +72,8 @@ app 层接线；客户端兼容矩阵需客户端构建。
   `user:` 改为 `1028:101`（DSM ACL 需要 administrators 组）。
 - 备份：`docker-compose.yml.bak-bffclient-20261030`、`.bak-acl-20261030`；
   回滚 = 恢复 compose + `songloft-fork:previous`。
+
+### 追加（2026-10-30 晚）：main 已到 c98bf47
+
+`c98bf47`（metadata 去掉 ffmpeg 8 已移除的 `-vsync vfr`）**尚未**构建进线上镜像（线上仍
+`v2.13.6-51-g119cf48`）；该修复只影响「视频封面抽取」，不在托管播放关键路径。下次部署时随批上线并回读。
