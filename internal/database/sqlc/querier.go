@@ -23,6 +23,7 @@ type Querier interface {
 	CountArtistSongs(ctx context.Context, artistID int64) (int64, error)
 	CountGCTombstones(ctx context.Context) (int64, error)
 	CountLocalFingerprints(ctx context.Context) (CountLocalFingerprintsRow, error)
+	CountPersonalTokens(ctx context.Context) (int64, error)
 	CountPlayHistory(ctx context.Context, arg CountPlayHistoryParams) (int64, error)
 	CountPlaylistSongs(ctx context.Context, playlistID int64) (int64, error)
 	CountPlaylistsByCoverPath(ctx context.Context, coverPath string) (int64, error)
@@ -31,6 +32,7 @@ type Querier interface {
 	CountSongsByFilePath(ctx context.Context, filePath string) (int64, error)
 	CountSongsByTag(ctx context.Context, tagID int64) (int64, error)
 	CreateJSPlugin(ctx context.Context, arg CreateJSPluginParams) (int64, error)
+	CreatePersonalToken(ctx context.Context, arg CreatePersonalTokenParams) error
 	CreatePlaylist(ctx context.Context, arg CreatePlaylistParams) (int64, error)
 	CreateSong(ctx context.Context, arg CreateSongParams) (int64, error)
 	CreateSongTag(ctx context.Context, arg CreateSongTagParams) (int64, error)
@@ -63,6 +65,7 @@ type Querier interface {
 	GetListeningEventSeq(ctx context.Context, idempotencyKey string) (int64, error)
 	GetMaxPlaylistPosition(ctx context.Context) (int64, error)
 	GetMediaTicketByHash(ctx context.Context, tokenHash string) (MediaTicket, error)
+	GetPersonalTokenByHash(ctx context.Context, tokenHash string) (GetPersonalTokenByHashRow, error)
 	GetPlaylistByID(ctx context.Context, arg GetPlaylistByIDParams) (GetPlaylistByIDRow, error)
 	GetPlaylistSongs(ctx context.Context, playlistID int64) ([]Song, error)
 	GetPlaylistSongsPaginated(ctx context.Context, arg GetPlaylistSongsPaginatedParams) ([]Song, error)
@@ -101,6 +104,7 @@ type Querier interface {
 	ListManagedPrepareOpsByEntry(ctx context.Context, arg ListManagedPrepareOpsByEntryParams) ([]ManagedPrepareOp, error)
 	ListPendingIngestNotifications(ctx context.Context, limit int64) ([]IngestNotification, error)
 	ListPendingListeningEvents(ctx context.Context, arg ListPendingListeningEventsParams) ([]ListeningEvent, error)
+	ListPersonalTokens(ctx context.Context, arg ListPersonalTokensParams) ([]ListPersonalTokensRow, error)
 	ListPlayHistory(ctx context.Context, arg ListPlayHistoryParams) ([]ListPlayHistoryRow, error)
 	ListPlaylistsContainingSong(ctx context.Context, songID int64) ([]int64, error)
 	ListPluginStorageEntryPaths(ctx context.Context) ([]string, error)
@@ -121,10 +125,12 @@ type Querier interface {
 	RevokeMediaTicketByHash(ctx context.Context, tokenHash string) error
 	RevokeMediaTicketsByEntry(ctx context.Context, arg RevokeMediaTicketsByEntryParams) error
 	RevokeMediaTicketsByLease(ctx context.Context, leaseID string) error
+	RevokePersonalToken(ctx context.Context, arg RevokePersonalTokenParams) (int64, error)
 	RevokeToken(ctx context.Context, arg RevokeTokenParams) (int64, error)
 	SetConfig(ctx context.Context, arg SetConfigParams) error
 	SetPlaylistPinned(ctx context.Context, arg SetPlaylistPinnedParams) (int64, error)
 	SetPluginStorage(ctx context.Context, arg SetPluginStorageParams) error
+	TouchPersonalToken(ctx context.Context, arg TouchPersonalTokenParams) error
 	TouchPlaylist(ctx context.Context, arg TouchPlaylistParams) (int64, error)
 	TrimPlayHistory(ctx context.Context, arg TrimPlayHistoryParams) error
 	UnlinkAllBySong(ctx context.Context, songID int64) error

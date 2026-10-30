@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,11 @@ type TokenRepository interface {
 	ListActive(ctx context.Context, filter *database.TokenFilter) ([]*models.AuthToken, error)
 	CleanExpired(ctx context.Context) (int64, error)
 	IsRevoked(ctx context.Context, tokenID string) (bool, error)
+	CreatePersonalToken(ctx context.Context, token models.PersonalToken, hash string) error
+	GetPersonalTokenByHash(ctx context.Context, hash string) (*models.PersonalToken, error)
+	ListPersonalTokens(ctx context.Context, limit, offset int) ([]models.PersonalToken, int64, error)
+	RevokePersonalToken(ctx context.Context, id string) error
+	TouchPersonalToken(ctx context.Context, id string, now time.Time) error
 }
 
 // TokenCacheEntry Token 缓存条目
@@ -67,6 +73,8 @@ type Claims struct {
 	PluginGen int64 `json:"plugin_gen,omitempty"`
 	// Legacy 标记为窗口内被接受的旧 plugin-system 票据（非签发主体）。
 	Legacy bool `json:"-"`
+	// CredentialType 从持久记录确定，不信任请求声明。
+	CredentialType string `json:"-"`
 	jwt.RegisteredClaims
 }
 
@@ -379,6 +387,10 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken, clientInfo
 
 // ValidateToken 验证 Token
 func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*Claims, error) {
+	// 永久令牌不缓存认证结果，每个请求读取数据库以保证撤销立即生效。
+	if strings.HasPrefix(tokenString, PersonalTokenPrefix) {
+		return s.validatePersonalToken(ctx, tokenString)
+	}
 	// 先解析签名与过期时间。插件/系统票据不查缓存：撤销必须立刻生效，
 	// 且代次校验是内存读取，成本可接受。
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
@@ -423,16 +435,17 @@ func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*C
 	}
 
 	// 对于普通用户 Token，检查是否被撤销
-	isRevoked, err := s.tokens.IsRevoked(ctx, tokenString)
+	record, err := s.tokens.GetByID(ctx, tokenString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check token status: %w", err)
 	}
 
-	if isRevoked {
+	if !record.RevokedAt.IsZero() || record.ExpiresAt.Before(time.Now()) {
 		// 缓存撤销状态，使用 token 的过期时间
 		s.setTokenCache(tokenString, claims, claims.ExpiresAt.Time, true)
 		return nil, fmt.Errorf("token has been revoked")
 	}
+	claims.CredentialType = record.TokenType
 
 	// 缓存有效 Token，使用 token 的过期时间
 	s.setTokenCache(tokenString, claims, claims.ExpiresAt.Time, false)

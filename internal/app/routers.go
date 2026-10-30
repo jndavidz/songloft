@@ -147,9 +147,12 @@ func (a *App) setupAPIV1Router() {
 			}
 
 			// 认证相关
-			r.Post("/auth/logout", authHandler.Logout)
-			r.Get("/auth/tokens", authHandler.ListTokens)
-			r.Delete("/auth/tokens/{token_id}", authHandler.RevokeToken)
+			r.With(app_middleware.RequireLoginSession).Post("/auth/logout", authHandler.Logout)
+			r.With(app_middleware.RequireLoginSession).Get("/auth/tokens", authHandler.ListTokens)
+			r.With(app_middleware.RequireLoginSession).Delete("/auth/tokens/{token_id}", authHandler.RevokeToken)
+			r.With(app_middleware.RequireLoginSession).Post("/auth/personal-tokens", authHandler.CreatePersonalToken)
+			r.With(app_middleware.RequireLoginSession).Get("/auth/personal-tokens", authHandler.ListPersonalTokens)
+			r.With(app_middleware.RequireLoginSession).Delete("/auth/personal-tokens/{id}", authHandler.RevokePersonalToken)
 
 			// 歌曲管理模块
 			r.Get("/songs", songHandler.ListSongs)

@@ -14,6 +14,22 @@ import (
 	"songloft/internal/services/requestidentity"
 )
 
+// contextKey 是 context value key 的专用类型，避免跨包碰撞。
+type contextKey string
+
+const credentialTypeKey contextKey = "credential_type"
+
+// RequireLoginSession 限制凭证管理仅由正常登录的访问令牌操作。
+func RequireLoginSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Context().Value(credentialTypeKey) != "access" {
+			respondAuthError(w, http.StatusForbidden, "请通过账号登录后管理 Token", nil)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // ClientIDFromContext 从请求上下文中提取认证主体（client_id）。
 // 经 requestidentity 统一读取；仅认证后的用户身份有值，系统身份与缺身份返回空串。
 func ClientIDFromContext(ctx context.Context) string {
@@ -123,6 +139,8 @@ func AuthMiddleware(authService *services.AuthService, publicPathCheckers ...Pub
 				}
 				ctx = requestidentity.WithIdentity(r.Context(), identity)
 			}
+			// 凭证类别由签发记录决定，供 RequireLoginSession 拒绝永久令牌与插件票据。
+			ctx = context.WithValue(ctx, credentialTypeKey, claims.CredentialType)
 
 			// 认证成功，继续处理请求
 			next.ServeHTTP(w, r.WithContext(ctx))

@@ -82,7 +82,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "用户登出，撤销当前访问令牌",
+                "description": "用户登出，撤销当前访问令牌。仅正常登录的 Access Token 可调用，插件、永久令牌和 Refresh Token 返回 403。",
                 "consumes": [
                     "application/json"
                 ],
@@ -106,8 +106,189 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
+                    "403": {
+                        "description": "需要正常登录会话",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "服务器错误",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/personal-tokens": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "仅正常登录会话可操作。返回含已撤销记录的元数据、真实总数及分页；不返回完整凭证或哈希。last_used_at 最多每分钟更新一次，null 表示尚未使用。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证管理"
+                ],
+                "summary": "获取永久访问 Token 列表",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "每页数量",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "偏移量",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "令牌管理信息",
+                        "schema": {
+                            "$ref": "#/definitions/models.PersonalTokenListResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "需要正常登录会话",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "查询失败",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "仅正常登录会话可操作。名称为 1 至 80 个字符。令牌永久有效，拥有管理员业务 API 权限，不能管理 Token。完整凭证仅本次返回，数据库只存哈希。重启或退出登录不使其失效。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证管理"
+                ],
+                "summary": "创建永久访问 Token",
+                "parameters": [
+                    {
+                        "description": "令牌名称",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.CreatePersonalTokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "仅此次返回完整凭证，请妥善保存",
+                        "schema": {
+                            "$ref": "#/definitions/models.CreatePersonalTokenResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "名称或请求无效",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "需要正常登录会话",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "创建失败",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/personal-tokens/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "仅正常登录会话可操作。撤销后后续认证立即失败，不中断已开始的请求。重复撤销成功，不存在的 ID 返回 404。无需请求体。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证管理"
+                ],
+                "summary": "撤销永久访问 Token",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "令牌管理 ID，不是完整凭证",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "撤销成功"
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "需要正常登录会话",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Token 不存在",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "撤销失败",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -174,7 +355,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "获取当前用户的所有活跃令牌列表",
+                "description": "获取当前用户的所有活跃令牌列表，仅正常登录的 Access Token 可调用；插件、永久令牌和 Refresh Token 返回 403。",
                 "consumes": [
                     "application/json"
                 ],
@@ -225,6 +406,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
+                    "403": {
+                        "description": "需要正常登录会话",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "服务器错误",
                         "schema": {
@@ -241,7 +428,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "撤销指定的令牌",
+                "description": "撤销指定的令牌，仅正常登录的 Access Token 可调用；插件、永久令牌和 Refresh Token 返回 403。",
                 "consumes": [
                     "application/json"
                 ],
@@ -285,6 +472,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "未授权",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "需要正常登录会话",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -12219,6 +12412,41 @@ const docTemplate = `{
                 }
             }
         },
+        "models.CreatePersonalTokenRequest": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "example": "Home Assistant"
+                }
+            }
+        },
+        "models.CreatePersonalTokenResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_used_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "prefix": {
+                    "type": "string"
+                },
+                "revoked_at": {
+                    "type": "string"
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
         "models.ErrorResponse": {
             "type": "object",
             "properties": {
@@ -12318,6 +12546,49 @@ const docTemplate = `{
                     "description": "Token 类型",
                     "type": "string",
                     "example": "Bearer"
+                }
+            }
+        },
+        "models.PersonalToken": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_used_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "prefix": {
+                    "type": "string"
+                },
+                "revoked_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.PersonalTokenListResponse": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "tokens": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.PersonalToken"
+                    }
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },
@@ -13380,7 +13651,7 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "2.13.6",
+	Version:          "2.13.7",
 	Host:             "localhost:58091",
 	BasePath:         "/api/v1",
 	Schemes:          []string{},

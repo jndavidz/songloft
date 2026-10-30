@@ -10,6 +10,14 @@ Evidence-backed lessons for the parent and public host contracts; see the [AI wo
 
 ## Entries
 
+### AUTH-001: Distinguish permanent device credentials from signed-in sessions
+
+- Scope: authentication middleware, token management and permanent tokens in both clients; songloft-org/songloft#546, baseline `022a56cebe4b4b6bc1ff7ca043f56d426bddaf71`.
+- Risk review, not a production incident: existing `/auth/tokens` returns complete sign-in credentials and originally required only general authentication. Letting a new permanent credential access it would bypass the product boundary requiring an ordinary signed-in session for token management. Protecting only the new creation endpoint is insufficient.
+- Rule and implementation: derive credential type from persisted records and propagate it through middleware context. Apply `RequireLoginSession` to both existing/new management and logout routes. Check permanent credentials against the database on every request rather than reusing the JWT validity cache, so revocation affects subsequent requests.
+- Done right: real SQLite service/HTTP tests cover Access/Refresh/plugin/permanent credentials, both authentication transports, immediate cross-instance revocation and restart. Removing the session guard in an isolated overlay makes `TestPersonalTokenHTTP` fail with creation returning 201 instead of 403; removing revocation checks makes the lifecycle test accept a revoked credential and fail. Positive and race tests pass. Evidence: `/tmp/songloft-546-negative-{session,revocation}.log`, `/tmp/songloft-546-go-race.log`; final source identities: `/tmp/songloft-546-verification.json`.
+- Seen 1× (2026-10-28). Status: identity/revocation boundary validation for a new feature; verify commits, pushes and CI against this batch's delivery record. Device boundaries: [#546](docs/en/issue-546.md).
+
 ### CI-002: Read ffprobe packet hashes by field rather than slicing CSV lines
 
 - Scope: video-copy verification in `TestHLSTranscodeRealFFmpeg`; baseline `af5a4b3873ba72e9918ddf661da87ae563448d36`.
