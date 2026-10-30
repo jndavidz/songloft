@@ -2,6 +2,7 @@
 
 唯一跨项目主 spec：[open-xiaoai `.scratch/music-voice-managed-playback/spec.md`](../../../open-xiaoai/.scratch/music-voice-managed-playback/spec.md)。
 架构证据：[现行架构报告](file:///D:/_work/dev/docs/projects/base/music-voice-managed-playback-architecture.md)。
+验收结果（2026-10-30）：[托管播放验收报告](file:///D:/_work/repos/open-xiaoai/docs/plan/music-managed-playback-acceptance-20261030.md)。
 
 本文件不复制需求或契约。Songloft 负责请求身份、插件执行安全、当前项媒体准备、固定表示与票据、本进程资源预算、托管 BFF／手机 handoff、听音事件、增量入库扫描和 image-only 发布；bridge 是唯一 LX06 控制面，kwqq 是唯一在线解析层。系统总预算由跨项目验收聚合，不假定 Songloft 能直接限制 WebGUI。
 
