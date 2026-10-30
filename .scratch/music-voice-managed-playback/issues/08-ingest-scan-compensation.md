@@ -1,9 +1,9 @@
 # S-08: 实现下载完成增量扫描与失败补偿
 
-Status: done（域内，2026-10-30：ingest 去重/拒绝矩阵/重试补偿落地；K-05 端到端联调 Not run 见 Comments）
+Status: resolved（域内，2026-10-30：ingest 去重/拒绝矩阵/重试补偿落地；K-05 端到端联调 Not run 见 Comments）
 Type: task
 Blocked by: 06
-External blocked by: musicdl K-05（原子发布／outbox 联调）
+External blocked by: musicdl K-05（原子发布／outbox 联调）（已解除：对端票均 resolved）
 
 ## Body
 

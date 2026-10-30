@@ -1,6 +1,6 @@
 # S-01: 统一请求身份并修复播放活动隔离
 
-Status: done（2026-10-29，离线施工完成；真机/部署不在本票范围）
+Status: resolved（2026-10-29，离线施工完成；真机/部署不在本票范围）
 Type: task
 Blocked by: —
 External blocked by: —

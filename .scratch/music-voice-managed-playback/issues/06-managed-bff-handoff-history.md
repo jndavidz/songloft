@@ -1,9 +1,9 @@
 # S-06: 实现托管 BFF、手机 handoff 与听音事件
 
-Status: done（域内，2026-10-30：BFF 状态机/handoff/听音事件/四源专辑身份落地；bridge 联调与真机 handoff Not run 见 Comments）
+Status: resolved（域内，2026-10-30：BFF 状态机/handoff/听音事件/四源专辑身份落地；bridge 联调与真机 handoff Not run 见 Comments）
 Type: task
 Blocked by: 05
-External blocked by: open-xiaoai B-05（命令／SSE 联调）
+External blocked by: open-xiaoai B-05（命令／SSE 联调）（已解除：对端票均 resolved）
 
 ## Body
 

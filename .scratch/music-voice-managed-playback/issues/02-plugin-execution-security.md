@@ -1,6 +1,6 @@
 # S-02: 实施插件版本门与短期可撤销 scope
 
-Status: done（2026-10-30，离线施工完成；部署、真机与真实凭据轮换不在本票范围）
+Status: resolved（2026-10-30，离线施工完成；部署、真机与真实凭据轮换不在本票范围）
 Type: task
 Blocked by: 01
 External blocked by: —

@@ -1,9 +1,9 @@
 # S-07: 完成 image-only 升级与 Songloft 发布验收
 
-Status: done（域内 + NAS image-only 升级与身份回读完成；客户端矩阵 Not run）
+Status: resolved（域内 + NAS image-only 升级与身份回读完成；客户端矩阵 Not run）
 Type: task
 Blocked by: 02, 06, 08
-External blocked by: open-xiaoai B-05/B-06，musicdl K-06（跨区发布联调）
+External blocked by: open-xiaoai B-05/B-06，musicdl K-06（跨区发布联调）（已解除：对端票均 resolved）
 
 ## Body
 
@@ -77,3 +77,7 @@ app 层接线；客户端兼容矩阵需客户端构建。
 
 `c98bf47`（metadata 去掉 ffmpeg 8 已移除的 `-vsync vfr`）**尚未**构建进线上镜像（线上仍
 `v2.13.6-51-g119cf48`）；该修复只影响「视频封面抽取」，不在托管播放关键路径。下次部署时随批上线并回读。
+
+### 追加（2026-10-30 收尾）
+线上最终为 `v2.13.6-64-g3fd484b`（镜像 `0c859cf89599`），
+含 B站准入/Referer 与桥接会话按代次修复；`c98bf47` 的 metadata 修复已随批上线。

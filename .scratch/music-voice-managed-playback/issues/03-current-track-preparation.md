@@ -1,9 +1,9 @@
 # S-03: 实现 TrackRef 当前项准备并禁止在线预取
 
-Status: done（域内，2026-10-30：持久化/source_data 适配/收口完成；投送层与 bridge 联调 Not run 见 Comments）
+Status: resolved（域内，2026-10-30：持久化/source_data 适配/收口完成；投送层与 bridge 联调 Not run 见 Comments）
 Type: task
 Blocked by: 01
-External blocked by: musicdl K-01/K-02（契约联调）
+External blocked by: musicdl K-01/K-02（契约联调）（已解除：对端票均 resolved）
 
 ## Body
 

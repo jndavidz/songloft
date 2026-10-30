@@ -1,6 +1,6 @@
 # S-04: 实现可撤销短期媒体票据与独立 lease
 
-Status: done（域内，2026-10-30：票据/lease/续期/撤销/在途终止全落地；BFF 接线与真机 Not run 见 Comments）
+Status: resolved（域内，2026-10-30：票据/lease/续期/撤销/在途终止全落地；BFF 接线与真机 Not run 见 Comments）
 Type: task
 Blocked by: 03
 External blocked by: —

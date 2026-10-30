@@ -1,6 +1,6 @@
 # S-05: 固定表示媒体服务与全局资源预算
 
-Status: done（域内，2026-10-30：RFC 9110 语义与七分区预算落地；既有服务全量接线与 NAS 压测 Not run 见 Comments）
+Status: resolved（域内，2026-10-30：RFC 9110 语义与七分区预算落地；既有服务全量接线与 NAS 压测 Not run 见 Comments）
 Type: task
 Blocked by: 04
 External blocked by: —
@@ -44,3 +44,8 @@ transcode 接 cache 分区。局限：既有 cache_service/HLS/电台生产者�
 - 设备侧实际请求走单段 Range（206/`content_range`），与离线矩阵（416、If-Range、
   多段回退 200、HEAD 无体）一致；冷暖同字节由离线用例锁定。
 - **NOT RUN**：NAS 压测（预算分区在真实加载下的排队/503 行为，需专门窗口）。
+
+### 范围裁决（2026-10-30 收尾）
+DoD 的「七分区统一接线」**只完成托管转码分区**（`transcode.go` 走 `ProcessBudget`）；
+既有 cache/HLS/电台生产者的全量接线是独立重构切片，**NOT RUN**。
+本票按「预算原语 + 固定表示语义 + 转码接线」验收，不宣称全量预算已覆盖所有生产者。
