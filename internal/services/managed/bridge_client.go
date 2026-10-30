@@ -51,42 +51,48 @@ func (c *BridgeClient) target() string {
 }
 
 func (c *BridgeClient) do(ctx context.Context, method, path string, body any, out any) error {
+	_, err := c.doWithStatus(ctx, method, path, body, out)
+	return err
+}
+
+func (c *BridgeClient) doWithStatus(ctx context.Context, method, path string, body any,
+	out any) (int, error) {
 	var payload io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		payload = bytes.NewReader(buf)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, payload)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("bridge %s %s: %w", method, path, err)
+		return 0, fmt.Errorf("bridge %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("bridge %s %s: http %d: %s", method, path, resp.StatusCode, snippet(raw))
+		return resp.StatusCode, fmt.Errorf("bridge %s %s: http %d: %s", method, path, resp.StatusCode, snippet(raw))
 	}
 	if out == nil {
-		return nil
+		return resp.StatusCode, nil
 	}
 	var env struct {
 		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return fmt.Errorf("bridge %s %s: decode: %w", method, path, err)
+		return resp.StatusCode, fmt.Errorf("bridge %s %s: decode: %w", method, path, err)
 	}
 	if len(env.Data) == 0 || string(env.Data) == "null" {
-		return nil
+		return resp.StatusCode, nil
 	}
-	return json.Unmarshal(env.Data, out)
+	return resp.StatusCode, json.Unmarshal(env.Data, out)
 }
 
 // CreateSession 开一个 bridge 托管会话（transport/backend 固定为已验证的 RPC 组合）。
@@ -134,7 +140,7 @@ func (c *BridgeClient) Enqueue(ctx context.Context, sessionID string, refs []Bri
 
 // Command 下发命令；bridge 先落回执（202）再异步执行设备动作。
 func (c *BridgeClient) Command(ctx context.Context, sessionID, kind, idemKey string,
-	payload map[string]any, expectedEpoch *int64) (map[string]any, error) {
+	payload map[string]any, expectedEpoch *int64) (map[string]any, bool, error) {
 	body := map[string]any{
 		"target":   c.target(),
 		"kind":     kind,
@@ -147,11 +153,13 @@ func (c *BridgeClient) Command(ctx context.Context, sessionID, kind, idemKey str
 		body["expected_epoch"] = *expectedEpoch
 	}
 	var receipt map[string]any
-	if err := c.do(ctx, http.MethodPost,
-		"/api/music/sessions/"+sessionID+"/commands", body, &receipt); err != nil {
-		return nil, err
+	status, err := c.doWithStatus(ctx, http.MethodPost,
+		"/api/music/sessions/"+sessionID+"/commands", body, &receipt)
+	if err != nil {
+		return nil, false, err
 	}
-	return receipt, nil
+	// bridge 约定：202 = 首次执行，200 = 幂等重放（不会再驱动设备）
+	return receipt, status == http.StatusOK, nil
 }
 
 // Snapshot 读取 bridge 会话状态（给 BFF 读路径用；不落库、不缓存）。

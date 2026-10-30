@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -104,7 +105,7 @@ func (h *ManagedHandler) forwardCommand(ctx context.Context, session string, epo
 	if cmd.Name == "jump" || (cmd.Name == "play" && cmd.Entry != "") {
 		bridgeEntry, ok := entryMap[cmd.Entry]
 		if !ok || bridgeEntry == "" {
-			return nil, fmt.Errorf("unknown entry %q for this epoch", cmd.Entry)
+			return nil, &unknownEntryError{Entry: cmd.Entry}
 		}
 		payload = map[string]any{"entry_id": bridgeEntry}
 	}
@@ -112,7 +113,38 @@ func (h *ManagedHandler) forwardCommand(ctx context.Context, session string, epo
 		kind = "play"
 	}
 	idem := fmt.Sprintf("songloft-%s-%d-%s-%s", session, epoch, cmd.Name, cmd.Entry)
-	return h.bridge.Command(ctx, sid, kind, idem, payload, nil)
+	receipt, replayed, err := h.bridge.Command(ctx, sid, kind, idem, payload, nil)
+	if err != nil {
+		return nil, err
+	}
+	// 幂等重放的是**上一次的回执**：若上次设备执行失败（state=failed），
+	// 直接返回 200 replay 会把失败包装成成功。此时换新幂等键重试一次。
+	if replayed && receiptState(receipt) == "failed" {
+		retryKey := fmt.Sprintf("%s-retry-%d", idem, time.Now().UnixNano())
+		receipt, _, err = h.bridge.Command(ctx, sid, kind, retryKey, payload, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if receiptState(receipt) == "failed" {
+		return receipt, fmt.Errorf("bridge device execution failed for %s", cmd.Name)
+	}
+	return receipt, nil
+}
+
+// unknownEntryError 是调用方输入错误，HTTP 层应映射 4xx 而不是 502。
+type unknownEntryError struct{ Entry string }
+
+func (e *unknownEntryError) Error() string {
+	return fmt.Sprintf("unknown entry %q for this epoch", e.Entry)
+}
+
+func receiptState(receipt map[string]any) string {
+	if receipt == nil {
+		return ""
+	}
+	state, _ := receipt["state"].(string)
+	return state
 }
 
 func NewManagedHandler(
@@ -253,8 +285,10 @@ func (h *ManagedHandler) ConfirmHandoffStop(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := h.bff.ConfirmHandoffStop(body.Session, body.Epoch); err != nil {
-		// 幂等：已经处于 managed（例如上一次 play 失败后手机重试）直接继续。
-		if h.bff.State(body.Session).Phase != managed.PhaseManaged {
+		// 幂等只对**同一代次**已经 managed 生效：旧代次的 confirm 必须 409，
+		// 否则会用旧 epoch 的幂等键建新桥会话、把当前代次正在播的内容顶掉。
+		state := h.bff.State(body.Session)
+		if state.Phase != managed.PhaseManaged || state.Epoch != body.Epoch {
 			respondJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
@@ -267,11 +301,22 @@ func (h *ManagedHandler) ConfirmHandoffStop(w http.ResponseWriter, r *http.Reque
 			respondJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
-		_, err = h.bridge.Command(r.Context(), sid, "play",
+		receipt, replayed, err := h.bridge.Command(r.Context(), sid, "play",
 			fmt.Sprintf("songloft-%s-%d-handoff-play", body.Session, body.Epoch), nil, nil)
 		if err != nil {
 			respondJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
+		}
+		if replayed && receiptState(receipt) == "failed" {
+			// 上次起播失败后用同一幂等键重试只会拿回失败回执——换键重试一次
+			receipt, _, err = h.bridge.Command(r.Context(), sid, "play",
+				fmt.Sprintf("songloft-%s-%d-handoff-play-retry-%d", body.Session, body.Epoch,
+					time.Now().UnixNano()), nil, nil)
+			if err != nil || receiptState(receipt) == "failed" {
+				respondJSON(w, http.StatusBadGateway,
+					map[string]any{"error": "bridge play failed", "bridge": receipt})
+				return
+			}
 		}
 		respondJSON(w, http.StatusOK, map[string]any{"ok": true, "bridge": map[string]any{"session_id": sid}})
 		return
@@ -313,7 +358,14 @@ func (h *ManagedHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		var err error
 		receipt, err = h.forwardCommand(r.Context(), body.Session, body.Command.Epoch, body.Command)
 		if err != nil {
-			respondJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			// 未知 entry 是调用方输入错误（4xx），其余是桥/设备失败（5xx）
+			var unknown *unknownEntryError
+			if errors.As(err, &unknown) {
+				respondJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			respondJSON(w, http.StatusBadGateway,
+				map[string]any{"error": err.Error(), "bridge": receipt})
 			return
 		}
 	}

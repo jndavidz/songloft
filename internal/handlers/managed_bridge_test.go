@@ -160,6 +160,10 @@ func TestManagedHandler_ConfirmIsIdempotent(t *testing.T) {
 	if rec := postJSON(t, h.ConfirmHandoffStop, `{"session":"app-5","epoch":1}`); rec.Code != 200 {
 		t.Fatalf("retry confirm: %d %s", rec.Code, rec.Body.String())
 	}
+	// 旧代次的 confirm 不得借「已 managed」放行（会顶掉当前代次的播放）
+	if rec := postJSON(t, h.ConfirmHandoffStop, `{"session":"app-5","epoch":0}`); rec.Code != 409 {
+		t.Fatalf("stale-epoch confirm 应 409，got %d %s", rec.Code, rec.Body.String())
+	}
 }
 
 // TestManagedHandler_NoBridgeConfigured：未配置时不报错，BFF 行为不变。

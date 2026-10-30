@@ -58,9 +58,12 @@ func TestBridgeClient_Contract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	receipt, err := client.Command(ctx, sid, "play", "idem-1", nil, nil)
+	receipt, replayed, err := client.Command(ctx, sid, "play", "idem-1", nil, nil)
 	if err != nil || receipt["receipt_id"] != "r-1" {
 		t.Fatalf("command: %v %v", receipt, err)
+	}
+	if replayed {
+		t.Fatal("202 首执不应被当作重放")
 	}
 	snap, err := client.Snapshot(ctx, sid)
 	if err != nil || snap["phase"] != "playing" {
