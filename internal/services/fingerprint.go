@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"songloft/internal/database"
+	"songloft/internal/services/resourcebudget"
 )
 
 var (
@@ -365,8 +366,27 @@ func (s *FingerprintService) doCompute(ctx context.Context, items []database.Son
 
 				// ffmpeg 真的读了文件仍失败（无音轨 / 损坏 / 超时）才落库「已尝试」时间戳：
 				// 否则失败项会在每轮扫描里被反复捞出来重跑 ffmpeg，形成永久 CPU 占用。
+				//
+				// 每个文件的抽取占一个 fingerprint 分区槽（进程预算）：worker 数只是本地池大小，
+				// 真正的 CPU 上限由预算的分区配额 + 总闸门决定，Reserve 保证整库重算不会饿死播放。
+				releaseFP, budgetErr := resourcebudget.ProcessBudget().Acquire(ctx, resourcebudget.PartitionFingerprint)
+				if budgetErr != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					// 预算排队被拒（其他生产者占满/队列排满）属**短暂性**，
+					// 不打「已尝试」标记：否则一次扫描高峰会把整库标成永久失败。
+					slog.Info("fingerprint skipped by resource budget (will retry later)",
+						"id", item.ID, "path", item.FilePath, "err", budgetErr)
+					failed.Add(1)
+					s.mu.Lock()
+					s.progress.Failed = failed.Load()
+					s.mu.Unlock()
+					continue
+				}
 				attemptedAt := time.Now().Unix()
 				fp, dur, err := ExtractFingerprint(ctx, item.FilePath, item.CueStartSeconds, item.CueEndSeconds)
+				releaseFP()
 				if err != nil {
 					// 任务被取消时不标记，留给下次重试。
 					if ctx.Err() != nil {

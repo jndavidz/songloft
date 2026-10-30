@@ -1700,7 +1700,7 @@ func (h *SongHandler) tryLiveTranscodeStream(w http.ResponseWriter, r *http.Requ
 	// 注册进 playActivity（与被它替代的阻塞转码分支同一 Category），让 ActivateSong 能在用户切歌时
 	// 掐掉这条流的 ffmpeg，不再白烧 CPU 去编码一首已经不放了的歌。
 	//
-	// 注意它**不能**提前归还 seekStreamSem 槽位：槽位由 StreamSeekedMP3 的 io.Copy 持有，
+	// 注意它**不能**提前归还预算 seek 分区的槽位：槽位由 StreamSeekedMP3 的 io.Copy 持有，
 	// 而 io.Copy 只在「读端 EOF」或「写响应失败」时返回，不看 ctx。客户端断开属于后者（自动归还），
 	// 但「客户端还在慢慢读 + 用户已切歌」这种组合下槽位仍要等它读完。实测音箱是贪婪缓冲、
 	// 4 分钟的歌 10 秒就流完，占不满 4 个槽；真占满也只是降级回阻塞转码，不会更坏。

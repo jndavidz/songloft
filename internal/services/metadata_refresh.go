@@ -12,6 +12,7 @@ import (
 
 	"songloft/internal/database/sqlc"
 	"songloft/internal/models"
+	"songloft/internal/services/resourcebudget"
 )
 
 // dropFilenameFallbackTitle 拦截 Extract 对无标题标签文件的「用文件名当 title」回退结果。
@@ -59,20 +60,24 @@ func (d *MetadataRefresher) RefreshSongsBackground(songs []*models.Song, waitFor
 
 	go func() {
 		// issue #265：探测走 ffprobe + ytdlp 插件唯一 worker，与批量下载撞车会打满 CPU 并把
-		// 下载解析挤到 30s 超时判死。故 (1) 降并发 4→2 从源头收敛占用；(2) 每首探测前若有活跃
-		// 下载则退避让路，把 worker 让给下载解析。探测是尽力而为的后台补齐，让路/延后无副作用。
-		const maxConcurrent = 2
-		sem := make(chan struct{}, maxConcurrent)
+		// 下载解析挤到 30s 超时判死。故 (1) 从源头收敛并发——改由进程资源预算的 probe 分区限
+		// （容量 2 + Reserve：收编前是「每次调用各开一套 cap=2」，两批导入并发就是 4 路 ffprobe）；
+		// (2) 每首探测前若有活跃下载则退避让路，把 worker 让给下载解析。
+		// 探测是尽力而为的后台补齐，让路/延后无副作用。
 		var wg sync.WaitGroup
 		for _, song := range pending {
 			if waitForIdle != nil {
 				waitForIdle()
 			}
+			releaseProbe, err := resourcebudget.ProcessBudget().Acquire(context.Background(), resourcebudget.PartitionProbe)
+			if err != nil {
+				slog.Warn("元数据探测被资源预算拒绝，剩余项留待下次补齐", "error", err)
+				break
+			}
 			wg.Add(1)
-			sem <- struct{}{}
 			go func(s *models.Song) {
 				defer wg.Done()
-				defer func() { <-sem }()
+				defer releaseProbe()
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				d.RefreshSong(ctx, s, "", nil)

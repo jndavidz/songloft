@@ -8,6 +8,9 @@ import "songloft/internal/services/resourcebudget"
 type Budget = resourcebudget.Budget
 type PartitionLimits = resourcebudget.PartitionLimits
 
+// PartitionCache 是 managed 准备链转码使用的预算分区名。
+const PartitionCache = resourcebudget.PartitionCache
+
 var ErrBudgetFull = resourcebudget.ErrBudgetFull
 
 func DefaultBudget() *Budget { return resourcebudget.DefaultBudget() }

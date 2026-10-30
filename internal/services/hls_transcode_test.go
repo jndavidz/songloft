@@ -74,8 +74,8 @@ func TestHLSTranscodeRealFFmpeg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(seekStreamSem) != 1 {
-		t.Fatalf("slots=%d", len(seekStreamSem))
+	if n := budgetSlots(t, seekStreamPartition); n != 1 {
+		t.Fatalf("slots=%d", n)
 	}
 	playlist, err := s.Playlist(id, "owner")
 	if err != nil {
@@ -172,7 +172,7 @@ func TestHLSTranscodeRealFFmpeg(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if len(seekStreamSem) != 1 {
+	if n := budgetSlots(t, seekStreamPartition); n != 1 {
 		t.Fatal("playlist requests started extra process")
 	}
 	_, err = s.Playlist(id, "other")
@@ -226,7 +226,7 @@ func TestHLSTranscodeRealFFmpeg(t *testing.T) {
 	if err := s.Delete(id, "owner"); err != nil {
 		t.Fatal(err)
 	}
-	if len(seekStreamSem) != 0 {
+	if budgetSlots(t, seekStreamPartition) != 0 {
 		t.Fatal("slot leaked")
 	}
 	if _, err := io.ReadAll(f); err != nil {
@@ -248,19 +248,16 @@ func TestHLSTranscodeValidationAndFailures(t *testing.T) {
 	}
 	_, err := s.Create(context.Background(), "", HLSTranscodeOptions{URL: "https://example.com/live"})
 	assertHLSStatus(t, err, 401)
-	for range cap(seekStreamSem) {
-		seekStreamSem <- struct{}{}
-	}
+	// 饱和注入：把 seek 分区的槽全部预占，Create 必须立即 503（不排队、不静默成功）。
+	release := fillSeekBudget(t)
 	_, err = s.Create(context.Background(), "owner", HLSTranscodeOptions{URL: "https://example.com/live"})
-	for range cap(seekStreamSem) {
-		<-seekStreamSem
-	}
+	release()
 	assertHLSStatus(t, err, 503)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "denied", 403) }))
 	defer upstream.Close()
 	_, err = s.Create(context.Background(), "owner", HLSTranscodeOptions{URL: upstream.URL})
 	assertHLSStatus(t, err, 502)
-	if len(seekStreamSem) != 0 {
+	if budgetSlots(t, seekStreamPartition) != 0 {
 		t.Fatal("failed startup leaked slot")
 	}
 	denied, err := NewHLSTranscodeService(s.cache, nil)
@@ -282,7 +279,7 @@ func TestHLSTranscodeUnsupportedVideo(t *testing.T) {
 	s := hlsTestService(t)
 	_, err := s.Create(context.Background(), "owner", HLSTranscodeOptions{URL: upstream.URL + "/source.ts"})
 	assertHLSStatus(t, err, 422)
-	if len(seekStreamSem) != 0 {
+	if budgetSlots(t, seekStreamPartition) != 0 {
 		t.Fatal("probe failure leaked slot")
 	}
 }
@@ -308,7 +305,7 @@ func TestHLSTranscodeStartupCancellationAndTimeout(t *testing.T) {
 			} else {
 				assertHLSStatus(t, err, 504)
 			}
-			if len(seekStreamSem) != 0 {
+			if budgetSlots(t, seekStreamPartition) != 0 {
 				t.Fatal("startup leaked slot")
 			}
 			entries, _ := os.ReadDir(s.root)
@@ -371,7 +368,7 @@ func TestHLSTranscodeIdleFailureAndShutdown(t *testing.T) {
 			case "shutdown":
 				s.Close()
 			}
-			if len(seekStreamSem) != 0 {
+			if budgetSlots(t, seekStreamPartition) != 0 {
 				t.Fatalf("%s leaked slot", mode)
 			}
 			if _, err := os.Stat(session.dir); !os.IsNotExist(err) {
@@ -406,7 +403,7 @@ func TestHLSTranscodeCloseDuringStartup(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("create did not stop")
 	}
-	if len(seekStreamSem) != 0 {
+	if budgetSlots(t, seekStreamPartition) != 0 {
 		t.Fatal("shutdown leaked slot")
 	}
 	if _, err := os.Stat(s.root); !os.IsNotExist(err) {

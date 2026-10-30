@@ -70,7 +70,8 @@ type CacheService struct {
 	lruMu           sync.RWMutex
 	orchestrator    CacheSongFetcher // 下载编排器(按 song.ID),由 app.go 注入
 	ffmpegPath      atomic.Value     // string；ffmpeg 可执行文件路径,由 app.go 注入（SetFFmpegPath 并发写）
-	transcodeSem    chan struct{}    // 转码串行信号量（默认 size=1），防止并发 ffmpeg 争抢 CPU
+	// 转码并发统一由进程资源预算（internal/services/resourcebudget）的 cache 分区限，
+	// 本结构不再持有私有信号量。
 	// 缓存落盘转码设置（原子字段）：从 CacheConfig 读取，
 	// NewCacheService/UpdateCacheConfig 时同步。cacheTranscodeFormat 为空表示不转码。
 	cacheTranscodeFormat  atomic.Value // string
@@ -98,7 +99,6 @@ func NewCacheService(defaultCacheDir string, configService *ConfigService) *Cach
 		defaultCacheDir: defaultCacheDir,
 		configService:   configService,
 		lruIndex:        make(map[string]time.Time),
-		transcodeSem:    make(chan struct{}, 1),
 		// download client(无整请求超时);停滞检测交给 downloadExternalToTemp 里的
 		// StallReader,避免慢速大文件被固定超时掐断。(issue #265)
 		downloadClient: httputil.NewDownloadClient(),

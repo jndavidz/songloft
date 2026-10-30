@@ -41,7 +41,7 @@ func TranscodeToMP3(ctx context.Context, input, destDir string, limits Transcode
 	} else {
 		// 预算分区（S-05）：转码占 cache 分区，满载明确失败而非无限排队；
 		// release 在 ffmpeg 子进程真实退出后才调用。
-		rel, err := ProcessBudget().Acquire(ctx, "cache")
+		rel, err := ProcessBudget().Acquire(ctx, PartitionCache)
 		if err != nil {
 			return "", fmt.Errorf("transcode budget: %w", err)
 		}

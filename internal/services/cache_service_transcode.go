@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"songloft/internal/models"
+	"songloft/internal/services/resourcebudget"
 )
 
 var ErrUnsupportedTranscodeFormat = errors.New("unsupported transcode format")
@@ -335,15 +336,14 @@ func (c *CacheService) runFFmpeg(ctx context.Context, srcPath, dstPath string, s
 		ffmpegPath = "ffmpeg"
 	}
 
-	// 串行化转码，避免并发 ffmpeg 占满 CPU 影响当前播放
-	if c.transcodeSem != nil {
-		select {
-		case c.transcodeSem <- struct{}{}:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		defer func() { <-c.transcodeSem }()
+	// 落盘转码串行化：预算的 cache 分区（容量 1，与收编前的私有信号量一致），
+	// 避免并发 ffmpeg 占满 CPU 影响当前播放。等待有界（MaxWaiting），排队排满即失败，
+	// 不再无限串队。
+	releaseCache, err := resourcebudget.ProcessBudget().Acquire(ctx, resourcebudget.PartitionCache)
+	if err != nil {
+		return err
 	}
+	defer releaseCache()
 
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	output, err := cmd.CombinedOutput()

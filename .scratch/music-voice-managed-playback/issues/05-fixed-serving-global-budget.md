@@ -49,3 +49,18 @@ transcode 接 cache 分区。局限：既有 cache_service/HLS/电台生产者�
 DoD 的「七分区统一接线」**只完成托管转码分区**（`transcode.go` 走 `ProcessBudget`）；
 既有 cache/HLS/电台生产者的全量接线是独立重构切片，**NOT RUN**。
 本票按「预算原语 + 固定表示语义 + 转码接线」验收，不宣称全量预算已覆盖所有生产者。
+
+### 全量接线与总闸门（2026-10-30 第二批，取代上一节的「全量接线 NOT RUN」范围）
+上一节裁定的独立重构切片已在同日第二批完成，DoD 的「七分区统一接线」现为**已达成**：
+
+- `resourcebudget` 新增进程级总闸门 `maxTotal`（GOMAXPROCS+2、下限 6、`SONGLOFT_MEDIA_MAX_TOTAL`
+  可覆盖）与后台分区 `Reserve` 头寸；跨分区的等待者由 `dispatchLocked()` 全表扫描唤醒
+  （一个等待者可能因**总数**而非本分区满而排队，解开它的槽来自别的分区释放）。
+- 七分区全部接线，私有信号量删除：`seekStreamSem`（seek／音频 HLS／URL 直链三处共用）→
+  seek/realtime 分区，`transcodeSem`（落盘转码／视频 HLS）→ cache/hls 分区，
+  指纹逐文件取 fingerprint 槽，元数据补齐取 probe 槽（原先「每次调用各开一套 cap=2」）。
+- 证据：`go test ./internal/services/resourcebudget/` 10 项 PASS（TotalCap／BackgroundReserve／
+  TryAcquireFailsFast／TotalCapStress／DefaultWiredPartitions 为本批新增）；
+  `hls_transcode_saturation_test.go` 改按预算断言饱和→503→释放→复用，并加验 `_total` 归零。
+- **仍 NOT RUN**：NAS 真实加载下的压测（排队/503 行为、58091 暴露面）与现网部署——
+  本批只在开发树验证，镜像未重建。

@@ -123,7 +123,6 @@ func TestEnsureCachedFormat_DegradeOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	// ffmpeg 路径指向不存在的可执行文件 → runFFmpeg 启动失败 → 优雅降级保留原码
 	cs := newTestCacheService(dir, filepath.Join(dir, "nonexistent-ffmpeg"), "mp3")
-	cs.transcodeSem = make(chan struct{}, 1)
 	song := &models.Song{ID: 9, Type: "remote", URL: "http://example.com/b.mkv"}
 	src := writeCacheFile(t, dir, "src.mkv")
 

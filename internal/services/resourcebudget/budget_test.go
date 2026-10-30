@@ -182,3 +182,170 @@ func TestBudget_ConcurrentStress(t *testing.T) {
 		t.Errorf("全部退出后 active=0，got %d", rep["active"])
 	}
 }
+
+// TestBudget_TotalCap：总闸门是跨分区的——各分区配额之和允许超过 maxTotal，
+// 但同时活跃的和必须压在 maxTotal 之下（收编前生产者各守自家信号量，没有这条约束）。
+func TestBudget_TotalCap(t *testing.T) {
+	limits := map[string]PartitionLimits{
+		PartitionCache: {MaxActive: 4, MaxWaiting: 0},
+		PartitionSeek:  {MaxActive: 4, MaxWaiting: 4},
+	}
+	b := New(limits, 3)
+	ctx := context.Background()
+
+	var releases []func()
+	for i := 0; i < 3; i++ {
+		rel, err := b.Acquire(ctx, PartitionCache)
+		if err != nil {
+			t.Fatalf("总数未满时第 %d 个槽应获得: %v", i+1, err)
+		}
+		releases = append(releases, rel)
+	}
+	if got := b.Report()["_total"]["active"]; got != 3 {
+		t.Fatalf("总活跃=%d want 3", got)
+	}
+	// 另一个分区配额仍空闲，但总数到顶 ⇒ 必须拒绝。
+	if _, err := b.TryAcquire(PartitionSeek); !errors.Is(err, ErrBudgetFull) {
+		t.Fatalf("总数已满时 TryAcquire 应拒绝，got %v", err)
+	}
+
+	// 阻塞等待者排在**总数**上限上：释放别的分区的槽也必须把它唤醒
+	// （只接续本分区队列的实现会把它挂死）。
+	granted := make(chan struct{})
+	go func() {
+		rel, err := b.Acquire(ctx, PartitionSeek)
+		if err != nil {
+			t.Errorf("等待 seek 槽失败: %v", err)
+			return
+		}
+		rel()
+		close(granted)
+	}()
+	time.Sleep(20 * time.Millisecond) // 让等待者入队
+	releases[0]()                     // 释放 cache 槽 → 解开 seek 等待者
+	select {
+	case <-granted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("跨分区释放未唤醒等待者: %v", b.Report()["_total"])
+	}
+	for _, rel := range releases[1:] {
+		rel()
+	}
+	if got := b.Report()["_total"]["active"]; got != 0 {
+		t.Fatalf("全释放后总活跃=%d want 0", got)
+	}
+}
+
+// TestBudget_BackgroundReserve：后台分区不得吃掉交互路径的头寸，
+// 否则整库指纹重算会把播放/seek 饿死。
+func TestBudget_BackgroundReserve(t *testing.T) {
+	limits := map[string]PartitionLimits{
+		PartitionFingerprint: {MaxActive: 4, MaxWaiting: 0, Reserve: 2},
+		PartitionSeek:        {MaxActive: 4, MaxWaiting: 0},
+	}
+	b := New(limits, 4) // maxTotal=4、Reserve=2 ⇒ 后台最多占 2
+
+	for i := 0; i < 2; i++ {
+		if _, err := b.TryAcquire(PartitionFingerprint); err != nil {
+			t.Fatalf("后台第 %d 个槽应获得: %v", i+1, err)
+		}
+	}
+	if _, err := b.TryAcquire(PartitionFingerprint); !errors.Is(err, ErrBudgetFull) {
+		t.Fatalf("后台越过了 Reserve 头寸，got %v", err)
+	}
+	// 留给交互路径的头寸必须真的可用。
+	for i := 0; i < 2; i++ {
+		if _, err := b.TryAcquire(PartitionSeek); err != nil {
+			t.Fatalf("交互第 %d 个槽应获得: %v", i+1, err)
+		}
+	}
+}
+
+// TestBudget_TryAcquireFailsFast：TryAcquire 绝不排队（满了即拒绝），
+// 且拒绝不改变任何计数——这是 seek/HLS 的「降级而非干等」契约。
+func TestBudget_TryAcquireFailsFast(t *testing.T) {
+	b := New(map[string]PartitionLimits{"test": {MaxActive: 1, MaxWaiting: 8}}, 6)
+	rel, err := b.TryAcquire("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := b.TryAcquire("test"); !errors.Is(err, ErrBudgetFull) {
+		t.Fatalf("第二个应拒绝，got %v", err)
+	}
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Fatalf("TryAcquire 阻塞了 %v（契约是不排队）", d)
+	}
+	if rep := b.Report()["test"]; rep["active"] != 1 || rep["waiting"] != 0 {
+		t.Fatalf("被拒绝的请求改变了计数: %+v", rep)
+	}
+	rel()
+	if _, err := b.TryAcquire("test"); err != nil {
+		t.Fatalf("释放后应能复用: %v", err)
+	}
+}
+
+// TestBudget_TotalCapStress：跨分区并发取放，进程总活跃**任何时刻**都不得超过 maxTotal。
+// 这是「全局单闸门」的核心不变量（分区配额之和故意大于总数，靠的就是这条硬约束）。
+func TestBudget_TotalCapStress(t *testing.T) {
+	limits := map[string]PartitionLimits{
+		PartitionCache:       {MaxActive: 4, MaxWaiting: 8},
+		PartitionSeek:        {MaxActive: 4, MaxWaiting: 8},
+		PartitionFingerprint: {MaxActive: 4, MaxWaiting: 8, Reserve: 2},
+	}
+	const maxTotal = 3
+	b := New(limits, maxTotal)
+
+	var wg sync.WaitGroup
+	var peak atomic.Int64
+	for i := 0; i < 60; i++ {
+		name := []string{PartitionCache, PartitionSeek, PartitionFingerprint}[i%3]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			rel, err := b.Acquire(ctx, name)
+			if err != nil {
+				return // 503/超时都是合法结局
+			}
+			if got := int64(b.Report()["_total"]["active"]); got > peak.Load() {
+				peak.Store(got)
+			}
+			time.Sleep(time.Millisecond)
+			rel()
+		}()
+	}
+	wg.Wait()
+	if got := peak.Load(); got > maxTotal {
+		t.Fatalf("并发中出现总活跃 %d > maxTotal %d", got, maxTotal)
+	}
+	if rep := b.Report()["_total"]; rep["active"] != 0 {
+		t.Fatalf("全部退出后总活跃=%d want 0", rep["active"])
+	}
+	t.Logf("并发峰值总活跃=%d（上限 %d）", peak.Load(), maxTotal)
+}
+
+// TestBudget_DefaultWiredPartitions：默认预算表里每个声明的分区都要有接线点，
+// 且 Σ 配额 > maxTotal（否则总闸门形同虚设）。
+func TestBudget_DefaultWiredPartitions(t *testing.T) {
+	rep := DefaultBudget().Report()
+	total := 0
+	for _, name := range []string{
+		PartitionCache, PartitionRealtime, PartitionSeek, PartitionRadio,
+		PartitionFingerprint, PartitionProbe, PartitionHLS,
+	} {
+		p, ok := rep[name]
+		if !ok {
+			t.Fatalf("默认预算缺分区 %q", name)
+		}
+		if p["max_active"] <= 0 {
+			t.Errorf("%s 配额异常: %d", name, p["max_active"])
+		}
+		total += p["max_active"]
+	}
+	maxTotal := rep["_total"]["max"]
+	if total <= maxTotal {
+		t.Errorf("Σ 分区配额=%d 未超过总闸门=%d：总闸门不会生效", total, maxTotal)
+	}
+}

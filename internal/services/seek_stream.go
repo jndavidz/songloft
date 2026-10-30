@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"songloft/internal/services/resourcebudget"
 )
 
 // ErrSeekStreamUnavailable 表示 seek 流无法开始（ffmpeg 未配置 / 启动失败 / 并发已满，
@@ -28,24 +30,29 @@ var ErrSeekStreamUnavailable = errors.New("seek stream unavailable")
 // http.Hijacker + Close），而不能优雅返回。
 var ErrSeekStreamAborted = errors.New("seek stream aborted by activity cancellation")
 
-// seekStreamMaxConcurrent 同时存活的 seek / 均衡 / 变速 / 普通转码流上限。
+// seekStreamPartition 是 seek / 均衡 / 变速 / 普通转码流在进程资源预算里的分区名。
 //
-// 这些流不占用 transcodeSem（见 StreamSeekedMP3 注释），所以必须自带闸门：seek 流由「用户每按一次
+// 这些流不占用落盘转码的 "cache" 分区（见 StreamSeekedMP3 注释：进程会存活整首歌的剩余
+// 时长，持串行槽会饿死其他有限文件转码），所以必须自带闸门：seek 流由「用户每按一次
 // 暂停/续播」触发，频率比电台转码高一个数量级；均衡流的存活时长取决于客户端读得多快（音箱贪婪缓冲
 // 时几秒就流完，边播边读则接近整首）；分组播放还会给组内每台音箱各开一个。
-// 满了直接降级而 **不排队**——排队意味着音箱那端干等，比降级更糟。
+// 满了直接降级而 **不排队**——排队意味着音箱那端干等，比降级更糟（故用 TryAcquire）。
 //
-// 上限刻意保守：每条均衡流是一个 libmp3lame 全解码进程，4 条并发在弱 NAS 上已经吃满 CPU。
-// 降级路径本身无损：seek 流降级为从头播，均衡流与普通转码流降级为原来的「阻塞整首转码」，
-// 不比修复前更差——但那正是 songloft-org/songloft-plugin-miot#61 与 songloft-org/songloft#442
-// 要消除的首字节卡顿，所以调用方应把流注册进 playActivity（`CatTranscode`），至少让用户切歌时
-// 旧流的 ffmpeg 能被 Activate 掐掉、不白烧 CPU。
-// 槽位本身要等 io.Copy 结束（客户端读完或断开）才归还，ctx 取消不会打断它。
+// 容量刻意保守（预算表里 "seek" = 4）：每条均衡流是一个 libmp3lame 全解码进程，
+// 4 条并发在弱 NAS 上已经吃满 CPU。降级路径本身无损：seek 流降级为从头播，均衡流与普通
+// 转码流降级为原来的「阻塞整首转码」，不比修复前更差——但那正是
+// songloft-org/songloft-plugin-miot#61 与 songloft-org/songloft#442 要消除的首字节卡顿，
+// 所以调用方应把流注册进 playActivity（`CatTranscode`），至少让用户切歌时旧流的 ffmpeg
+// 能被 Activate 掐掉、不白烧 CPU。槽位本身要等 io.Copy 结束（客户端读完或断开）才归还，
+// ctx 取消不会打断它。
 //
 // **接入 #442（普通 ?format= / ?quality= 转码播放）后没有提高这个上限**：普通转码播放的频率
 // 比 seek/均衡高一个数量级，槽位更容易占满，但 #442 的报告环境正是 N5095 这类弱 CPU
 // ——放大并发对它是伤害而非帮助，而占满时的降级本身无损。真占满只是回到修复前的行为。
-const seekStreamMaxConcurrent = 4
+//
+// 分区容量之外还有一条进程级总闸门（resourcebudget.maxTotal）：以前各生产者各守自家信号量，
+// 叠起来最坏可同时跑十来个 ffmpeg，现在活跃总数到顶就明确拒绝，弱机不再被自己的后台任务打满。
+const seekStreamPartition = resourcebudget.PartitionSeek
 
 // DefaultPipeBitrateKbps 是 pipe 流未指定 SeekStreamOptions.Bitrate 时的输出码率（kbps）。
 //
@@ -67,8 +74,6 @@ const seekStreamGrace = 5 * time.Minute
 // 本地文件 tag 与 ffprobe 都拿不到时长），叠上均衡流「每次播放都走这条路」就会真踩到。
 // 取一个足够覆盖有声书的上限；真正的兜底是 r.Context()（客户端断开即取消）。
 const seekStreamUnknownDurationTimeout = 3 * time.Hour
-
-var seekStreamSem = make(chan struct{}, seekStreamMaxConcurrent)
 
 // SeekStreamOptions seek 流参数。
 type SeekStreamOptions struct {
@@ -156,8 +161,8 @@ func seekStreamTimeout(remainingSecond, speed float64) time.Duration {
 // 在弱 CPU（如 N5095）上无损转 mp3 要等 5 秒以上。与 Normalize 同理复用这套骨架，
 // StartSecond 允许为 0，也可与 seek/变速任意组合。
 //
-// 与 runFFmpeg 不同，本函数 **不占用** c.transcodeSem：进程会存活整首歌的剩余时长，
-// 持串行信号量会长时间饿死其他有限文件的转码。并发由 seekStreamSem 单独限。
+// 与 runFFmpeg 不同，本函数 **不占用** cache 分区（落盘转码）：进程会存活整首歌的剩余时长，
+// 持串行槽会长时间饿死其他有限文件的转码。并发由预算的 seek 分区单独限 + 进程总闸门兜底。
 //
 // ctx 与 connCtx 是两条独立的取消信号，必须分开传：
 //   - ctx 驱动 ffmpeg 生命周期，可能被 playActivity.Activate 提前取消（用户切歌时为省 CPU
@@ -187,12 +192,11 @@ func (c *CacheService) StreamSeekedMP3(ctx, connCtx context.Context, w io.Writer
 		return fmt.Errorf("%w: ffmpeg not configured", ErrSeekStreamUnavailable)
 	}
 
-	select {
-	case seekStreamSem <- struct{}{}:
-		defer func() { <-seekStreamSem }()
-	default:
-		return fmt.Errorf("%w: %d concurrent seek streams already running", ErrSeekStreamUnavailable, seekStreamMaxConcurrent)
+	slot, slotErr := resourcebudget.ProcessBudget().TryAcquire(seekStreamPartition)
+	if slotErr != nil {
+		return fmt.Errorf("%w: seek budget saturated", ErrSeekStreamUnavailable)
 	}
+	defer slot()
 
 	// 源已是 MP3 时无损 copy：input seek + copy 几乎零 CPU（实测 320k 整首 0.14s）。
 	//
@@ -284,7 +288,7 @@ func (c *CacheService) StreamSeekedMP3(ctx, connCtx context.Context, w io.Writer
 	_, copyErr := io.Copy(&flushingWriter{w: w}, reader)
 	// copyErr 时必须先 cancel 再 Wait：ffmpeg 此刻正阻塞在写满的 stdout 管道上，而 cmd.Wait()
 	// 要等进程退出才关管道 —— 两边互等，只能靠 runCtx 到点解开，把本 goroutine 连同一个
-	// seekStreamSem 槽位挂到硬超时。ctx 已取消的场景由 CommandContext 自己解决。
+	// 预算 seek 分区槽位挂到硬超时。ctx 已取消的场景由 CommandContext 自己解决。
 	if copyErr != nil {
 		cancel()
 	}

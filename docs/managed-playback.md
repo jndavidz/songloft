@@ -29,8 +29,12 @@
 - `/media` 支持 GET/HEAD 与单段 Range（206/416、If-Range、ETag=表示身份）；
   多段请求回退 200 完整响应；HEAD 不触发准备。
 - 日志脱敏：票据与私有直链不落日志；禁止可重放的私有缓存。
-- 资源预算为七分区静态配额（FIFO 等待、优先级插队、满载 503），
-  单进程只约束本进程，跨项目总量由验收 runner 聚合。
+- 资源预算为七分区静态配额（FIFO 等待、优先级插队、满载 503），另有一条**进程级总闸门**
+  `maxTotal`（GOMAXPROCS+2、下限 6、`SONGLOFT_MEDIA_MAX_TOTAL` 可调）：分区只限本类生产者，
+  活跃之和的硬上限由总闸门给；后台分区（fingerprint/probe）带 `Reserve` 头寸，不得饿死播放。
+  七个分区已全部接线（落盘转码/managed prepare、realtime 直链、seek+音频 HLS、电台、指纹、
+  元数据探测、视频 HLS 段生产），原私有信号量 `seekStreamSem`/`transcodeSem` 已删除。
+  单进程只约束本进程，跨项目总量由验收 runner 聚合 `Report()`（含 `_total`）。
 
 ## 命令、事件与恢复（S-06）
 

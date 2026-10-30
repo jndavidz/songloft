@@ -73,7 +73,7 @@ func (c *CacheService) StreamTranscodedRadio(ctx context.Context, w io.Writer, o
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	// 电台是长存活 ffmpeg，但数量必须有界：走进程级 radio 分区（S-05）。
 	// 分区满按「转码不可用」处理，调用方降级为原样代理（不再新起 ffmpeg）。
-	release, berr := resourcebudget.ProcessBudget().Acquire(ctx, "radio")
+	release, berr := resourcebudget.ProcessBudget().Acquire(ctx, resourcebudget.PartitionRadio)
 	if berr != nil {
 		return fmt.Errorf("%w: %v", ErrRadioTranscodeUnavailable, berr)
 	}

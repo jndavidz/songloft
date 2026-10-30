@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"songloft/internal/services/resourcebudget"
 )
 
 const HLSIdleTimeout = 120 * time.Second
@@ -106,32 +108,35 @@ func (s *HLSTranscodeService) Create(ctx context.Context, owner string, opts HLS
 	if _, err := safeLookPath(s.cache.resolveFFprobePath()); err != nil {
 		return "", hlsError(503, "ffprobe 不可用")
 	}
-	select {
-	case seekStreamSem <- struct{}{}:
-	default:
+	// 与 seek / URL 直链转码同池（进程预算的 seekStreamPartition 分区，容量与收编前的
+	// seekStreamSem 一致）；满了立即 503，不排队——排队等于让客户端干等。
+	// 取得后的所有权移交：进 run 之前由本函数逐条归还，进 run 之后由 run 的
+	// defer 在 ffmpeg 真实退出后归还。
+	slot, slotErr := resourcebudget.ProcessBudget().TryAcquire(seekStreamPartition)
+	if slotErr != nil {
 		return "", hlsError(503, "转码并发已满")
 	}
 	var random [24]byte
 	if _, err := rand.Read(random[:]); err != nil {
-		<-seekStreamSem
+		slot()
 		return "", err
 	}
 	id := hex.EncodeToString(random[:])
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		<-seekStreamSem
+		slot()
 		return "", hlsError(503, "转码服务已关闭")
 	}
 	if len(s.sessions) >= 16 {
 		s.mu.Unlock()
-		<-seekStreamSem
+		slot()
 		return "", hlsError(503, "直播会话数量已满")
 	}
 	dir := filepath.Join(s.root, id)
 	if err := os.Mkdir(dir, 0700); err != nil {
 		s.mu.Unlock()
-		<-seekStreamSem
+		slot()
 		return "", err
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -140,7 +145,7 @@ func (s *HLSTranscodeService) Create(ctx context.Context, owner string, opts HLS
 	s.sessions[id] = session
 	s.wg.Add(1)
 	s.mu.Unlock()
-	go s.run(session, opts)
+	go s.run(session, opts, slot)
 	timer := time.NewTimer(s.startupTimeout)
 	defer timer.Stop()
 	select {
@@ -171,13 +176,13 @@ func (s *HLSTranscodeService) Create(ctx context.Context, owner string, opts HLS
 	}
 }
 
-func (s *HLSTranscodeService) run(session *hlsSession, opts HLSTranscodeOptions) {
+func (s *HLSTranscodeService) run(session *hlsSession, opts HLSTranscodeOptions, slot func()) {
 	defer s.wg.Done()
 	defer close(session.done)
 	defer s.remove(session)
 	defer session.cancel()
 	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { <-seekStreamSem }) }
+	release := func() { releaseOnce.Do(slot) }
 	defer release()
 	var readyOnce sync.Once
 	ready := func(err error) {

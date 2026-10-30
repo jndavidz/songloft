@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"songloft/internal/httputil"
+	"songloft/internal/services/resourcebudget"
 )
 
 // ErrURLTranscodeUnavailable 表示远程 URL 转码在吐出任何音频字节之前失败
@@ -35,9 +36,9 @@ type URLTranscodeOptions struct {
 // 用途：miot「不入库直接播放」场景下，外部搜索源返回 webm/opus 等音箱无法解码的
 // 直链时，把本端点 URL 推给音箱（songloft-org/songloft#394）。
 //
-// 与 runFFmpeg 不同，本函数不占用 transcodeSem（进程存活整首歌时长），而是与 seek /
-// 均衡流共享 seekStreamSem——同一类长存活全解码 ffmpeg 进程，统一 CPU 上限。满了不
-// 排队（排队 = 音箱干等，比 503 更糟）。不落盘、不入库、不缓存（no-import 语义）。
+// 与 runFFmpeg 不同，本函数不占用落盘转码的 cache 分区（进程存活整首歌时长），而是走预算的
+// realtime 分区——同一类长存活全解码 ffmpeg 进程。分区配额之外还有一条进程级总闸门（maxTotal）。
+// 满了不排队（排队 = 音箱干等，比 503 更糟）。不落盘、不入库、不缓存（no-import 语义）。
 //
 // 输出刻意用 CBR 320k + -write_xing 0 + -map 0:a:0 -vn，与 StreamSeekedMP3 一致：
 // pipe 不可 seek，音箱只能按「首帧码率 × 字节数」估算时长，VBR 会偏 7%+ 导致提前切歌。
@@ -59,14 +60,12 @@ func (c *CacheService) StreamTranscodedURL(ctx context.Context, w io.Writer, opt
 		return fmt.Errorf("%w: unsupported format %q", ErrURLTranscodeUnavailable, opts.Format)
 	}
 
-	// 与 seek / 均衡流共享 cap=4：同类长存活全解码 ffmpeg，统一 CPU 上限。
-	select {
-	case seekStreamSem <- struct{}{}:
-		defer func() { <-seekStreamSem }()
-	default:
-		return fmt.Errorf("%w: %d concurrent transcode streams already running",
-			ErrURLTranscodeUnavailable, seekStreamMaxConcurrent)
+	// 满了不排队：排队 = 音箱干等，比 503 更糟。
+	slot, slotErr := resourcebudget.ProcessBudget().TryAcquire(resourcebudget.PartitionRealtime)
+	if slotErr != nil {
+		return fmt.Errorf("%w: realtime transcode budget saturated", ErrURLTranscodeUnavailable)
 	}
+	defer slot()
 
 	bitrate := opts.Bitrate
 	if bitrate <= 0 {
@@ -130,7 +129,7 @@ func (c *CacheService) StreamTranscodedURL(ctx context.Context, w io.Writer, opt
 	_, copyErr := io.Copy(&flushingWriter{w: w}, reader)
 	// copyErr 时必须先 cancel 再 Wait：ffmpeg 此刻正阻塞在写满的 stdout 管道上，而 cmd.Wait()
 	// 要等进程退出才关管道——两边互等，只能靠 runCtx 到点解开，把本 goroutine 连同一个
-	// seekStreamSem 槽位挂到硬超时。ctx 已取消的场景由 CommandContext 自己解决。
+	// 预算 realtime 分区槽位挂到硬超时。ctx 已取消的场景由 CommandContext 自己解决。
 	if copyErr != nil {
 		cancel()
 	}

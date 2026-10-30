@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"songloft/internal/models"
+	"songloft/internal/services/resourcebudget"
 )
 
 // VideoHLSTranscode 将视频文件转码为 HLS（H.264+AAC）供 Web 端播放。
@@ -67,15 +68,15 @@ func (c *CacheService) VideoHLSTranscode(ctx context.Context, srcPath string, so
 	// 清理可能残留的不完整文件（上次被 kill 的遗留）
 	os.Remove(playlistPath)
 
-	// 启动 ffmpeg 后台转码（占用转码信号量）
-	select {
-	case c.transcodeSem <- struct{}{}:
-	case <-ctx.Done():
+	// 视频 → HLS 段生产走预算的 hls 分区（收编前借用落盘转码的串行信号量，
+	// 一首视频的后台转码会把整批落盘转码一起堵住；现在各自配额，仍受进程总闸门约束）。
+	releaseHLS, err := resourcebudget.ProcessBudget().Acquire(ctx, resourcebudget.PartitionHLS)
+	if err != nil {
 		state.transcodeInflightMu.Lock()
 		delete(state.transcodeInflight, key)
 		state.transcodeInflightMu.Unlock()
 		close(dl.done)
-		return "", ctx.Err()
+		return "", err
 	}
 
 	// 使用 CacheService 的 shutdownCtx 运行 ffmpeg（不绑定 HTTP request 生命周期，
@@ -90,7 +91,7 @@ func (c *CacheService) VideoHLSTranscode(ctx context.Context, srcPath string, so
 	}
 	go func() {
 		defer func() {
-			<-c.transcodeSem
+			releaseHLS()
 			state.transcodeInflightMu.Lock()
 			delete(state.transcodeInflight, key)
 			state.transcodeInflightMu.Unlock()
