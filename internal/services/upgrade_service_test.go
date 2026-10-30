@@ -260,3 +260,20 @@ func TestCurrentBuildTypeDefaultsToFull(t *testing.T) {
 		t.Fatalf("CurrentBuildType() = %q, want %q", got, buildTypeFull)
 	}
 }
+
+func TestUpgradeSupportedImageOnly(t *testing.T) {
+	t.Setenv("IN_DOCKER", "true")
+	t.Setenv("SONGLOFT_IMAGE_ONLY", "")
+	if !NewUpgradeService().UpgradeSupported() {
+		t.Fatal("docker without image-only must support in-process upgrade")
+	}
+	t.Setenv("SONGLOFT_IMAGE_ONLY", "true")
+	if NewUpgradeService().UpgradeSupported() {
+		t.Fatal("image-only deployment must disable in-process upgrade")
+	}
+	t.Setenv("IN_DOCKER", "")
+	t.Setenv("SONGLOFT_IMAGE_ONLY", "")
+	if NewUpgradeService().UpgradeSupported() {
+		t.Fatal("non-docker must not support in-process upgrade")
+	}
+}

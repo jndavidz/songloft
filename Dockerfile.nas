@@ -17,6 +17,8 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata ffmpeg su-exec
 
 ENV TZ=Asia/Shanghai
+# image-only: version comes from the image; disable in-process self-upgrade.
+ENV SONGLOFT_IMAGE_ONLY=true
 WORKDIR /app
 
 # bin/songloft-linux-amd64      = lite（无 Web 前端，-tags lite）

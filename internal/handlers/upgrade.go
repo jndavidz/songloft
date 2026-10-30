@@ -58,8 +58,8 @@ func (h *UpgradeHandler) binaryTempPath() string {
 // @Router /upgrade/versions [get]
 func (h *UpgradeHandler) GetVersions(w http.ResponseWriter, r *http.Request) {
 	// 检查是否在 Docker 环境
-	if !h.upgradeService.IsDockerEnvironment() {
-		respondError(w, http.StatusForbidden, "升级功能仅在 Docker 环境下可用", nil)
+	if !h.upgradeService.UpgradeSupported() {
+		respondError(w, http.StatusForbidden, "当前部署不支持进程内升级，请更新镜像", nil)
 		return
 	}
 
@@ -176,8 +176,8 @@ func (h *UpgradeHandler) CheckUpdate(w http.ResponseWriter, r *http.Request) {
 // @Router /upgrade/start [post]
 func (h *UpgradeHandler) StartUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 检查是否在 Docker 环境
-	if !h.upgradeService.IsDockerEnvironment() {
-		respondError(w, http.StatusForbidden, "升级功能仅在 Docker 环境下可用", nil)
+	if !h.upgradeService.UpgradeSupported() {
+		respondError(w, http.StatusForbidden, "当前部署不支持进程内升级，请更新镜像", nil)
 		return
 	}
 
@@ -226,8 +226,8 @@ func (h *UpgradeHandler) StartUpgrade(w http.ResponseWriter, r *http.Request) {
 // @Router /upgrade/reset [post]
 func (h *UpgradeHandler) ResetToBaseImage(w http.ResponseWriter, r *http.Request) {
 	// 检查是否在 Docker 环境
-	if !h.upgradeService.IsDockerEnvironment() {
-		respondError(w, http.StatusForbidden, "回退功能仅在 Docker 环境下可用", nil)
+	if !h.upgradeService.UpgradeSupported() {
+		respondError(w, http.StatusForbidden, "当前部署不支持进程内回退，请切换镜像", nil)
 		return
 	}
 
@@ -255,8 +255,8 @@ func (h *UpgradeHandler) ResetToBaseImage(w http.ResponseWriter, r *http.Request
 // @Router /upgrade/progress [get]
 func (h *UpgradeHandler) GetUpgradeProgress(w http.ResponseWriter, r *http.Request) {
 	// 检查是否在 Docker 环境
-	if !h.upgradeService.IsDockerEnvironment() {
-		respondError(w, http.StatusForbidden, "升级功能仅在 Docker 环境下可用", nil)
+	if !h.upgradeService.UpgradeSupported() {
+		respondError(w, http.StatusForbidden, "当前部署不支持进程内升级，请更新镜像", nil)
 		return
 	}
 
@@ -321,8 +321,8 @@ func (h *UpgradeHandler) UpdateGithubProxySetting(w http.ResponseWriter, r *http
 // @Security BearerAuth
 // @Router /upgrade/upload [post]
 func (h *UpgradeHandler) UploadBinary(w http.ResponseWriter, r *http.Request) {
-	if !h.upgradeService.IsDockerEnvironment() {
-		respondError(w, http.StatusForbidden, "升级功能仅在 Docker 环境下可用", nil)
+	if !h.upgradeService.UpgradeSupported() {
+		respondError(w, http.StatusForbidden, "当前部署不支持进程内升级，请更新镜像", nil)
 		return
 	}
 
@@ -386,8 +386,8 @@ func (h *UpgradeHandler) UploadBinary(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Router /upgrade/upload/confirm [post]
 func (h *UpgradeHandler) ConfirmUploadUpgrade(w http.ResponseWriter, r *http.Request) {
-	if !h.upgradeService.IsDockerEnvironment() {
-		respondError(w, http.StatusForbidden, "升级功能仅在 Docker 环境下可用", nil)
+	if !h.upgradeService.UpgradeSupported() {
+		respondError(w, http.StatusForbidden, "当前部署不支持进程内升级，请更新镜像", nil)
 		return
 	}
 

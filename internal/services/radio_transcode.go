@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"songloft/internal/httputil"
+	"songloft/internal/services/resourcebudget"
 )
 
 // ErrRadioTranscodeUnavailable 表示电台实时转码无法开始（ffmpeg 未配置、启动失败，或进程在吐出
@@ -70,6 +71,13 @@ func (c *CacheService) StreamTranscodedRadio(ctx context.Context, w io.Writer, o
 	args = append(args, "-f", muxer, "pipe:1")
 
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+	// 电台是长存活 ffmpeg，但数量必须有界：走进程级 radio 分区（S-05）。
+	// 分区满按「转码不可用」处理，调用方降级为原样代理（不再新起 ffmpeg）。
+	release, berr := resourcebudget.ProcessBudget().Acquire(ctx, "radio")
+	if berr != nil {
+		return fmt.Errorf("%w: %v", ErrRadioTranscodeUnavailable, berr)
+	}
+	defer release()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("%w: stdout pipe: %v", ErrRadioTranscodeUnavailable, err)

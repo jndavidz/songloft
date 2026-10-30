@@ -62,6 +62,17 @@ func (s *UpgradeService) IsDockerEnvironment() bool {
 	return os.Getenv("IN_DOCKER") == "true"
 }
 
+// IsImageOnly 检查部署是否声明为「只换镜像」模式。镜像内自带二进制是唯一版本来源，
+// 进程内自升级（写 /app/data/songloft）被显式关闭，而不是靠 403 兜底。
+func (s *UpgradeService) IsImageOnly() bool {
+	return os.Getenv("SONGLOFT_IMAGE_ONLY") == "true"
+}
+
+// UpgradeSupported 报告进程内自升级是否可用。镜像自升级与 image-only 部署互斥。
+func (s *UpgradeService) UpgradeSupported() bool {
+	return s.IsDockerEnvironment() && !s.IsImageOnly()
+}
+
 // FetchVersionInfo 获取指定版本的信息
 // proxyPrefix 为 GitHub 代理前缀，为空则直连；代理请求失败时自动降级直连重试一次
 func (s *UpgradeService) FetchVersionInfo(versionType string, proxyPrefix string) (*models.RemoteVersionInfo, error) {
