@@ -101,3 +101,8 @@ Not run：真实上游联调（K-01/K-02 已 resolved，待联调窗口）、bri
 - 2026-10-30 追加：`ready` 响应新增 `duration_s`（MP3 帧验证得到的可信时长）——
   bridge 侧 HTTP/App 入队没有时长，EOF 判定必须靠它，否则一首播完永不推进
   （30 分钟长稳观测暴露）。commit `badf303`。
+- 2026-10-30 追加（B站点播不可用）：① m4a 转码输入的「声明大小」与实际 DASH 字节常不符
+  （6,201,843 vs 6,469,840），落盘/Verify 两处都按声明判死 → 只对直投 MP3 严格；
+  ② kwqq 回传的 Referer 缺协议（`www.bilibili.com`）→ CDN 403；解析层补 `https://`
+  （musicdl `df2a7e5`），下载层加 `normalizeSourceHeaders` 兜底（`e77033e`）。
+  复验：prepare ready（30s）、`/media` 206、设备 playing。
