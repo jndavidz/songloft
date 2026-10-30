@@ -86,3 +86,36 @@ func TestPrepare_WriteFailureFailsVisible(t *testing.T) {
 		t.Fatal("写入失败不得产出 final.mp3")
 	}
 }
+
+// TestPrepare_DeclaredSizeMismatch：直投 MP3 声明的字节必须严格相等；
+// 转码输入（AAC/m4a）的声明大小常常是近似值（bilibili DASH 实测偏差 ~4%），
+// 以实际字节为准继续转码，不能被当成失败卡住播放。
+func TestPrepare_DeclaredSizeMismatch(t *testing.T) {
+	t.Run("direct mp3 stays strict", func(t *testing.T) {
+		res := &countingResolver{next: func(req ResolveRequest) (*ResolveResult, error) {
+			r := okResult(t, false)
+			r.SizeBytes = 100
+			return r, nil
+		}}
+		deps := testDeps(t, res)
+		m := NewManager(deps)
+		snap := waitPrepare(t, m, "i", OpKey{Session: "s", Epoch: 1, Entry: "e"})
+		if snap.State != StateFailed {
+			t.Fatalf("state=%s want failed（直投字节不符必须失败）", snap.State)
+		}
+	})
+
+	t.Run("transcode input tolerates mismatch", func(t *testing.T) {
+		res := &countingResolver{next: func(req ResolveRequest) (*ResolveResult, error) {
+			r := okResult(t, true)
+			r.SizeBytes = 100
+			return r, nil
+		}}
+		deps := testDeps(t, res)
+		m := NewManager(deps)
+		snap := waitPrepare(t, m, "i", OpKey{Session: "s", Epoch: 1, Entry: "e"})
+		if snap.State != StateReady {
+			t.Fatalf("state=%s err=%s want ready（转码输入以实际字节为准）", snap.State, snap.Error)
+		}
+	})
+}

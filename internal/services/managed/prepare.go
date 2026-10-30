@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -241,9 +242,16 @@ func (m *Manager) run(op *PrepareOp, ref *Ref) {
 	}
 
 	// 解析结果声明了尺寸时，与实际下载字节数对照——「验证实际大小」的契约环。
+	// 但转码输入不是最终投送表示：bilibili 等源声明的 size 与实际 DASH 流字节
+	// 常有偏差（实测 6,201,843 vs 6,469,840），此时以**实际字节**为准并留告警；
+	// 直投 MP3 仍保持严格相等（字节就是最终表示）。
 	if result.SizeBytes > 0 && size != result.SizeBytes {
-		m.fail(op, fmt.Errorf("declared size %d != downloaded %d bytes", result.SizeBytes, size))
-		return
+		if !result.Verification.RequiresTranscode {
+			m.fail(op, fmt.Errorf("declared size %d != downloaded %d bytes", result.SizeBytes, size))
+			return
+		}
+		slog.Warn("managed: declared size differs for transcode input (actual wins)",
+			"declared", result.SizeBytes, "actual", size, "source", result.ResolvedSource)
 	}
 
 	finalPath := srcPath
@@ -256,8 +264,9 @@ func (m *Manager) run(op *PrepareOp, ref *Ref) {
 	}
 
 	expect := VerifyExpectation{MinDurationSec: 1, MaxBitrateKbps: 320}
-	// 解析结果声明了尺寸时，与实际字节对照（「验证实际 codec、MP3 帧、时长、大小」）。
-	if result.SizeBytes > 0 {
+	// 声明的大小只对「直投 MP3」有意义：转码后的 final 是另一份字节，
+	// 拿输入声明大小去校验输出必然不符（bilibili 等源的真实情况）。
+	if result.SizeBytes > 0 && !result.Verification.RequiresTranscode {
 		expect.DeclaredSize = size
 	}
 	rep, err := VerifyMP3(finalPath, expect)
