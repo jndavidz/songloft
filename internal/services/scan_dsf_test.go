@@ -40,7 +40,7 @@ func TestScanAndImportDSFWithDefaultConfig(t *testing.T) {
 	scanner := NewScanner(&ScanConfig{MusicPath: root, SupportedFormats: scanConfig.SupportedFormats})
 	extractor := NewMetadataExtractor(&MetadataConfig{FFProbePath: "ffprobe", CoverStoragePath: t.TempDir()})
 	service := NewSongService(db.SongRepository(), db, extractor, scanner, nil, nil)
-	service.doScanAndImport(context.Background(), false, nil)
+	service.doScanAndImport(context.Background(), false, nil, fileStabilityThreshold)
 	songs, err := db.SongRepository().List(context.Background(), &database.SongFilter{Type: models.TypeLocal})
 	if err != nil {
 		t.Fatal(err)

@@ -527,8 +527,20 @@ func (s *SongService) ScanAndImportAsync(reimport bool, paths []string) error {
 	}
 	go func() {
 		ctx := context.Background()
-		s.doScanAndImport(ctx, reimport, paths)
+		s.doScanAndImport(ctx, reimport, paths, fileStabilityThreshold)
 	}()
+	return nil
+}
+
+// ScanAndImportIngest 供 ingest 队列使用的同步定向导入：
+//   - 同步返回：通知处理完成时条目已落库（scanned_done 才有意义）；
+//   - 跳过「10 秒内视为正在写入」的稳定性窗口：路径来自原子发布的完成通知，
+//     文件不可能处于半写状态，按默认窗口会被静默跳过、入库丢失。
+func (s *SongService) ScanAndImportIngest(ctx context.Context, dir string) error {
+	if !s.scanProgressManager.Start() {
+		return fmt.Errorf("scan already in progress")
+	}
+	s.doScanAndImport(ctx, false, []string{dir}, 0)
 	return nil
 }
 
@@ -568,7 +580,7 @@ func fileModTimeMatches(stored *time.Time, current time.Time) bool {
 //  1. 预过滤：快速跳过已存在的文件，减少不必要的处理
 //  2. 并发提取：使用worker池并行提取元数据，充分利用多核CPU
 //  3. 批量写入：通过事务批量提交数据库操作，减少磁盘IO和锁竞争
-func (s *SongService) doScanAndImport(ctx context.Context, reimport bool, scopeRoots []string) {
+func (s *SongService) doScanAndImport(ctx context.Context, reimport bool, scopeRoots []string, stability time.Duration) {
 	cancelCh := s.scanProgressManager.GetCancelChannel()
 
 	// flushCtx 刻意保留取消前的 ctx，专供 flushScanBatch 写库使用。
@@ -642,7 +654,7 @@ func (s *SongService) doScanAndImport(ctx context.Context, reimport bool, scopeR
 		if stat, err := os.Stat(filePath); err == nil {
 			currentModTime = stat.ModTime()
 			haveStat = true
-			if time.Since(currentModTime) < fileStabilityThreshold {
+			if stability > 0 && time.Since(currentModTime) < stability {
 				slog.Debug("跳过正在写入的文件", "filePath", filePath)
 				s.scanProgressManager.UpdateProgress(filePath, ProgressUpdateSkipped)
 				continue

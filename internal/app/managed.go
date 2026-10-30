@@ -84,9 +84,10 @@ func (a *App) setupManaged() {
 		firstNonEmpty(os.Getenv("BRIDGE_TARGET"), a.configService.GetString("bridge_target", "lx06")),
 	))
 	h.SetIngestScanFunc(func(ctx context.Context, n *managed.IngestNotification) error {
-		// 单文件入库：扫其所在目录（导入按文件幂等）
-		_, err := a.scanner.ScanFilesWithCueInDirs(ctx, []string{filepath.Dir(n.FilePath)}, nil)
-		return err
+		// 单文件入库：同步扫其所在目录并落库（导入按文件幂等）。
+		// 必须走 SongService 的导入路径——只调 Scanner 只收集文件、不写曲库；
+		// 且要跳过「10 秒内视为正在写入」窗口（完成通知对应的是已原子发布文件）。
+		return a.songService.ScanAndImportIngest(ctx, filepath.Dir(n.FilePath))
 	})
 	a.managedHandler = h
 	slog.Info("managed: 托管播放组件已装配", "workdir", workDir)
