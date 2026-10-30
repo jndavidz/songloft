@@ -789,7 +789,7 @@ func (m *MetadataExtractor) ExtractCoverFromVideoFile(ctx context.Context, fileP
 		"-i", filePath,
 		"-an", "-sn", "-dn",
 		"-frames:v", "1",
-		"-vsync", "vfr",
+		// 单帧抽取不需要 vsync；-vsync 在 ffmpeg 8 已移除（保留会在新版本直接失败）。
 		"-vf", "scale='min(720,iw)':-2",
 		"-q:v", "5",
 		"-f", "image2pipe",
