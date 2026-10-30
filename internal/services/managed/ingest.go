@@ -121,9 +121,9 @@ func (q *IngestQueue) validate(notif *IngestNotification) error {
 // 幂等无操作；通过 → pending 等待扫描。
 func (q *IngestQueue) Submit(ctx context.Context, notif *IngestNotification) (state string, err error) {
 	now := time.Now().Unix()
-	state, lastErr := IngestPending, ""
+	state, lastErr, rejectErr := IngestPending, "", error(nil)
 	if verr := q.validate(notif); verr != nil {
-		state, lastErr = IngestRejected, verr.Error()
+		state, lastErr, rejectErr = IngestRejected, verr.Error(), verr
 	}
 	_, err = q.q.InsertIngestNotification(ctx, sqlc.InsertIngestNotificationParams{
 		NotifID: orDefault(notif.NotifID, emptyID()), FilePath: notif.FilePath,
@@ -141,7 +141,7 @@ func (q *IngestQueue) Submit(ctx context.Context, notif *IngestNotification) (st
 		return "", err
 	}
 	if state == IngestRejected {
-		return state, lastError(lastErr)
+		return state, rejectErr
 	}
 	return state, nil
 }

@@ -17,6 +17,13 @@ import (
 // 听音事件、ingest 队列、BFF 状态机与票据媒体服务。
 // kwqq v2 解析凭证经配置下发（缺省时 prepare 失败关闭，不影响其他路径）。
 func (a *App) setupManaged() {
+	// 装配失败不得阻断主服务启动（managed 域可整体缺席，legacy 路径不受影响）
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("managed: 装配 panic（已忽略，托管入口不可用）", "panic", r)
+			a.managedHandler = nil
+		}
+	}()
 	dataDir := filepath.Dir(a.config.DBPath)
 	workDir := filepath.Join(dataDir, "managed")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -34,7 +41,7 @@ func (a *App) setupManaged() {
 	store := managed.NewSQLiteStateStore(sqldb.DB())
 	resolver := &managed.KwqqClient{
 		BaseURL: a.configService.GetString("kwqq_v2_base_url", "http://10.10.10.2:3003"),
-		Token:   a.configService.GetString("kwqq_service_token", ""),
+		Token:   firstNonEmpty(a.configService.GetString("kwqq_service_token", ""), os.Getenv("KWQQ_SERVICE_TOKEN")),
 	}
 	downloader := func(ctx context.Context, result *managed.ResolveResult, destDir string) (string, int64, error) {
 		return managed.DownloadToFile(ctx, result, destDir, managed.DownloadLimits{
@@ -77,4 +84,13 @@ func (a *App) setupManaged() {
 	})
 	a.managedHandler = h
 	slog.Info("managed: 托管播放组件已装配", "workdir", workDir)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

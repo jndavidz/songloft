@@ -160,12 +160,13 @@ func (a *App) Init() error {
 	slog.Info("数据库初始化成功", "path", a.config.DBPath)
 
 	// 托管播放组件（S-03…S-09）
-	a.setupManaged()
 
 	// 创建配置服务
 	configRepo := db.ConfigRepository()
 	a.configService = services.NewConfigService(configRepo)
 
+	// 托管播放组件（S-03…S-09）——必须在 configService 就绪后装配
+	a.setupManaged()
 	// 应用持久化的日志等级（缺失时保持默认 LevelInfo）
 	if levelStr := a.configService.GetString("log_level", "info"); levelStr != "" {
 		if lvl, ok := handlers.ParseLogLevel(levelStr); ok {
