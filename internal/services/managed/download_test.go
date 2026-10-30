@@ -151,3 +151,24 @@ func TestDownload_RedirectCredentialHandling(t *testing.T) {
 		}
 	})
 }
+
+// TestNormalizeSourceHeaders_BilibiliReferer：CDN 只认带协议头的 Referer，
+// 解析层给 `www.bilibili.com` 时必须补全，其它头/值保持原样。
+func TestNormalizeSourceHeaders_BilibiliReferer(t *testing.T) {
+	in := map[string]string{"Referer": "www.bilibili.com", "User-Agent": "UA"}
+	out := normalizeSourceHeaders(in)
+	if got := out["Referer"]; got != "https://www.bilibili.com/" {
+		t.Fatalf("Referer=%q", got)
+	}
+	if in["Referer"] != "www.bilibili.com" {
+		t.Fatal("不得修改入参 map")
+	}
+	if out["User-Agent"] != "UA" {
+		t.Fatal("其它头必须原样保留")
+	}
+	// 已带 scheme 的不动
+	in2 := map[string]string{"Referer": "https://example.com/x"}
+	if out2 := normalizeSourceHeaders(in2); out2["Referer"] != "https://example.com/x" {
+		t.Fatalf("已带 scheme 的 Referer 被改写: %q", out2["Referer"])
+	}
+}

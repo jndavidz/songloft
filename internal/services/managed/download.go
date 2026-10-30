@@ -65,7 +65,7 @@ func DownloadToFile(ctx context.Context, result *ResolveResult, destDir string, 
 	defer cancel()
 
 	current := result.URL
-	authHeaders := result.Headers // 只带给定源站
+	authHeaders := normalizeSourceHeaders(result.Headers) // 只带给定源站
 	for hop := 0; ; hop++ {
 		if hop > 5 {
 			return "", 0, fmt.Errorf("download: too many redirects")
@@ -147,4 +147,28 @@ func DownloadToFile(ctx context.Context, result *ResolveResult, destDir string, 
 		}
 		return dstPath, n, nil
 	}
+}
+
+// normalizeSourceHeaders 修正解析层给回的下行请求头。已知：部分 CDN（bilibili）
+// 只认带协议头的 Referer，`www.bilibili.com` 会被 403；这里统一补全 scheme，
+// 不改大小写与其它头（只做最小纠偏，真正的来源修复在解析层）。
+func normalizeSourceHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return headers
+	}
+	out := make(map[string]string, len(headers))
+	for k, v := range headers {
+		if strings.EqualFold(k, "Referer") {
+			ref := strings.TrimSpace(v)
+			if ref != "" && !strings.Contains(ref, "://") {
+				ref = "https://" + strings.TrimPrefix(ref, "//")
+				if !strings.HasSuffix(ref, "/") {
+					ref += "/"
+				}
+				v = ref
+			}
+		}
+		out[k] = v
+	}
+	return out
 }
