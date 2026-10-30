@@ -45,6 +45,21 @@
   临时/半文件与加密件永久拒绝（422，不退化 500）；`notif_id` 幂等，
   乱序稳定排序；有界重试后保留 failed 现场；重启后 pending 续跑。
 
+## BFF → bridge 命令通道
+
+- `BridgeClient`（`internal/services/managed/bridge_client.go`）把手机提交的 TrackRef 与命令
+  转发给 bridge：`handoff/confirm` 成功后建 bridge 会话 → 整队（只发 source/id/extra）→ `play`；
+  `/managed/command` 转发并回传 bridge 回执，幂等键 = `songloft-<session>-<epoch>-<命令>-<entry>`。
+- 配置：`BRIDGE_BASE_URL` / `BRIDGE_MUSIC_TOKEN`（env 优先，回落 config 服务同名键）。
+  未配置时 BFF 只维护本地状态机（迁移窗口行为不变）。
+- 部署前提：容器 `user` 主组必须能被 DSM ACL 放行（`1028:101`），否则读不到 `/app/music`。
+
+## ingest 的真实语义
+
+- 回调必须走 `SongService.ScanAndImportIngest`（**同步**导入 + 跳过 10s 稳定性窗口）：
+  只调 `Scanner.ScanFilesWithCueInDirs` 只收集文件、**不写曲库**；刚原子发布的文件按默认
+  10s 窗口会被静默跳过。
+
 ## 可观测字段
 
 - 请求日志 `method/path/status/dur_ms/remote`（`/media` 额外记录 range 与 content_range）。

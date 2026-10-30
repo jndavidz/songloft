@@ -47,3 +47,14 @@ handoff、app 层 BFF 路由。
   `session_opened/command/command_observed/playing/paused`）。
 - **NOT RUN**：手机 App 驱动 BFF 两段式 handoff（需 Flutter/Lynx 客户端）；
   Songloft BFF → bridge 的命令客户端尚未实现（当前 chain 是 bridge → Songloft 准备链）。
+
+### BFF→bridge 命令通道（2026-10-30 实施）
+
+- 新增 `managed.BridgeClient`（create/enqueue/command/snapshot，Bearer music-control 凭据）；
+  `handoff/confirm` 成功后**建 bridge 会话 → 整队（只发 source/id/extra）→ play**；
+  `managed/command` 转发并返回 bridge 回执，幂等键绑定 session/epoch/命令/entry。
+- `QueueEntry` 保留完整 `Ref`（此前只有 digest，无法转发）。未配置
+  `BRIDGE_BASE_URL`/`BRIDGE_MUSIC_TOKEN` 时退回纯本地状态机（迁移窗口不变）。
+- 真机证据：`bff-handoff` runner case PASS（Songloft 200 → bridge 会话 playing →
+  设备拉 `/media` 206 → pause/stop 转发生效）。
+- 仍未验：手机 App 客户端本身（Flutter/Lynx 构建与发布）。

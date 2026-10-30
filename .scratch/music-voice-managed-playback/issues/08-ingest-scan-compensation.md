@@ -47,3 +47,14 @@ songloft f448907：IngestQueue（migration 0043）——根目录白名单+穿�
   rejected 原样返回拒绝原因（commit `749bc5c`，新增 `TestIngest_DuplicateRejected`）。
 - **NOT RUN**：musicdl outbox → 本队列的完整链路（需真实下载产物入库，避免留下
   死条目，未在曲库上执行）。
+
+### 端到端联调与两个真缺陷（2026-10-30）
+
+- runner `ingest-e2e` PASS：真实下载 → WebGUI outbox → `ingest` 200 → 同步扫描入库
+  （曲库出现文件、song_id 可读）→ 清理条目+文件（`cleanup_left=0`）。
+- 修复 ①：ingest 回调原先只调 `Scanner.ScanFilesWithCueInDirs`（**只收集文件、不写曲库**），
+  `scanned_done` 是假象；改为 `SongService.ScanAndImportIngest` 同步定向导入。
+- 修复 ②：导入默认跳过「mtime 10s 内」的文件（防半写），而完成通知对应的是**已原子发布**
+  的文件 ⇒ 刚下载完立刻 ingest 会被静默跳过。ingest 路径显式传 `stability=0`。
+- 环境侧：Songloft 容器原 `user: 1028:100` 被 DSM ACL 拒读 `/app/music`（连曲库都列不出），
+  改 `1028:101`（administrators 组）后可读；这是 ingest/本地库全链的前置条件。

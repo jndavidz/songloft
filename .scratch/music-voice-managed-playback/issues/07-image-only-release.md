@@ -62,3 +62,13 @@ app 层接线；客户端兼容矩阵需客户端构建。
   runner `songloft-managed-prepare` 因此记 BLOCKED。
 - **NOT RUN**：客户端兼容矩阵（需构建 Flutter/Lynx 客户端并发布）；NAS 压测（S-05 预算）。
 - 结论：本票范围内**完成**（授权不含客户端发布）。
+
+### 追加升级（2026-10-30 晚）
+
+- 为 BFF→bridge 客户端与 ingest 修复再两次 image-only 升级：`86501e0` → `119cf48`，
+  当前运行 `songloft-fork:full` = `4ad7f4b895a7`…（`/api/v1/version` =
+  `v2.13.6-51-g119cf48`，commit `119cf48afba1`）。
+- compose 增 `BRIDGE_BASE_URL` / `BRIDGE_MUSIC_TOKEN`（token 取自 bridge `MANAGED_TOKENS`）；
+  `user:` 改为 `1028:101`（DSM ACL 需要 administrators 组）。
+- 备份：`docker-compose.yml.bak-bffclient-20261030`、`.bak-acl-20261030`；
+  回滚 = 恢复 compose + `songloft-fork:previous`。
