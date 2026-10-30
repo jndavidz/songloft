@@ -89,3 +89,12 @@ songloft 提交链：e4b470b（首切片）→ 持久化收口（SQLiteStateStor
 RecoverOnRestart + RefFromSourceData/WithExtra）→ 投送域语义在 S-04/S-05/S-06 中落地。
 测试 40+ 项全绿（10 连跑）；runner case `songloft-managed-prepare` PASS。
 Not run：真实上游联调（K-01/K-02 已 resolved，待联调窗口）、bridge 端到端、真机。
+
+### 跨项目联调（2026-10-30，NAS 实网）
+
+- bridge（`open-xiaoai` 镜像 `5fdbd365f545`，`managed_media_resolver=songloft`）对
+  `/api/v1/managed/prepare` 发 202 并轮询到 `ready`，拿到票据化 `media_url`；
+  Songloft 访问日志可见 **LX06（10.10.10.20）直接拉 `/media` 的 Range 206**
+  （`bytes 0-9467006/9467007` + 尾部 128 字节探测），即准备→投送→设备解码全链打通。
+- 失败关闭：无凭据 `/api/v1/managed/prepare` → 401（runner `quality-profile` 断言）。
+- 仍未验：真实上游换源失败矩阵在设备侧的逐源结果（离线矩阵已覆盖）。

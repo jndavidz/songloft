@@ -37,3 +37,9 @@ songloft 1461ca7：TicketIssuer（CSPRNG opaque token 只存 SHA-256、全绑定
 换代撤销、续期绝对上限）+ MediaServer（ServeContent RFC 9110、穿越拒绝、guardReader 在途
 终止：过期即断/lease 秒断/DB 撤销 1s 内、日志脱敏）+ migration 0041。测试 8 项 + 在途终止
 单测。Not run：app 层路由接线（随托管入口上 app）、真机 GET/Range 行为。
+
+### 真机 GET/Range（2026-10-30，NAS 实网）
+
+- 设备（LX06）以票据 URL 拉媒体：`/media` 返回 **206** + `content_range=bytes 0-9467006/9467007`，
+  随后尾部 128 字节 Range 探测同样 206——固定表示与 Range 语义在真机生效。
+- 无票据/坏票据 `/media` → 401；撤销与在途终止仍以单测为准（未在设备侧制造撤销窗口）。

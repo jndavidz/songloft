@@ -37,3 +37,13 @@ songloft f448907：IngestQueue（migration 0043）——根目录白名单+穿�
 投递一次入库）、乱序稳定序、有界重试（达上限 failed 保留现场）、pending 持久化重启续跑
 （CompensateInterrupted+ProcessAll）。Not run：K-05 端到端联调（musicdl outbox→本队列）、
 真实曲库扫描服务接线。
+
+### 跨项目联调（2026-10-30，NAS 实网）
+
+- `/api/v1/managed/ingest` 无凭据 401；路径外与「未发布文件」两条拒绝用例
+  **显式 422**（runner `ingest-scan` PASS）。
+- 修掉一个真机暴露的缺陷：被拒通知**重复投递**时 `ON CONFLICT DO NOTHING` 无返回行，
+  `Submit` 直接回 `sql.ErrNoRows` → HTTP 500；现无论 pending/rejected 都回查既有状态，
+  rejected 原样返回拒绝原因（commit `749bc5c`，新增 `TestIngest_DuplicateRejected`）。
+- **NOT RUN**：musicdl outbox → 本队列的完整链路（需真实下载产物入库，避免留下
+  死条目，未在曲库上执行）。

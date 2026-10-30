@@ -39,3 +39,11 @@ songloft a3d7a3b：ManagedBFF 两段式 handoff（未确认 Stop 不得播）、
 Last-Event-ID replay、Ack 有界清理、migration 0042）；MapAlbum 四源逐项身份（单项缺字段
 显式失败可见）。Not run：bridge SSE 联调（B-05/B-06）、Flutter/Lynx 客户端、真实手机
 handoff、app 层 BFF 路由。
+
+### 跨项目联调（2026-10-30，NAS 实网）
+
+- bridge 侧托管命令通路已与 Songloft 准备链联调：`play/pause/resume/next/stop`
+  经 bridge `/api/music/*` 落到设备，事件 `seq` 严格递增（回放 12 条：
+  `session_opened/command/command_observed/playing/paused`）。
+- **NOT RUN**：手机 App 驱动 BFF 两段式 handoff（需 Flutter/Lynx 客户端）；
+  Songloft BFF → bridge 的命令客户端尚未实现（当前 chain 是 bridge → Songloft 准备链）。

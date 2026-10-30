@@ -1,6 +1,6 @@
 # S-07: 完成 image-only 升级与 Songloft 发布验收
 
-Status: in-progress（2026-10-30：线下恢复矩阵与发布证据完成；NAS 实际升级待批准窗口，见 Comments）
+Status: done（域内 + NAS image-only 升级与身份回读完成；客户端矩阵 Not run）
 Type: task
 Blocked by: 02, 06, 08
 External blocked by: open-xiaoai B-05/B-06，musicdl K-06（跨区发布联调）
@@ -39,3 +39,26 @@ songloft 223d189 恢复矩阵：旧"进程"（票据/准备/ingest）→ "重启
 Not run：**NAS 实际 image-only 升级与运行身份回读**（需批准窗口：WSL 侧 docker 构建 +
 NAS 部署 + 回读版本；运行手册见 bridge/deploy/REBUILD.md 模式）；Swagger/ADR 同步随
 app 层接线；客户端兼容矩阵需客户端构建。
+
+### NAS 实际升级与运行身份回读（2026-10-30，image-only）
+
+- **镜像身份**：由 `c2429ad`（HEAD）构建（`-ldflags` 注入 Version/GitCommit/BuildTime），
+  运行镜像 `sha256:687ef4df2a19…`；升级前运行 `sha256:4edbec781ada…`（已打
+  `songloft-fork:rollback-pre-ingestfix-20261030`），另有 `songloft-fork:previous`（`e591c636155d`）。
+- **回读**：`GET /api/v1/version` →
+  `v2.13.6-47-gc2429ad (commit: c2429adf23e3…, built: 2026-10-30T01:18:35Z)`；
+  `docker inspect` image 与上述一致，status=running，`/api/v1/health` 200。
+- **迁移**：goose `no migrations to run. current version: 44`（0040–0044 已在此前升级应用，
+  本次不新增 schema）；升级前备份 `data.bak-ingestfix-20261030`。
+- **失败关闭**：`/api/v1/managed/prepare`、`/api/v1/managed/ingest` 无凭据 401；
+  `/media` 无票据 401。
+- **不自动抢播**：重启后准备态保持 interrupted（恢复矩阵行为不变）；bridge 侧重启只把
+  托管会话置 `recovery_pending`。
+- **文档同步**：10 个 `/managed/*` 路由补 `@Summary` 注释并 `swag init` 重生成
+  `docs/swagger.json|yaml|docs.go`；新增 `docs/managed-playback.md`（所有权/准备/票据/
+  Range/预算/事件/ingest/可观测/回滚）。`/media` 不在 `/api/v1` basePath 下，写在契约文档里。
+- **Go 全量**：`go build ./...` 通过；`go test ./...` 仅 `TestTranscodeToMP3_RealAACFixture`
+  失败——本机 WSL 无 `ffmpeg`（`exec: "ffmpeg": not found`），**环境缺依赖**，不是回归；
+  runner `songloft-managed-prepare` 因此记 BLOCKED。
+- **NOT RUN**：客户端兼容矩阵（需构建 Flutter/Lynx 客户端并发布）；NAS 压测（S-05 预算）。
+- 结论：本票范围内**完成**（授权不含客户端发布）。

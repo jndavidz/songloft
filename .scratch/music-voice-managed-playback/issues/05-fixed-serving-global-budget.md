@@ -38,3 +38,9 @@ songloft bfbf2bc：固定表示语义（single-Range、多段回退 200 完整�
 AcquirePriority 插队、满载 ErrBudgetFull→503、ctx 取消无泄漏、真实 worker 持槽断言）+
 transcode 接 cache 分区。局限：既有 cache_service/HLS/电台生产者的全量分区接线是独立重构
 切片；NAS 压测（CPU/RSS/I/O wait）需授权环境。
+
+### 真机服务语义（2026-10-30）
+
+- 设备侧实际请求走单段 Range（206/`content_range`），与离线矩阵（416、If-Range、
+  多段回退 200、HEAD 无体）一致；冷暖同字节由离线用例锁定。
+- **NOT RUN**：NAS 压测（预算分区在真实加载下的排队/503 行为，需专门窗口）。
