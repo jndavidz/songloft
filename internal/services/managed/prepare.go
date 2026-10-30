@@ -55,6 +55,9 @@ type PrepareOp struct {
 	// 解析事实（fallback 来源、降级原因）随 op 记录，供诊断与投送层使用。
 	ResolvedSource string
 	FallbackReason string
+	// DurationSec 是验证得到的最终表示时长（MP3 帧估计）。
+	// 投送层用它做「可信时长」EOF 判定，避免队列项缺时长导致永不推进。
+	DurationSec float64
 }
 
 // PrepareDeps 注入准备链的外部能力；全部可 fake。
@@ -262,7 +265,9 @@ func (m *Manager) run(op *PrepareOp, ref *Ref) {
 		m.fail(op, err)
 		return
 	}
-	_ = rep
+	m.mu.Lock()
+	op.DurationSec = rep.DurationEstSec
+	m.mu.Unlock()
 
 	// 验证通过的表示落位为最终名（票据指向 final.mp3）：
 	// 拷贝而非改名——原始 source.* 与中间 intermediate.mp3 保留（表示隔离，
