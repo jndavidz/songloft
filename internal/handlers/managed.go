@@ -30,10 +30,19 @@ type ManagedHandler struct {
 	// ingestScan 单文件入库（app 装配期注入曲库扫描；nil 时 ingest 明确报错）。
 	ingestScan managed.ScanFunc
 	// bridge 是 BFF→bridge 的命令通道（B-08）；nil = 未配置，退回纯本地状态机。
-	bridge        *managed.BridgeClient
-	bridgeMu      sync.Mutex
-	bridgeSID     map[string]string            // "<session>|<epoch>" -> bridge session id
-	bridgeEntries map[string]map[string]string // 同上 -> BFF entry -> bridge entry_id
+	bridge       *managed.BridgeClient
+	bridgeMu     sync.Mutex
+	bridgeStates map[string]*bridgeKeyState // "<session>|<epoch>" -> 该代次的桥接状态
+}
+
+// bridgeKeyState 是单个 (session, epoch) 的桥接状态：**按代次**加锁建会话，
+// 不用一把全局锁跨 60s 的 HTTP；失败缓存 5s，避免手机重试风暴时反复建 bridge 会话。
+type bridgeKeyState struct {
+	mu      sync.Mutex
+	sid     string
+	entries map[string]string // BFF entry -> bridge entry_id
+	err     error
+	errAt   time.Time
 }
 
 // SetIngestScanFunc 注入曲库扫描实现（app 装配期调用一次）。
@@ -42,8 +51,19 @@ func (h *ManagedHandler) SetIngestScanFunc(f managed.ScanFunc) { h.ingestScan = 
 // SetBridgeClient 注入 bridge 命令客户端（未配置时保持 nil，BFF 只维护本地状态）。
 func (h *ManagedHandler) SetBridgeClient(c *managed.BridgeClient) {
 	h.bridge = c
-	h.bridgeSID = map[string]string{}
-	h.bridgeEntries = map[string]map[string]string{}
+	h.bridgeStates = map[string]*bridgeKeyState{}
+}
+
+// bridgeState 取（必要时创建）某代次的状态对象；只持全局锁做 map 操作。
+func (h *ManagedHandler) bridgeState(key string) *bridgeKeyState {
+	h.bridgeMu.Lock()
+	defer h.bridgeMu.Unlock()
+	st := h.bridgeStates[key]
+	if st == nil {
+		st = &bridgeKeyState{}
+		h.bridgeStates[key] = st
+	}
+	return st
 }
 
 // ensureBridgeSession 为某个 (session, epoch) 建 bridge 会话并把整队发过去。
@@ -51,13 +71,18 @@ func (h *ManagedHandler) SetBridgeClient(c *managed.BridgeClient) {
 func (h *ManagedHandler) ensureBridgeSession(ctx context.Context, session string, epoch int64,
 	queue []managed.QueueEntry) (string, error) {
 	key := fmt.Sprintf("%s|%d", session, epoch)
-	h.bridgeMu.Lock()
-	defer h.bridgeMu.Unlock()
-	if sid := h.bridgeSID[key]; sid != "" {
-		return sid, nil
+	st := h.bridgeState(key)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.sid != "" {
+		return st.sid, nil
+	}
+	if st.err != nil && time.Since(st.errAt) < 5*time.Second {
+		return "", st.err // 5s 内同代次重试复用失败原因，避免重试风暴反复建会话
 	}
 	sid, err := h.bridge.CreateSession(ctx)
 	if err != nil {
+		st.err, st.errAt = err, time.Now()
 		return "", err
 	}
 	refs := make([]managed.BridgeRef, 0, len(queue))
@@ -73,6 +98,7 @@ func (h *ManagedHandler) ensureBridgeSession(ctx context.Context, session string
 	if len(refs) > 0 {
 		ids, err := h.bridge.Enqueue(ctx, sid, refs)
 		if err != nil {
+			st.err, st.errAt = err, time.Now()
 			return "", err
 		}
 		for i, bff := range bffEntries {
@@ -81,8 +107,9 @@ func (h *ManagedHandler) ensureBridgeSession(ctx context.Context, session string
 			}
 		}
 	}
-	h.bridgeSID[key] = sid
-	h.bridgeEntries[key] = entryMap
+	st.sid = sid
+	st.entries = entryMap
+	st.err = nil
 	return sid, nil
 }
 
@@ -90,10 +117,11 @@ func (h *ManagedHandler) ensureBridgeSession(ctx context.Context, session string
 func (h *ManagedHandler) forwardCommand(ctx context.Context, session string, epoch int64,
 	cmd managed.Command) (map[string]any, error) {
 	key := fmt.Sprintf("%s|%d", session, epoch)
-	h.bridgeMu.Lock()
-	sid := h.bridgeSID[key]
-	entryMap := h.bridgeEntries[key]
-	h.bridgeMu.Unlock()
+	st := h.bridgeState(key)
+	st.mu.Lock()
+	sid := st.sid
+	entryMap := st.entries
+	st.mu.Unlock()
 	if sid == "" {
 		return nil, fmt.Errorf("bridge session not established for this epoch")
 	}
