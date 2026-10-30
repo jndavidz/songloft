@@ -62,6 +62,18 @@ func issuerIdentity(r *http.Request) string {
 	return "system:songloft-managed"
 }
 
+// @Summary 提交托管播放队列
+// @Description 手机/BFF 只提交 TrackRef 身份；bridge 是 LX06 队列权威，请求不得携带直链或长期凭证。
+// @Tags 托管播放
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body map[string]interface{} true "session/epoch/items(source,id,extra)"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 409 {object} models.ErrorResponse "代次过期"
+// @Router /managed/queue [post]
 // SetQueue POST /managed/queue：手机提交整队（仅 TrackRef 身份）。
 func (h *ManagedHandler) SetQueue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -86,6 +98,18 @@ func (h *ManagedHandler) SetQueue(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// @Summary 请求从手机原生 DLNA 交接到托管播放
+// @Description 两段式 handoff 的第一段：登记期望代次与队列；旧续播职责未 Stop 前不允许起播。
+// @Tags 托管播放
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body map[string]interface{} true "session/epoch/items"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 409 {object} models.ErrorResponse "代次不一致"
+// @Router /managed/handoff/request [post]
 // RequestHandoff POST /managed/handoff/request。
 func (h *ManagedHandler) RequestHandoff(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -102,6 +126,17 @@ func (h *ManagedHandler) RequestHandoff(w http.ResponseWriter, r *http.Request) 
 	respondJSON(w, http.StatusOK, map[string]any{"phase": phase})
 }
 
+// @Summary 确认旧客户端已显式停止
+// @Description 两段式 handoff 的第二段：只有确认旧续播职责已 Stop 后才把阶段推进到 managed。
+// @Tags 托管播放
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body map[string]interface{} true "session/epoch"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 409 {object} models.ErrorResponse
+// @Router /managed/handoff/confirm [post]
 // ConfirmHandoffStop POST /managed/handoff/confirm：旧续播职责已显式 Stop。
 func (h *ManagedHandler) ConfirmHandoffStop(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -118,6 +153,18 @@ func (h *ManagedHandler) ConfirmHandoffStop(w http.ResponseWriter, r *http.Reque
 	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// @Summary 执行托管播放命令
+// @Description play/pause/resume/next/prev/stop：带幂等键与期望代次；回执区分 accepted/applied/observed/failed。
+// @Tags 托管播放
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body map[string]interface{} true "session/epoch/command/idem_key/payload"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 409 {object} models.ErrorResponse "幂等键冲突或代次过期"
+// @Router /managed/command [post]
 // Execute POST /managed/command。
 func (h *ManagedHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -138,6 +185,17 @@ func (h *ManagedHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// @Summary 托管会话换代
+// @Description 换代后旧命令、旧票据与旧恢复资格整体失效；换代不恢复 owner。
+// @Tags 托管播放
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body map[string]interface{} true "session/expected_epoch"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 409 {object} models.ErrorResponse
+// @Router /managed/epoch [post]
 // NewEpoch POST /managed/epoch：换代，旧命令/票据整体失效。
 func (h *ManagedHandler) NewEpoch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -149,6 +207,16 @@ func (h *ManagedHandler) NewEpoch(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{"epoch": h.bff.NewEpoch(body.Session)})
 }
 
+// @Summary 读取托管会话状态
+// @Description 返回阶段、代次、当前项与位置快照；读取需要独立 scope。
+// @Tags 托管播放
+// @Produce json
+// @Security BearerAuth
+// @Param session query string true "会话 id"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 404 {object} models.ErrorResponse
+// @Router /managed/state [get]
 // State GET /managed/state?session=
 func (h *ManagedHandler) State(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")
@@ -159,6 +227,18 @@ func (h *ManagedHandler) State(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.bff.State(session))
 }
 
+// @Summary 准备当前曲的固定表示
+// @Description 只准备当前项：resolve→下载→校验≤320k MP3→冻结 final 表示，返回短期票据媒体地址；不预取队列。
+// @Tags 托管播放
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body map[string]interface{} true "session/epoch/entry/ref"
+// @Success 202 {object} models.SuccessResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 422 {object} models.ErrorResponse "不可播放的候选（非 MP3/加密件/超码率）"
+// @Router /managed/prepare [post]
 // StartPrepare POST /managed/prepare：当前项准备（resolve→download→verify→ready）。
 func (h *ManagedHandler) StartPrepare(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -190,6 +270,18 @@ func (h *ManagedHandler) StartPrepare(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// @Summary 查询当前曲准备状态
+// @Description 返回 pending/ready/failed；ready 时带票据化 media_url（固定表示，支持 Range）。
+// @Tags 托管播放
+// @Produce json
+// @Security BearerAuth
+// @Param session query string true "会话 id"
+// @Param epoch query int true "代次"
+// @Param entry query string true "队列项 id"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 404 {object} models.ErrorResponse
+// @Router /managed/prepare [get]
 // PrepareState GET /managed/prepare?session=&epoch=&entry=：
 // 查询准备状态；ready 时签发票据并返回可播放的 /media URL。
 func (h *ManagedHandler) PrepareState(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +319,15 @@ func (h *ManagedHandler) PrepareState(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, out)
 }
 
+// @Summary 断连补偿的事件回放
+// @Description 按 seq 增量返回听音事件（Last-Event-ID 语义）；缺口时返回 reset 让客户端重取快照。
+// @Tags 托管播放
+// @Produce json
+// @Security BearerAuth
+// @Param after query int false "已确认的最大 seq"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Router /managed/events [get]
 // PendingEvents GET /managed/events?after=N：断连补偿 replay（Last-Event-ID 语义）。
 func (h *ManagedHandler) PendingEvents(w http.ResponseWriter, r *http.Request) {
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
@@ -243,6 +344,16 @@ func (h *ManagedHandler) PendingEvents(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{"events": evs, "max_seq": maxSeq})
 }
 
+// @Summary 确认事件消费进度
+// @Description 有界清理已确认事件，避免 outbox 无限增长。
+// @Tags 托管播放
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body map[string]interface{} true "session/upto_seq"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Router /managed/events/ack [post]
 // AckEvents POST /managed/events/ack {upto_seq}。
 func (h *ManagedHandler) AckEvents(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -258,6 +369,17 @@ func (h *ManagedHandler) AckEvents(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// @Summary 接收 WebGUI 下载完成通知
+// @Description 根目录白名单、临时/加密件与未发布文件明确拒绝（422，不退化 500）；notif_id 幂等，通过后触发增量扫描。
+// @Tags 托管播放
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body map[string]interface{} true "notif_id/identity/file_path"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 422 {object} models.ErrorResponse "路径外/临时件/未发布"
+// @Router /managed/ingest [post]
 // Ingest POST /managed/ingest：WebGUI completed outbox 接收端。
 // 校验失败明确拒绝（rejected 落审计行）；通过后立即尝试处理一轮。
 func (h *ManagedHandler) Ingest(w http.ResponseWriter, r *http.Request) {
