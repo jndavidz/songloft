@@ -48,10 +48,13 @@ func TestBridgeClient_Contract(t *testing.T) {
 	if err != nil || sid != "ms-1" {
 		t.Fatalf("create: sid=%q err=%v", sid, err)
 	}
-	err = client.Enqueue(ctx, sid, []BridgeRef{
+	ids, err := client.Enqueue(ctx, sid, []BridgeRef{
 		{Source: "kuwo", ID: "42"},
 		{Source: "migu", ID: "600902", Extra: map[string]any{"copyrightId": "c1"}},
 	})
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("enqueue: ids=%v err=%v", ids, err)
+	}
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

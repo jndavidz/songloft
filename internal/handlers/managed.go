@@ -29,9 +29,10 @@ type ManagedHandler struct {
 	// ingestScan 单文件入库（app 装配期注入曲库扫描；nil 时 ingest 明确报错）。
 	ingestScan managed.ScanFunc
 	// bridge 是 BFF→bridge 的命令通道（B-08）；nil = 未配置，退回纯本地状态机。
-	bridge    *managed.BridgeClient
-	bridgeMu  sync.Mutex
-	bridgeSID map[string]string // "<session>|<epoch>" -> bridge session id
+	bridge        *managed.BridgeClient
+	bridgeMu      sync.Mutex
+	bridgeSID     map[string]string            // "<session>|<epoch>" -> bridge session id
+	bridgeEntries map[string]map[string]string // 同上 -> BFF entry -> bridge entry_id
 }
 
 // SetIngestScanFunc 注入曲库扫描实现（app 装配期调用一次）。
@@ -41,6 +42,7 @@ func (h *ManagedHandler) SetIngestScanFunc(f managed.ScanFunc) { h.ingestScan = 
 func (h *ManagedHandler) SetBridgeClient(c *managed.BridgeClient) {
 	h.bridge = c
 	h.bridgeSID = map[string]string{}
+	h.bridgeEntries = map[string]map[string]string{}
 }
 
 // ensureBridgeSession 为某个 (session, epoch) 建 bridge 会话并把整队发过去。
@@ -58,18 +60,28 @@ func (h *ManagedHandler) ensureBridgeSession(ctx context.Context, session string
 		return "", err
 	}
 	refs := make([]managed.BridgeRef, 0, len(queue))
+	bffEntries := make([]string, 0, len(queue))
 	for _, e := range queue {
 		if e.Ref == nil || e.Ref.Source == "" || e.Ref.ID == "" {
 			continue
 		}
 		refs = append(refs, managed.BridgeRef{Source: e.Ref.Source, ID: e.Ref.ID, Extra: e.Ref.Extra})
+		bffEntries = append(bffEntries, e.Entry)
 	}
+	entryMap := map[string]string{}
 	if len(refs) > 0 {
-		if err := h.bridge.Enqueue(ctx, sid, refs); err != nil {
+		ids, err := h.bridge.Enqueue(ctx, sid, refs)
+		if err != nil {
 			return "", err
+		}
+		for i, bff := range bffEntries {
+			if bff != "" && i < len(ids) {
+				entryMap[bff] = ids[i]
+			}
 		}
 	}
 	h.bridgeSID[key] = sid
+	h.bridgeEntries[key] = entryMap
 	return sid, nil
 }
 
@@ -79,17 +91,25 @@ func (h *ManagedHandler) forwardCommand(ctx context.Context, session string, epo
 	key := fmt.Sprintf("%s|%d", session, epoch)
 	h.bridgeMu.Lock()
 	sid := h.bridgeSID[key]
+	entryMap := h.bridgeEntries[key]
 	h.bridgeMu.Unlock()
 	if sid == "" {
 		return nil, fmt.Errorf("bridge session not established for this epoch")
 	}
 	kind := cmd.Name
 	payload := map[string]any(nil)
+	// BFF 的 entry 是手机侧标签（如 e1），bridge 的 entry_id 是 e-<uuid>：
+	// 转发前必须翻译，否则 bridge 会以 unknown queue entry 拒绝。
+	// 只有 jump/play 用 entry 定位；next/prev/stop/pause 的 entry 仅供幂等键区分。
+	if cmd.Name == "jump" || (cmd.Name == "play" && cmd.Entry != "") {
+		bridgeEntry, ok := entryMap[cmd.Entry]
+		if !ok || bridgeEntry == "" {
+			return nil, fmt.Errorf("unknown entry %q for this epoch", cmd.Entry)
+		}
+		payload = map[string]any{"entry_id": bridgeEntry}
+	}
 	if cmd.Name == "jump" {
 		kind = "play"
-		payload = map[string]any{"entry_id": cmd.Entry}
-	} else if cmd.Name == "play" && cmd.Entry != "" {
-		payload = map[string]any{"entry_id": cmd.Entry}
 	}
 	idem := fmt.Sprintf("songloft-%s-%d-%s-%s", session, epoch, cmd.Name, cmd.Entry)
 	return h.bridge.Command(ctx, sid, kind, idem, payload, nil)
@@ -233,8 +253,11 @@ func (h *ManagedHandler) ConfirmHandoffStop(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := h.bff.ConfirmHandoffStop(body.Session, body.Epoch); err != nil {
-		respondJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-		return
+		// 幂等：已经处于 managed（例如上一次 play 失败后手机重试）直接继续。
+		if h.bff.State(body.Session).Phase != managed.PhaseManaged {
+			respondJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	// managed 生效：把整队交给 bridge 并由 bridge 起播（Songloft 不持有设备队列）。
 	if h.bridge != nil && h.bridge.Enabled() {

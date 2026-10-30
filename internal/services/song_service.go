@@ -536,11 +536,20 @@ func (s *SongService) ScanAndImportAsync(reimport bool, paths []string) error {
 //   - 同步返回：通知处理完成时条目已落库（scanned_done 才有意义）；
 //   - 跳过「10 秒内视为正在写入」的稳定性窗口：路径来自原子发布的完成通知，
 //     文件不可能处于半写状态，按默认窗口会被静默跳过、入库丢失。
-func (s *SongService) ScanAndImportIngest(ctx context.Context, dir string) error {
+//   - **落库校验**：doScanAndImport 不返回结果，这里按 file_path 回查，
+//     没进库必须返回错误（否则 ProcessAll 会把失败记成 done，通知永久丢失）。
+func (s *SongService) ScanAndImportIngest(ctx context.Context, filePath string) error {
 	if !s.scanProgressManager.Start() {
 		return fmt.Errorf("scan already in progress")
 	}
-	s.doScanAndImport(ctx, false, []string{dir}, 0)
+	s.doScanAndImport(ctx, false, []string{filepath.Dir(filePath)}, 0)
+	paths, err := s.songs.ListLocalPaths(ctx)
+	if err != nil {
+		return fmt.Errorf("ingest scan: verify list: %w", err)
+	}
+	if _, ok := paths[filePath]; !ok {
+		return fmt.Errorf("ingest scan: %s not imported (scan skipped or failed)", filePath)
+	}
 	return nil
 }
 

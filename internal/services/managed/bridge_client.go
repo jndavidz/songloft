@@ -108,19 +108,28 @@ func (c *BridgeClient) CreateSession(ctx context.Context) (string, error) {
 	return snap.SessionID, nil
 }
 
-// Enqueue 把身份逐条入队（bridge 不接受 URL，只接受 TrackRef）。
-func (c *BridgeClient) Enqueue(ctx context.Context, sessionID string, refs []BridgeRef) error {
+// Enqueue 把身份逐条入队（bridge 不接受 URL，只接受 TrackRef），
+// 返回 bridge 分配的 entry_id 列表（顺序与 refs 一致），供 BFF 做 entry 映射。
+func (c *BridgeClient) Enqueue(ctx context.Context, sessionID string, refs []BridgeRef) ([]string, error) {
+	ids := make([]string, 0, len(refs))
 	for _, ref := range refs {
+		var out struct {
+			EntryID string `json:"entry_id"`
+		}
 		err := c.do(ctx, http.MethodPost,
 			"/api/music/sessions/"+sessionID+"/queue",
 			map[string]any{"target": c.target(),
 				"ref": map[string]any{"source": ref.Source, "id": ref.ID, "extra": ref.Extra}},
-			nil)
+			&out)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		if out.EntryID == "" {
+			return nil, fmt.Errorf("bridge queue: empty entry_id for %s/%s", ref.Source, ref.ID)
+		}
+		ids = append(ids, out.EntryID)
 	}
-	return nil
+	return ids, nil
 }
 
 // Command 下发命令；bridge 先落回执（202）再异步执行设备动作。
