@@ -4,10 +4,13 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 
@@ -25,10 +28,72 @@ type ManagedHandler struct {
 	media   *managed.MediaServer
 	// ingestScan 单文件入库（app 装配期注入曲库扫描；nil 时 ingest 明确报错）。
 	ingestScan managed.ScanFunc
+	// bridge 是 BFF→bridge 的命令通道（B-08）；nil = 未配置，退回纯本地状态机。
+	bridge    *managed.BridgeClient
+	bridgeMu  sync.Mutex
+	bridgeSID map[string]string // "<session>|<epoch>" -> bridge session id
 }
 
 // SetIngestScanFunc 注入曲库扫描实现（app 装配期调用一次）。
 func (h *ManagedHandler) SetIngestScanFunc(f managed.ScanFunc) { h.ingestScan = f }
+
+// SetBridgeClient 注入 bridge 命令客户端（未配置时保持 nil，BFF 只维护本地状态）。
+func (h *ManagedHandler) SetBridgeClient(c *managed.BridgeClient) {
+	h.bridge = c
+	h.bridgeSID = map[string]string{}
+}
+
+// ensureBridgeSession 为某个 (session, epoch) 建 bridge 会话并把整队发过去。
+// 同一代次只建一次；换代后旧 sid 不再复用（bridge 侧新会话接管，旧会话被停）。
+func (h *ManagedHandler) ensureBridgeSession(ctx context.Context, session string, epoch int64,
+	queue []managed.QueueEntry) (string, error) {
+	key := fmt.Sprintf("%s|%d", session, epoch)
+	h.bridgeMu.Lock()
+	defer h.bridgeMu.Unlock()
+	if sid := h.bridgeSID[key]; sid != "" {
+		return sid, nil
+	}
+	sid, err := h.bridge.CreateSession(ctx)
+	if err != nil {
+		return "", err
+	}
+	refs := make([]managed.BridgeRef, 0, len(queue))
+	for _, e := range queue {
+		if e.Ref == nil || e.Ref.Source == "" || e.Ref.ID == "" {
+			continue
+		}
+		refs = append(refs, managed.BridgeRef{Source: e.Ref.Source, ID: e.Ref.ID, Extra: e.Ref.Extra})
+	}
+	if len(refs) > 0 {
+		if err := h.bridge.Enqueue(ctx, sid, refs); err != nil {
+			return "", err
+		}
+	}
+	h.bridgeSID[key] = sid
+	return sid, nil
+}
+
+// forwardCommand 把 BFF 命令转发给 bridge（幂等键绑定 session/epoch/命令/entry）。
+func (h *ManagedHandler) forwardCommand(ctx context.Context, session string, epoch int64,
+	cmd managed.Command) (map[string]any, error) {
+	key := fmt.Sprintf("%s|%d", session, epoch)
+	h.bridgeMu.Lock()
+	sid := h.bridgeSID[key]
+	h.bridgeMu.Unlock()
+	if sid == "" {
+		return nil, fmt.Errorf("bridge session not established for this epoch")
+	}
+	kind := cmd.Name
+	payload := map[string]any(nil)
+	if cmd.Name == "jump" {
+		kind = "play"
+		payload = map[string]any{"entry_id": cmd.Entry}
+	} else if cmd.Name == "play" && cmd.Entry != "" {
+		payload = map[string]any{"entry_id": cmd.Entry}
+	}
+	idem := fmt.Sprintf("songloft-%s-%d-%s-%s", session, epoch, cmd.Name, cmd.Entry)
+	return h.bridge.Command(ctx, sid, kind, idem, payload, nil)
+}
 
 func NewManagedHandler(
 	bff *managed.ManagedBFF,
@@ -82,6 +147,11 @@ func (h *ManagedHandler) SetQueue(w http.ResponseWriter, r *http.Request) {
 		Entries []struct {
 			Entry     string `json:"entry"`
 			RefDigest string `json:"ref_digest"`
+			Ref       *struct {
+				Source string         `json:"source"`
+				ID     string         `json:"id"`
+				Extra  map[string]any `json:"extra"`
+			} `json:"ref"`
 		} `json:"entries"`
 	}
 	if !h.decode(w, r, &body) {
@@ -89,7 +159,23 @@ func (h *ManagedHandler) SetQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	entries := make([]managed.QueueEntry, len(body.Entries))
 	for i, e := range body.Entries {
-		entries[i] = managed.QueueEntry{Entry: e.Entry, RefDigest: e.RefDigest}
+		entry := managed.QueueEntry{Entry: e.Entry, RefDigest: e.RefDigest}
+		if e.Ref != nil {
+			// 队列里保留完整身份：BFF→bridge 转发只发 source/id/extra，不发 URL
+			ref, err := managed.MakeRef(e.Ref.Source, e.Ref.ID, e.Ref.Extra, nil)
+			if err != nil {
+				respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			if entry.Entry == "" {
+				entry.Entry, _ = ref.Digest()
+			}
+			if entry.RefDigest == "" {
+				entry.RefDigest, _ = ref.Digest()
+			}
+			entry.Ref = ref
+		}
+		entries[i] = entry
 	}
 	if err := h.bff.SetQueue(body.Session, body.Epoch, entries); err != nil {
 		respondJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -150,6 +236,23 @@ func (h *ManagedHandler) ConfirmHandoffStop(w http.ResponseWriter, r *http.Reque
 		respondJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
+	// managed 生效：把整队交给 bridge 并由 bridge 起播（Songloft 不持有设备队列）。
+	if h.bridge != nil && h.bridge.Enabled() {
+		state := h.bff.State(body.Session)
+		sid, err := h.ensureBridgeSession(r.Context(), body.Session, body.Epoch, state.Queue)
+		if err != nil {
+			respondJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		_, err = h.bridge.Command(r.Context(), sid, "play",
+			fmt.Sprintf("songloft-%s-%d-handoff-play", body.Session, body.Epoch), nil, nil)
+		if err != nil {
+			respondJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{"ok": true, "bridge": map[string]any{"session_id": sid}})
+		return
+	}
 	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -182,7 +285,16 @@ func (h *ManagedHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
+	var receipt map[string]any
+	if h.bridge != nil && h.bridge.Enabled() && body.Command.Name != "" {
+		var err error
+		receipt, err = h.forwardCommand(r.Context(), body.Session, body.Command.Epoch, body.Command)
+		if err != nil {
+			respondJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true, "bridge": receipt})
 }
 
 // @Summary 托管会话换代

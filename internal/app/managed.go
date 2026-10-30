@@ -76,7 +76,13 @@ func (a *App) setupManaged() {
 	bff := managed.NewManagedBFF(issuer)
 	media := managed.NewMediaServer(issuer, dataDir) // 表示记录已含 managed/ 前缀，Root 是其父目录
 
+	// BFF→bridge 命令通道（B-08）：env 优先，未配置时 BFF 只维护本地状态机。
 	h := handlers.NewManagedHandler(bff, mgr, issuer, events, ingest, media)
+	h.SetBridgeClient(managed.NewBridgeClient(
+		firstNonEmpty(os.Getenv("BRIDGE_BASE_URL"), a.configService.GetString("bridge_base_url", "")),
+		firstNonEmpty(os.Getenv("BRIDGE_MUSIC_TOKEN"), a.configService.GetString("bridge_music_token", "")),
+		firstNonEmpty(os.Getenv("BRIDGE_TARGET"), a.configService.GetString("bridge_target", "lx06")),
+	))
 	h.SetIngestScanFunc(func(ctx context.Context, n *managed.IngestNotification) error {
 		// 单文件入库：扫其所在目录（导入按文件幂等）
 		_, err := a.scanner.ScanFilesWithCueInDirs(ctx, []string{filepath.Dir(n.FilePath)}, nil)

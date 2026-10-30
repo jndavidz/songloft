@@ -26,9 +26,11 @@ const (
 )
 
 // QueueEntry 队列项：entry 唯一标识一次出现（同曲可多次入队），身份是 TrackRef digest。
+// Ref 保留完整身份，BFF→bridge 转发时只发 Source/ID/Extra，不发 URL。
 type QueueEntry struct {
 	Entry     string
 	RefDigest string
+	Ref       *Ref
 }
 
 // Command 手机/BFF 发来的托管命令。
