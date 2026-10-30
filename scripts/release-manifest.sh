@@ -14,14 +14,24 @@ cd "$ROOT"
 
 git_commit=$(git rev-parse HEAD)
 git_describe=$(git describe --tags --always 2>/dev/null || echo "$git_commit")
-git_dirty=$(git status --porcelain | wc -l | tr -d ' ')
+git_dirty=$(git status --porcelain --ignore-submodules=all | wc -l | tr -d ' ')
 go_sum=$(sha256sum go.sum | awk '{print $1}')
 player_commit=$(git -C clients/player rev-parse HEAD 2>/dev/null || echo unavailable)
 image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || echo unavailable)
 repo_digests=$(docker image inspect --format '{{join .RepoDigests ","}}' "$IMAGE" 2>/dev/null || echo unavailable)
 base_ref=$(awk '/^FROM /{print $2; exit}' Dockerfile.nas)
-base_digest=$(docker manifest inspect "$base_ref" 2>/dev/null | sha256sum | awk '{print $1}' || echo unavailable)
-pkg_fingerprint=$(docker run --rm "$IMAGE" sh -c 'apk info -v | sort' 2>/dev/null | sha256sum | awk '{print $1}' || echo unavailable)
+base_json=$(docker manifest inspect "$base_ref" 2>/dev/null || true)
+if [ -n "$base_json" ]; then
+  base_digest=$(printf '%s' "$base_json" | sha256sum | awk '{print $1}')
+else
+  base_digest=unavailable
+fi
+pkg_out=$(docker run --rm "$IMAGE" sh -c 'apk info -v | sort' 2>/dev/null || true)
+if [ -n "$pkg_out" ]; then
+  pkg_fingerprint=$(printf '%s\n' "$pkg_out" | sha256sum | awk '{print $1}')
+else
+  pkg_fingerprint=unavailable
+fi
 ffmpeg_version=$(docker run --rm "$IMAGE" sh -c 'ffmpeg -version 2>/dev/null | head -1' 2>/dev/null || echo unavailable)
 go_version=$(go version 2>/dev/null || echo unavailable)
 apk_path=${SONGLOFT_APK_PATH:-}
