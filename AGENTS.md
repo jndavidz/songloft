@@ -209,3 +209,15 @@ cd clients/player && flutter run -d chrome --dart-define=DEPLOY_MODE=embedded
 | 服务端 seek | seek 与 Range 可组合；保留 CBR、尾部 3 秒护栏和未知时长超时。 | [详情](docs/pitfalls.md#seek-stream) |
 | 歌曲持久化 | 仅用于用户合法拥有的音乐；转码或歌词获取失败不阻塞持久化。 | [详情](docs/pitfalls.md#song-download) |
 | 跨设备文件搬移 | 使用 internal/fileutil.MoveFile；不要用裸 os.Rename 搬临时文件到其他挂载点。 | [详情](docs/pitfalls.md#file-move) |
+
+---
+
+## Agent skills
+
+### Issue tracker
+
+Issues 与 specs 以 markdown 存放于 `.scratch/<feature>/`，随仓库提交。See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+single-context：仓库根 `GLOSSARY.md` + `docs/adr/`；不存在时静默跳过。See `docs/agents/domain.md`.

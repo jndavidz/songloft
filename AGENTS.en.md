@@ -207,3 +207,15 @@ Before editing these modules, **read the linked sections**; read all applicable 
 | Server-side seek | Combine seek with Range; preserve CBR, the 3-second end guard and the unknown-duration timeout. | [Details](docs/en/pitfalls.md#seek-stream) |
 | Song persistence | Only for music the user legally owns; transcode or lyric-fetch failures must not block persistence. | [Details](docs/en/pitfalls.md#song-download) |
 | Cross-device file moves | Use internal/fileutil.MoveFile, not bare os.Rename, to move temp files across mounts. | [Details](docs/en/pitfalls.md#file-move) |
+
+---
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as markdown under `.scratch/<feature>/`, committed with the repo. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+single-context: `GLOSSARY.md` at the repo root plus `docs/adr/`; skip silently when absent. See `docs/agents/domain.md`.
