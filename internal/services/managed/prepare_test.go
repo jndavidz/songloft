@@ -402,3 +402,34 @@ func TestPrepare_RapidGenerationChangeStress(t *testing.T) {
 		// 不等待完成立即换代—— maximize 竞态窗口
 	}
 }
+
+// TestPrepare_FinalRepresentationPromoted：ready 后票据指向的 final.mp3 必须真实存在。
+func TestPrepare_FinalRepresentationPromoted(t *testing.T) {
+	res := &countingResolver{next: func(req ResolveRequest) (*ResolveResult, error) {
+		return okResult(t, false), nil
+	}}
+	deps := testDeps(t, res)
+	m := NewManager(deps)
+	ref := MustRef(t, "kwqq", "1", nil)
+	digest, _ := ref.Digest()
+	op, err := m.StartPrepare("i", OpKey{Session: "s", Epoch: 1, Entry: "e"}, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-op.Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout")
+	}
+	q, _ := m.Query("i", OpKey{Session: "s", Epoch: 1, Entry: "e"})
+	if q.State != StateReady {
+		t.Fatalf("state=%s err=%s", q.State, q.Error)
+	}
+	if _, err := os.Stat(filepath.Join(deps.WorkDir, digest, "final.mp3")); err != nil {
+		t.Fatalf("ready 后 final.mp3 必须存在（票据指向它）: %v", err)
+	}
+	// 原始表示保留（隔离）
+	if _, err := os.Stat(filepath.Join(deps.WorkDir, digest, "source.mp3")); err != nil {
+		t.Fatalf("原始表示应保留: %v", err)
+	}
+}

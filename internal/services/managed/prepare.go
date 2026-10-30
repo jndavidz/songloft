@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -262,6 +264,17 @@ func (m *Manager) run(op *PrepareOp, ref *Ref) {
 	}
 	_ = rep
 
+	// 验证通过的表示落位为最终名（票据指向 final.mp3）：
+	// 拷贝而非改名——原始 source.* 与中间 intermediate.mp3 保留（表示隔离，
+	// 原码不丢：失败重转码/后续 GC 判定都需要）。
+	finalName := filepath.Join(opDir, "final.mp3")
+	if finalPath != finalName {
+		if err := copyFile(finalPath, finalName); err != nil {
+			m.fail(op, fmt.Errorf("promote final representation: %w", err))
+			return
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.startFinish(op, StateReady, "")
@@ -322,3 +335,24 @@ func (m *Manager) ActiveCount() int {
 	}
 	return n
 }
+
+// copyFile 流式拷贝（表示落位用，不整载入内存）。
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return err
+	}
+	return out.Close()
+}
+
+// copyFile 流式拷贝（表示落位用，不整载入内存）。
