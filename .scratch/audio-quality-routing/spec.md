@@ -43,8 +43,8 @@ Source: 会话讨论（songloft 音质语义考证 + kwqq 链路现状 + 联网�
 - **D2 本地恒直出**：客户端对 `song.type == local`（含 Bundle 本地模式）构造播放 URL 时不追加 `quality`，也不下发 quality hint。后端转码引擎不动。
 - **D3 播放 URL 不带转码 quality、网络歌带 `source_quality` hint**：客户端对**本地歌**构造 `/songs/{id}/play` 时不追加 `quality`；对**网络歌**（remote，含电台）同样不追加 `quality`，改为在音质设置 ≠ original 时追加独立参数 `source_quality=<native 拼写>`（`128→128k`、`192→192k`、`320→320k`）。统一播放端点（所有类型的 `song.url` 都是 `/songs/{id}/play`，models.go 单点生成）意味着客户端无需也无法区分插件歌——hint 对非插件网络歌**无作用点、被后端忽略**（无解析层，直出原流）。后端把 `source_quality` 视为哑管道：读取后仅透传给插件解析，**不参与转码判定**（参数名独立于既有 `quality` 转码参数，杜绝误触）。
 - **D4 音源解析契约扩展（向后兼容）**：`/api/music/url` 请求体新增可选字段 `quality: string`（native 拼写；缺省或非法值 = 插件自定默认/防御归一）。响应新增可选字段 `bitrate_kbps: number`（上游实测码率，如实透传，仅日志）。Go 侧 `musicURLRequest`/`musicURLResponse` 加可选字段；未携带时行为与现状逐字节一致。运输链：客户端 `source_quality` → handler `servePlayOptions.sourceQuality`（哑管道）→ `CacheService/Orchestrator/Fetcher.ResolveURL` → 请求体 `quality`；`Fetch`（缓存下载/元数据探测路径）恒传空。
-- **D5 SDK helper 扩展（向后兼容）**：`createMusicUrlHandler` 把 `body.quality` 经新增的第二个参数传给 `resolveUrl(sourceData, context)`，`context.quality` 可缺省；新增 `resolveQualityHint` 防御归一纯函数（SDK 2.19.0）。JS 无参强检，旧单参插件不受影响。**发布耦合说明**：kwqq 构建走 npm 已发布版 SDK，拿不到 2.19.0 导出——kwqq 侧内联同表归一函数（`QUALITY_TIERS` 七元集合 + 越权归 320k），SDK 与 kwqq 两处以 `quality.py` 为单点真相，待 SDK 发版后 kwqq 可切回导入。
-- **D6 kwqq 插件透传**：kwqq 插件把合法集内的 hint 拼写**原样透传**给 kwqq v1 `/{source}/song/url`（`128k`/`192k`/`320k` 及四档别名——v1 容器与 v2 共用 `quality.py` 的 `ALIASES` 归一与 `REAL_192K` snap，插件不做本地复制）；命中防御规则的值归一 `320k` 后透传；未携带 hint 时维持插件自身配置 `cfg.quality`（默认 320k）不变。插件响应透传上游 `bitrate_kbps`。
+- **D5 SDK helper 扩展（向后兼容）与 kwqq 自持路由**：`createMusicUrlHandler` 把 `body.quality` 经新增的第二个参数传给 `resolveUrl(sourceData, context)`，`context.quality` 可缺省；新增 `resolveQualityHint` 防御归一纯函数（SDK 2.19.0）。**评审后修订**：npm 已发布的 SDK 2.18.0 以单参调 `resolveUrl`，kwqq 若依赖 SDK handler，`context.quality` 恒 undefined、hint 静默丢失（Node 模拟测试在修复前精确复现 2 例红）。故 **kwqq 自持 `/api/music/url` 路由**（契约与 SDK 约定一致、fallback 链内联），SDK 侧契约保留供后续插件在 2.19.0 发版后使用；两处归一函数同表（`QUALITY_TIERS`/`DEFENSIVE_QUALITY_TIER`），单点真相在 `quality.py`。
+- **D6 kwqq 自持透传**：kwqq 的 `/api/music/url` 路由自持（见 D5）：hint 经内联 `resolveQualityHint` 防御归一后透传给 kwqq v1 `/{source}/song/url`（`128k`/`192k`/`320k` 及四档别名——v1 容器与 v2 共用 `quality.py` 的 `ALIASES` 归一与 `REAL_192K` snap，插件不做本地复制）；无 hint 时维持插件自身配置 `cfg.quality`（默认 320k）不变；fallback 自搜复用同一档位。上游实测 `bitrate_kbps` 进日志。
 - **D7 档位是播放期参数**：不落库、不进 source_data、不进缓存键语义；同一首歌不同档位每次解析独立进行（上游缓存归 kwqq API 管）。
 - **D8 安卓适配边界**：改动全部在共享层（`core/audio` 的 URL 构造与播放器 provider），`just_audio`/media_kit 原生通道收到的最终 URL 语义不变；安卓无平台通道、权限、后台播放、通知栏改动。安卓专项 = 真机冒烟（后台播放 + 通知栏显示 + audio focus + 插件歌起播延迟目测改善）。
 - **D9 缓存下载链路不动**：离线缓存下载继续携带现有 quality 参数走后端转码定档——那是"产出一份指定码率文件"的合法场景，与播放路由无关。**预热（prefetch）路径**：客户端按与播放相同的规则构造 URL（本地/电台不带任何音质参数、网络歌带 `source_quality`），后端预热分支不消费 hint——预热缓存落的是插件默认档的原生流（kwqq 默认即 320k，与 App 高档一致）；档位差异化解析只发生在真实播放的 `ResolveURL`。修正一处背景事实：未缓存插件歌的播放请求现状是"解析后原样代理"（`quality` 被忽略），受 `quality` 影响的是**已缓存副本与预热副本的转码**——本 spec 落地后两者都不再发生。
@@ -53,7 +53,7 @@ Source: 会话讨论（songloft 音质语义考证 + kwqq 链路现状 + 联网�
 
 - **Go 后端**（既有 seam：`internal/services/source/fetcher_test.go` 的 mock `PluginInvoker`）：断言 `musicURLRequest` 的 `quality` 字段——播放链路携带 App 档位、缓存下载链路不携带（或按 D9 现状）、缺省时请求体与旧版一致。
 - **插件 SDK**（`plugins/toolchain/packages/plugin-sdk`）：`createMusicUrlHandler` 单测——`body.quality` 正确进入 `context.quality`；缺失/非法值时 `context.quality` 缺省；旧单参 `resolveUrl` 插件照常工作。
-- **kwqq 插件**：透传与防御归一落为 SDK 纯函数 `resolveQualityHint`（`plugins/toolchain/packages/plugin-sdk`，node --test 离线单测：合法集原样透传 / 别名透传 / 非法与无损档归 320k / 缺省回落默认档）；kwqq 因发布耦合内联同表（见 D5），逻辑与 SDK 共表、真相在 `quality.py`，kwqq 侧无独立测试 seam，经 `node --check` + 插件构建验证。插件打包验证依赖真机窗口（与 S-07 既有真机授权一致）。
+- **kwqq 插件**：透传与防御归一落为 SDK 纯函数 `resolveQualityHint`（`plugins/toolchain/packages/plugin-sdk`，node --test 离线单测：合法集原样透传 / 别名透传 / 非法与无损档归 320k / 缺省回落默认档）；kwqq 自持路由以 Node 离线模拟测试覆盖（stub 宿主桥与上游 fetch，6/6，见 Simulated Verification #4）；真实打包经 plugin-builder 构建验证（#5）。插件在真机音箱上的端到端联调依赖真机窗口（与 S-07 既有真机授权一致）。
 - **Flutter 客户端**（既有 seam：`test/core/audio/`，先例 `live_stream_headers_test.dart` 等）：按歌曲类型 × App 档位断言最终播放 URL——local 恒无 `quality=`；插件歌恒无 `quality=`（quality 走解析 hint）；缓存下载 URL 仍带 `quality=`；电台/视频既有分支不回归。
 - **安卓真机冒烟**（device 窗口，非阻塞门）：插件歌起播延迟、后台播放、通知栏、audio focus 四项目测清单。
 
@@ -65,6 +65,25 @@ Source: 会话讨论（songloft 音质语义考证 + kwqq 链路现状 + 联网�
 - **后端转码引擎任何行为变更**（视频/电台/seek/变速/响度均衡/抽轨全部不动）。
 - **musicdl kwqq API 侧任何改动**（四档归一、实测码率、downgraded 标注已就位，是本次的既有依赖而非交付物）。
 - 192k 档在酷我源的假档问题（上游档位现实，spec 只保证如实映射）。
+
+## Simulated Verification（2026-11-02 自主执行记录）
+
+真机窗口不可用期间的模拟验证与证据（全部离线/只读，无真机依赖）：
+
+| # | 验证项 | 方式 | 结果 |
+|---|---|---|---|
+| 1 | Go 解析契约 seam | `fetcher_test` capturingInvoker（TDD 红→绿） | 3/3 绿：hint 进请求体 / 缺省省略字段 / `bitrate_kbps` 兼容 |
+| 2 | Go 全仓回归 | `go build ./...` + `go test ./internal/...`，失败清单与 stash 基线对照 | 无新增失败（既存项均为 Windows 环境：`/bin/echo` fake ffmpeg、DSF 扫描、stall reader） |
+| 3 | SDK 契约 | `node --test`（免安装 TS loader） | 6/6 绿 |
+| 4 | kwqq 自持路由 | Node 离线模拟（stub `songloft.storage`/`fetch`，直调 `onHTTPRequest`） | 6/6 绿；修复前精确复现 hint 丢失 2 例红（评审 #2 的实证） |
+| 5 | kwqq 打包 | plugin-builder 真实构建（npm SDK 2.18.0 → esbuild） | ✅ 19.1KB bundle + entry/zip 双 hash |
+| 6 | Flutter 静态 | 家庭 PC `dart analyze`（4 改动文件） | No issues found |
+| 7 | Flutter 单测 | 家庭 PC `flutter test` 目标文件 | 7/7 绿 |
+| 8 | Flutter 全套件 | 家庭 PC `flutter test`（791 过 / 4 败） | 失败集与父提交基线逐项一致（既存环境项），零回归 |
+| 9 | 上游降档语义 | NAS kwqq-api 只读探测（晴天/kuwo id=228908） | `320k`→320kbps verified；`192k`→**上游 snap 返回 320k**（`cached:true`）；`flac`→返回真 FLAC 2000kbps（`ENABLE_LOSSLESS=true` 的 NAS）——实证"无损不下发"防御（D1）的必要性 |
+| 10 | Android 适配 | 家庭 PC `flutter build apk --debug`（JDK17） | 编译通过（D8：无原生改动、可构建性证明） |
+
+**仍需真机/人工的收尾**（非阻塞门，与 S-07 真机授权一致）：安卓真机冒烟四项（后台播放/通知栏/audio focus/插件歌起播延迟目测）；kwqq 插件在真机音箱上的档位端到端听感确认；SDK 2.19.0 npm 发版与 toolchain 分支推送（发布渠道决策，kwqq 已不受此阻塞）。
 
 ## Further Notes
 
