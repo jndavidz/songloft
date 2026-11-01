@@ -51,7 +51,7 @@ type ReassignTracker interface {
 // *SourceFetcher 天然满足;抽成接口便于单测注入受控的假 Fetcher。
 type SourceFetcherAPI interface {
 	Fetch(ctx context.Context, entryPath, sourceData string, song *SongInfo, allowPluginFallback bool) (*FetchResult, error)
-	ResolveURL(ctx context.Context, entryPath, sourceData string, song *SongInfo, allowPluginFallback bool) (*ResolvedURL, error)
+	ResolveURL(ctx context.Context, entryPath, sourceData string, song *SongInfo, allowPluginFallback bool, qualityHint string) (*ResolvedURL, error)
 }
 
 // OrchestratorOpts 编排器配置。
@@ -218,11 +218,12 @@ func (o *SourceOrchestrator) sleepRetry(ctx context.Context) bool {
 
 // ResolveURL 解析插件歌曲的可下载音频 URL（不下载）。
 // 仅调用主源插件，不走 L2 fallback。用于流式代理场景。
-func (o *SourceOrchestrator) ResolveURL(ctx context.Context, song *SongInfo) (*ResolvedURL, error) {
+// qualityHint 为播放链路的音质档位(musicdl native 拼写,可空=插件自定默认)。
+func (o *SourceOrchestrator) ResolveURL(ctx context.Context, song *SongInfo, qualityHint string) (*ResolvedURL, error) {
 	if song == nil {
 		return nil, errors.New("song is nil")
 	}
-	return o.opts.Fetcher.ResolveURL(ctx, song.PluginEntryPath, song.SourceData, song, true)
+	return o.opts.Fetcher.ResolveURL(ctx, song.PluginEntryPath, song.SourceData, song, true, qualityHint)
 }
 
 // AsyncReassign 在后台为指定 song 寻找新源并更新字段。

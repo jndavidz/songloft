@@ -28,7 +28,7 @@ func (f *fakeFetcher) Fetch(_ context.Context, _, _ string, _ *SongInfo, _ bool)
 	return r.res, r.err
 }
 
-func (f *fakeFetcher) ResolveURL(_ context.Context, _, _ string, _ *SongInfo, _ bool) (*ResolvedURL, error) {
+func (f *fakeFetcher) ResolveURL(_ context.Context, _, _ string, _ *SongInfo, _ bool, _ string) (*ResolvedURL, error) {
 	return nil, errors.New("not used")
 }
 

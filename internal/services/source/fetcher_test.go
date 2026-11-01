@@ -3,6 +3,7 @@ package source
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -140,5 +141,64 @@ func TestDownloadToTemp_ExactLength(t *testing.T) {
 	defer os.Remove(path)
 	if n != 500 {
 		t.Fatalf("expected 500 bytes, got %d", n)
+	}
+}
+
+// capturingInvoker 捕获 music/url 请求体并返回预置响应,用于断言 quality hint 的下发形态。
+type capturingInvoker struct {
+	respBody []byte
+	gotBody  []byte
+}
+
+func (c *capturingInvoker) InvokeHTTP(
+	_ context.Context,
+	_, _, _ string,
+	_ interface{},
+	body []byte,
+) (int, map[string]string, []byte, error) {
+	c.gotBody = body
+	return http.StatusOK, nil, c.respBody, nil
+}
+
+// 播放链路携带的 quality hint 原样进入 /api/music/url 请求体；上游附带的
+// bitrate_kbps(实测码率)被容忍并解码成功(仅日志用途,不改变解析结果)。
+func TestResolveURL_QualityHintForwardedInRequestBody(t *testing.T) {
+	inv := &capturingInvoker{respBody: []byte(`{"url":"https://cdn/x.mp3","bitrate_kbps":320}`)}
+	f := NewSourceFetcher(FetcherOpts{PluginInvoker: inv})
+	song := &SongInfo{Title: "Song", Artist: "Artist", PluginEntryPath: "p1"}
+
+	res, err := f.ResolveURL(context.Background(), "p1", `{"id":"1"}`, song, true, "320k")
+	if err != nil {
+		t.Fatalf("ResolveURL: %v", err)
+	}
+	if res.URL != "https://cdn/x.mp3" {
+		t.Fatalf("unexpected url: %q", res.URL)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(inv.gotBody, &body); err != nil {
+		t.Fatalf("decode captured body: %v", err)
+	}
+	if body["quality"] != "320k" {
+		t.Fatalf("expected quality hint forwarded, got %v", body["quality"])
+	}
+}
+
+// 未携带 hint(缓存下载/元数据探测路径)时请求体不含 quality 字段,与旧版逐字节兼容。
+func TestResolveURL_EmptyQualityHintOmitsField(t *testing.T) {
+	inv := &capturingInvoker{respBody: []byte(`{"url":"https://cdn/x.mp3"}`)}
+	f := NewSourceFetcher(FetcherOpts{PluginInvoker: inv})
+	song := &SongInfo{Title: "Song", Artist: "Artist", PluginEntryPath: "p1"}
+
+	if _, err := f.ResolveURL(context.Background(), "p1", `{"id":"1"}`, song, true, ""); err != nil {
+		t.Fatalf("ResolveURL: %v", err)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(inv.gotBody, &body); err != nil {
+		t.Fatalf("decode captured body: %v", err)
+	}
+	if _, present := body["quality"]; present {
+		t.Fatalf("expected no quality field when hint empty, got %v", body["quality"])
 	}
 }

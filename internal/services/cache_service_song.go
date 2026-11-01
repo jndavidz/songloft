@@ -26,7 +26,7 @@ import (
 // 解耦 cache_service 与 source 包的具体类型,便于后续替换或单测 mock。
 type CacheSongFetcher interface {
 	Fetch(ctx context.Context, song *source.SongInfo, mode source.FetchMode) (*source.FetchResult, error)
-	ResolveURL(ctx context.Context, song *source.SongInfo) (*source.ResolvedURL, error)
+	ResolveURL(ctx context.Context, song *source.SongInfo, qualityHint string) (*source.ResolvedURL, error)
 }
 
 // 全局唯一(per process)的 song-id-indexed 状态。
@@ -467,11 +467,12 @@ func (c *CacheService) AsyncDownloadAndCache(ctx context.Context, song *models.S
 }
 
 // ResolveURL 解析插件歌曲的可下载音频 URL（不下载）。
-func (c *CacheService) ResolveURL(ctx context.Context, song *models.Song) (*source.ResolvedURL, error) {
+// qualityHint 为播放链路的音质档位(musicdl native 拼写,可空=插件自定默认)。
+func (c *CacheService) ResolveURL(ctx context.Context, song *models.Song, qualityHint string) (*source.ResolvedURL, error) {
 	if c.orchestrator == nil {
 		return nil, ErrNoOrchestrator
 	}
-	return c.orchestrator.ResolveURL(ctx, songInfoOf(song))
+	return c.orchestrator.ResolveURL(ctx, songInfoOf(song), qualityHint)
 }
 
 // ClearStaleCachePath 清理过期的缓存路径记录（文件已不存在时调用）。

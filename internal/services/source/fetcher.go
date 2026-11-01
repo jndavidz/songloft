@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -101,9 +102,12 @@ func NewSourceFetcher(opts FetcherOpts) *SourceFetcher {
 
 // musicURLRequest 调用插件 /api/music/url 的请求体。
 // fallback 字段允许插件内自搜(L1 兜底)。
+// quality 为播放链路的音质档位 hint(musicdl native 拼写,如 320k):插件用它向上游
+// 索取对应档位、不足降档;空 = 插件自定默认(缓存下载/元数据探测等非播放路径不携带)。
 type musicURLRequest struct {
 	SourceData json.RawMessage   `json:"source_data"`
 	Fallback   *musicURLFallback `json:"fallback,omitempty"`
+	Quality    string            `json:"quality,omitempty"`
 }
 
 type musicURLFallback struct {
@@ -116,8 +120,9 @@ type musicURLFallback struct {
 // musicURLResponse 插件 /api/music/url 的响应。
 type musicURLResponse struct {
 	URL          string            `json:"url"`
-	Headers      map[string]string `json:"headers,omitempty"`     // 拉取该 URL 时需携带的自定义请求头(如 Referer / User-Agent)
-	SourceData   json.RawMessage   `json:"source_data,omitempty"` // L1 自搜后返回的新音源(可空)
+	Headers      map[string]string `json:"headers,omitempty"`      // 拉取该 URL 时需携带的自定义请求头(如 Referer / User-Agent)
+	BitRateKbps  int               `json:"bitrate_kbps,omitempty"` // 上游实测码率,如实透传(仅日志)
+	SourceData   json.RawMessage   `json:"source_data,omitempty"`  // L1 自搜后返回的新音源(可空)
 	UsedFallback bool              `json:"used_fallback,omitempty"`
 }
 
@@ -130,13 +135,15 @@ type ResolvedURL struct {
 
 // ResolveURL 仅调用插件 /api/music/url 解析出可下载的音频 URL，不下载、不探测、不校验。
 // 用于流式代理场景：先解析 URL，再由 handler 直接代理到客户端。
+// qualityHint 为播放链路的音质档位(musicdl native 拼写);空表示插件自定默认。
 func (f *SourceFetcher) ResolveURL(
 	ctx context.Context,
 	entryPath, sourceData string,
 	song *SongInfo,
 	allowPluginFallback bool,
+	qualityHint string,
 ) (*ResolvedURL, error) {
-	resp, err := f.invokePluginMusicURL(ctx, entryPath, sourceData, song, allowPluginFallback)
+	resp, err := f.invokePluginMusicURL(ctx, entryPath, sourceData, song, allowPluginFallback, qualityHint)
 	if err != nil {
 		return nil, err
 	}
@@ -144,14 +151,16 @@ func (f *SourceFetcher) ResolveURL(
 }
 
 // invokePluginMusicURL 调用插件 /api/music/url 接口解析真实下载 URL。
-// Fetch 和 ResolveURL 共用此方法。
+// Fetch 和 ResolveURL 共用此方法;qualityHint 仅播放链路非空(Fetch 传空,缓存下载按
+// 既有 quality 参数在后端转码定档,不经插件)。
 func (f *SourceFetcher) invokePluginMusicURL(
 	ctx context.Context,
 	entryPath, sourceData string,
 	song *SongInfo,
 	allowPluginFallback bool,
+	qualityHint string,
 ) (*musicURLResponse, error) {
-	reqBody := musicURLRequest{SourceData: json.RawMessage(sourceData)}
+	reqBody := musicURLRequest{SourceData: json.RawMessage(sourceData), Quality: qualityHint}
 	if allowPluginFallback && song != nil {
 		reqBody.Fallback = &musicURLFallback{
 			Enabled:  true,
@@ -184,6 +193,9 @@ func (f *SourceFetcher) invokePluginMusicURL(
 	}
 	if resp.URL == "" {
 		return nil, &PluginInvocationError{PluginEntryPath: entryPath, Reason: "empty url"}
+	}
+	if resp.BitRateKbps > 0 {
+		slog.Info("plugin music/url resolved", "plugin", entryPath, "bitrate_kbps", resp.BitRateKbps)
 	}
 	return &resp, nil
 }
@@ -223,8 +235,8 @@ func (f *SourceFetcher) Fetch(
 		}
 	}
 
-	// 1. 调用插件 music/url
-	resp, err := f.invokePluginMusicURL(ctx, entryPath, sourceData, song, allowPluginFallback)
+	// 1. 调用插件 music/url(Fetch 是缓存下载路径,不携带播放 quality hint)
+	resp, err := f.invokePluginMusicURL(ctx, entryPath, sourceData, song, allowPluginFallback, "")
 	if err != nil {
 		report(OutcomePluginInvocationFail, err.Error(), 0)
 		return nil, err

@@ -426,7 +426,8 @@ func (a *App) Init() error {
 		songRepo.UpdateTagFields,
 		func(ctx context.Context, song *models.Song) (string, map[string]string, error) {
 			if song.IsPluginSourced() {
-				resolved, err := a.cacheService.ResolveURL(ctx, song)
+				// 元数据探测非播放路径,不携带音源档位 hint,解析用插件自定默认档。
+				resolved, err := a.cacheService.ResolveURL(ctx, song, "")
 				if err != nil {
 					return "", nil, err
 				}

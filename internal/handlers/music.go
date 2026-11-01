@@ -1465,6 +1465,11 @@ func (h *SongHandler) GetSongPlay(w http.ResponseWriter, r *http.Request) {
 		targetFormat = "mp3"
 	}
 
+	// source_quality：播放链路的音源档位 hint(musicdl native 拼写 128k/192k/320k)。
+	// 客户端只对网络歌曲追加,后端仅透传给插件 /api/music/url 请求体(归一/降档由
+	// 插件与上游 kwqq-api 单点完成),**不参与后端转码判定**(与 quality 转码参数无关)。
+	sourceQuality := strings.TrimSpace(r.URL.Query().Get("source_quality"))
+
 	// media=video：按视频画面播放。强制直出原容器——忽略 format/quality 转码，
 	// 因为转码走 ffmpeg -vn 会把视频轨丢掉；同时让 serveLocal 按容器真实类型给 Content-Type。
 	videoIntent := r.URL.Query().Get("media") == "video"
@@ -1544,6 +1549,8 @@ func (h *SongHandler) GetSongPlay(w http.ResponseWriter, r *http.Request) {
 		normalize:    normalize,
 		seekSeconds:  seekSeconds,
 		speed:        speed,
+
+		sourceQuality: sourceQuality,
 	}
 
 	switch song.Type {
@@ -1569,6 +1576,10 @@ type servePlayOptions struct {
 	normalize    bool    // EBU R128 音量均衡
 	seekSeconds  float64 // 从第 N 秒起播，0 = 从头
 	speed        float64 // 播放倍速 [0.5, 2.0]，1.0 = 不变速
+
+	// sourceQuality 音源档位 hint（source_quality 参数，musicdl native 拼写），
+	// 仅 serveRemote 的插件解析路径消费——透传进 /api/music/url，不参与转码判定。
+	sourceQuality string
 }
 
 // parseSeekSeconds 解析 seek 查询参数。
@@ -2518,7 +2529,7 @@ func (h *SongHandler) serveRemote(w http.ResponseWriter, r *http.Request, song *
 		defer cancelResolve()
 		trackedCtx, releaseResolve := h.trackActivity(resolveCtx, sk, song.ID, playactivity.CatPlay)
 		defer releaseResolve()
-		resolved, err := h.cacheService.ResolveURL(trackedCtx, song)
+		resolved, err := h.cacheService.ResolveURL(trackedCtx, song, opts.sourceQuality)
 		if err != nil {
 			slog.Warn("resolve url failed", "songId", song.ID, "error", err)
 			sk := playactivity.SessionFromContext(r.Context())
