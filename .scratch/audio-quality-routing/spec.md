@@ -82,8 +82,11 @@ Source: 会话讨论（songloft 音质语义考证 + kwqq 链路现状 + 联网�
 | 8 | Flutter 全套件 | 家庭 PC `flutter test`（791 过 / 4 败） | 失败集与父提交基线逐项一致（既存环境项），零回归 |
 | 9 | 上游降档语义 | NAS kwqq-api 只读探测（晴天/kuwo id=228908） | `320k`→320kbps verified；`192k`→**上游 snap 返回 320k**（`cached:true`）；`flac`→返回真 FLAC 2000kbps（`ENABLE_LOSSLESS=true` 的 NAS）——实证"无损不下发"防御（D1）的必要性 |
 | 10 | Android 适配 | 家庭 PC `flutter build apk --debug`（JDK17） | 编译通过（D8：无原生改动、可构建性证明） |
+| 11 | 跨项目离线验收 | workspace `music_ecosystem.py --lab`（修复 runner 孤儿注册 + 补齐 bridge/musicdl venv 与 ffmpeg 后） | **8 passed / 2 failed / 0 blocked**（修复前 2/1/7）；musicdl 五套件 197/0 全绿；两失败均为 Windows 既存（bridge shell-quoting/temp-cleanup + songloft jsplugin fs-path，基线复现、与本次零交集） |
+| 12 | **服务端全链路 E2E** | 办公室真实 server（`songloft.exe` :18091）+ 上传 kwqq 插件包 2026.11.2 + 加歌（kuwo id=228908）+ 三档位播放探针 | 三探针全部 **HTTP 206 + ID3 魔数**；server 日志实证：`tier=192k`（hint 原样透传、上游 snap 返回 320kbps 如实）、`tier=320k`（flac 探针被防御归一——无损不透传）、加歌元数据探测 `tier=320k`（恒空 hint，D4）；第 4 次（无 hint）命中后台缓存直出、不再解析 |
+| 13 | SDK 发版通道 | `git push --dry-run`（upstream）+ `npm whoami` | **双通道均无凭证**：GitHub 403 denied to jndavidz；npm ENEEDAUTH。非本次可解，kwqq 已不受阻塞（自持路由）；发版手册见 Further Notes |
 
-**仍需真机/人工的收尾**（非阻塞门，与 S-07 真机授权一致）：安卓真机冒烟四项（后台播放/通知栏/audio focus/插件歌起播延迟目测）；kwqq 插件在真机音箱上的档位端到端听感确认；SDK 2.19.0 npm 发版与 toolchain 分支推送（发布渠道决策，kwqq 已不受此阻塞）。
+**仍需真机/人工的收尾**（非阻塞门，与 S-07 真机授权一致）：安卓真机冒烟四项（后台播放/通知栏/audio focus/插件歌起播延迟目测；debug APK 已备于家庭 PC `clients/player/build/app/outputs/flutter-apk/app-debug.apk`）；音箱端到端听感确认（服务端链路已 E2E 实证，见 #12）；SDK 2.19.0 发版需用户侧凭证（GitHub 对 songloft-org 无写权限 / npm 无 token）。
 
 ## Further Notes
 
@@ -92,6 +95,7 @@ Source: 会话讨论（songloft 音质语义考证 + kwqq 链路现状 + 联网�
 1. MusicFree 官方插件规范：`getMediaSource(musicItem, quality: IQualityKey)`，`IQualityKey = "low"|"standard"|"high"|"super"`，返回 `{url, headers?, userAgent?, size?}`（[MusicFreePluginTemplate types/plugin.d.ts:43,211-214](https://github.com/maotoumao/MusicFreePluginTemplate)——客户端带档位、插件/源侧自决降档，与 D1/D4 同构）。概述佐证：[MusicFree 插件化架构](https://blog.csdn.net/gitblog_00224/article/details/157080669)、[MusicFree 官方仓库](https://github.com/maotoumao/musicfree)。
 2. Subsonic/OpenSubsonic 语义：`maxBitRate` 是**封顶**而非目标码率——源 ≤ 上限回原文件、超出才转码、"never up"（[OpenSubsonic 扩展讨论](https://github.com/opensubsonic/open-subsonic-api)、[Navidrome #2695](https://github.com/navidrome/navidrome/issues/2695)、[Airsonic #1138](https://github.com/airsonic/airsonic/issues/1138)）。佐证 D2（本地直出）与 D3（播放期封顶语义）；同时说明 songloft 现行"quality= 按请求码率无条件产 CBR"是偏离业界惯例的设计，本 spec 不改转码引擎、只在路由层绕开。
 3. musicdl v2 四档归一与降档证据链：`API-REFERENCE.md` §quality 路由（MusicFree 四档归一表、`delivered_quality` 按实测码率推导、`downgraded` 如实标注）——kwqq 链路"索取后降档"的既有事实源。
+4. **SDK 2.19.0 发版手册**（双通道均需用户侧动作，工具链分支 `feat/music-url-quality-hint`=`27d3602` 已备好）：① fork 路线——GitHub 网页 fork `songloft-org/plugin-toolchain` → `git remote add fork https://github.com/jndavidz/plugin-toolchain.git && git push fork feat/music-url-quality-hint` → npm 账号建 `@songloft` scope 权限或改发 `@jndavidz/plugin-sdk`（改 kwqq 依赖名）→ `cd plugins/toolchain/packages/plugin-sdk && npm publish`；② 协作路线——让 songloft-org 邀请 jndavidz 为 toolchain collab → 直接 `git push origin feat/music-url-quality-hint` → npm publish。发版后 kwqq 可把自持路由换回 `createMusicUrlHandler` + `resolveQualityHint` 导入（逻辑同表）。
 4. musicdl 自研档位标准（ADR-0003 单点权威，`server/quality.py` 源码级核验）：native tiers 主词表 `auto/128k/192k/320k/flac/hires/master/surround51`；`ALIASES` 接受 MusicFree 四档与 `5.1` 等别名；`REAL_192K = {netease}`（其余源 192k snap 到 320k——酷我 192kmp3 为假档实测降 128）；`ALLOWED_TIERS` per-source 白名单，越权回落 `auto`；`LOSSLESS_TIERS` 受 `ENABLE_LOSSLESS` 门控。本 spec D1/D6 的"主词表 + 透传 + 单点归一"即按该文件纪律落笔。
 5. 上游合并核验（2026-11-02，songloft HEAD = `5b710aa` Merge upstream/main）：用户合并的 6 个上游提交（miot 三件 / 曲库全选批量删除 / miot 插件 2026.11.1.1 / HLS FFmpeg 工具构建）经 `diff 54df447..5b710aa` 验证**均未触碰**本 spec 两个 seam（`clients/player/lib` URL 构造、`internal/services/source` 解析契约、插件 SDK/kwqq）；spec 假设仍成立。
 
