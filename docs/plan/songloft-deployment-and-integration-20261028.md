@@ -160,7 +160,9 @@
 - **备份**：`/volume2/docker/songloft/data` 全量 + `/volume1/music` 的元数据（曲库本身另有备份策略）。
 - **监控**：容器 healthcheck + `/api/v1/health`；日志文件 `logs/` 可导出。
 
-### 2.7 外网访问（2026-11-01 起生效）
+### 2.7 外网访问（2026-11-01 起生效；2026-11-02 公网验证通过）
+
+**公网验证记录（2026-11-02，全部经 `https://songloft.pegbiotec.com:4433` 真实公网链路）**：DNS 解析 `123.233.212.2`、TLS 证书校验通过、`/api/v1/health` 200；公网域登录 200；Bearer 取歌曲列表 200；`/songs/{id}/play?access_token=...` 带 Range → **206**（播放内核同款 query token 取流方式）；同 URL 无 token → **401**（反代层未放水）。
 
 **拓扑**：客户端 → Lucky（10.10.10.1，`https://songloft.pegbiotec.com:4433`，TLS 终结，复用 pegbiotec.com 泛域名证书与 DDNS）→ `http://10.10.10.2:58091`（明文内网转发）。与 musicfree-plugins 七音源插件同一条公网入口（参考其「公网入口 + 服务层自有认证」模式）。
 
