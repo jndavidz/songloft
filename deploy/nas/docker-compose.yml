@@ -16,7 +16,8 @@ services:
       - MUSIC_DIR=/app/music
       - LISTEN_PORT=58091
       - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=songloft2026
+      # 口令不入库：同目录 .env 提供（600，仅 NAS 本地），2026-11-01 轮换（外网化前置）
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD missing, set it in deploy .env}
       - TZ=Asia/Shanghai
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:58091/"]

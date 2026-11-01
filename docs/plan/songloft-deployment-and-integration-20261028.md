@@ -144,9 +144,9 @@
 
 ### 2.4 配置与鉴权
 
-- 环境变量：`LISTEN_PORT=58091`、`DB_PATH=/app/data/songloft.db`、`MUSIC_DIR=/app/music`、`ADMIN_USERNAME=admin`、`ADMIN_PASSWORD`（见 NAS compose，勿写入文档）、`TZ=Asia/Shanghai`。
-- 仅 LAN：`http://10.10.10.2:58091`，无 TLS；未做公网映射。管理口令 + access token 都走明文 HTTP，安全边界等于家庭 LAN。
-- access token：7 天；refresh token 30 天；媒体 URL 里会带 `access_token`，注意日志/截图脱敏。
+- 环境变量：`LISTEN_PORT=58091`、`DB_PATH=/app/data/songloft.db`、`MUSIC_DIR=/app/music`、`ADMIN_USERNAME=admin`、`ADMIN_PASSWORD`（2026-11-01 起经 NAS 本地 `/volume2/docker/songloft/.env`（0600，不入库）注入，compose 用 `${ADMIN_PASSWORD:?}` 引用、缺失即拒启；仓库 `deploy/nas/.env.example` 为样例）、`TZ=Asia/Shanghai`。
+- 内网 `http://10.10.10.2:58091`，无 TLS（明文，边界 = 家庭 LAN）；外网 `https://songloft.pegbiotec.com:4433`（Lucky TLS 反代，2026-11-01 起生效，见 §2.7）。
+- access token：7 天；refresh token 30 天；媒体 URL 里会带 `access_token`，注意日志/截图脱敏（外网化后该 query token 也会进 Lucky 访问日志，见 §2.7）。
 
 ### 2.5 运行观察
 
@@ -159,6 +159,22 @@
 - **回滚**：保留上一版镜像 tag（`songloft-fork:previous` 之类）；数据卷向后兼容由上游迁移保证，降级需谨慎。
 - **备份**：`/volume2/docker/songloft/data` 全量 + `/volume1/music` 的元数据（曲库本身另有备份策略）。
 - **监控**：容器 healthcheck + `/api/v1/health`；日志文件 `logs/` 可导出。
+
+### 2.7 外网访问（2026-11-01 起生效）
+
+**拓扑**：客户端 → Lucky（10.10.10.1，`https://songloft.pegbiotec.com:4433`，TLS 终结，复用 pegbiotec.com 泛域名证书与 DDNS）→ `http://10.10.10.2:58091`（明文内网转发）。与 musicfree-plugins 七音源插件同一条公网入口（参考其「公网入口 + 服务层自有认证」模式）。
+
+**认证裁决（参考 musicfree 教训后的差异点）**：**不在 Lucky 层加 Basic/API-Key**。理由：① songloft 全部 API 已走全局 `AuthMiddleware`（JWT Bearer 优先，`?access_token=` query 兜底），服务层认证已闭环，musicfree 需要 X-API-Key 是因为其 API 服务自身认证弱；② Flutter 播放内核带不了自定义 header（`url_helper.dart` 注释），Basic 头会直接破坏取流；③ Lucky 的 Basic 实测只拦根路径、不能作为唯一防线（musicfree `API-SERVICES.md` §3）。
+
+**客户端配置（零代码，机制现成）**：服务器列表建两条目——内网 `http://10.10.10.2:58091` 与外网 `https://songloft.pegbiotec.com:4433`，**各登录一次**；启动时 `ServerProbe.pickFirstReachable`（`startup_gate.dart:221`）并行探测两地址的 `/api/v1/health`（2.5s 超时）自动选可达项，内外网切换无感。
+
+**口令轮换记录（2026-11-01，外网化前置）**：`ADMIN_PASSWORD` 已从明文入库的 compose 轮换为强随机值并移出 git——NAS 侧 `/volume2/docker/songloft/.env`（0600）注入，compose 改 `${ADMIN_PASSWORD:?}` 引用；实测新口令登录 200、旧口令 401、容器内 env 与 `.env` md5 一致。git 历史中残留的旧口令 `songloft2026` 随轮换作废，不洗历史。
+
+**风险与缓解**：
+- `/api/v1/health` 公开可探测（返回仅 `{"status":"ok"}`，无敏感字段，客户端探测必需）。
+- 媒体 URL 的 query token 会进 Lucky 访问日志 → 外网设备建议用**个人令牌**（`POST /api/v1/auth/personal-tokens`，仅创建时返回一次、可单独吊销）替代登录 token；Lucky 日志按现有留存策略轮转。
+- 管理面/插件管理随公网暴露，边界 = JWT + admin 口令强度（已轮换为强随机）。
+- `:58091` 本体仍**不直接端口映射**公网——公网唯一入口是 Lucky 反代。
 
 ---
 
@@ -346,7 +362,7 @@ LX06 语音 ─→ bridge:9092 ──URL──────┴→ Songloft:58091 
 | **P2 队列语义收口** | bridge 维护语音会话队列，逐首取 URL；`next/prev` 走桥队列，空则回落设备队列；App 投送态的缺口在文档与 UI 上明示 | 语音连播 5 首按序；"下一首/上一首"10 次成功率 ≥95% | 与设备队列状态竞态 |
 | **P3 TTS 与音量** | 实测 `casting_pause/resume` 对 Songloft 投送是否幂等并补超时；定音量唯一 owner | 播报不吞歌、播完必恢复；无音量重播 | 状态机竞态；真机窗口 |
 | **P4 曲库收敛** | 扫描排除下载临时目录；`1028:100` 可读；跨源去重（local vs remote）列为后续需求 | webgui 下载 → 扫描 → App 可播，无需重启 | 权限 000；重复条目 |
-| **P5 运维与安全** | healthcheck + `/health` + bridge `/api/status` + musicdl `/metrics`；升级 SOP；:58091 不出公网；口令脱敏与轮换 | 一次完整升级+回滚演练通过 | 老内核依赖；上游破坏性变更 |
+| **P5 运维与安全** | healthcheck + `/health` + bridge `/api/status` + musicdl `/metrics`；升级 SOP；:58091 不直接端口映射出公网（外网仅经 Lucky TLS 反代，见 §2.7）；口令脱敏与轮换 | 一次完整升级+回滚演练通过 | 老内核依赖；上游破坏性变更 |
 
 ### 6.3 明确不做
 
@@ -368,11 +384,11 @@ LX06 语音 ─→ bridge:9092 ──URL──────┴→ Songloft:58091 
 
 - **许可**：上游 Apache-2.0（含 NOTICE/TERMS/PRIVACY）；fork 保持同许可，修改需保留声明。
 - **遥测**：fork 构建不注入 Tracely 凭据 → 客户端不初始化；运行日志无上报错误。
-- **攻击面**：:58091 仅 LAN、无 TLS；admin 口令 + 7 天 access token；插件路由带宿主 JWT；kwqq 内网免 key。不要把 :58091 映射到公网。
+- **攻击面**（2026-11-01 外网化后修订）：内网 `:58091` 无 TLS（边界 = 家庭 LAN）；外网唯一入口 = Lucky TLS 反代 `songloft.pegbiotec.com:4433`（见 §2.7），认证边界 = JWT（全 API 强制）+ admin 口令（已轮换强随机）；`/api/v1/health` 公开。不要把 :58091 端口映射到公网（绕过 Lucky 的 TLS 与日志面）。
 - **文件权限**：容器非 root（1028:100），下载/扫描文件需对该用户可读；webgui 已修 `000` 权限问题。
 - **上游风险**：单人主导、发版频繁；插件依赖 `/api/v1/songs/remote` 与 `player.setQueue` 两个宿主契约，升级必须回归；fork 的 CI 与 `Dockerfile.nas` 要跟随上游构建参数变化。
 - **运行镜像落后仓库 6 个 commit**：功能影响小，但应在下次变更时重建并对齐版本号。
-- **凭据 hygiene**：媒体 URL 带 token（日志脱敏）；musicdl 注册表文档含明文口令；NAS compose 含 admin 口令（勿入库）。
+- **凭据 hygiene**：媒体 URL 带 token（日志脱敏，外网化后亦进 Lucky 访问日志，见 §2.7）；musicdl 注册表文档含明文口令；NAS compose 的 admin 口令已于 2026-11-01 移出 git（`.env` 0600 注入），git 历史残留旧口令已随轮换作废。
 
 ---
 
@@ -391,6 +407,7 @@ LX06 语音 ─→ bridge:9092 ──URL──────┴→ Songloft:58091 
 | 9 | bridge 语音播放改走 Songloft URL | 未实施（P1）；需先解决 token 续期 |
 | 10 | bridge `playback_next/prev` 真机验证 | 未验证（open-xiaoai 2026-10-28 记录：仅设备自有队列、DLNA 投送中无效） |
 | 11 | 跨源去重（本地 vs remote） | 未实现，仅在 kwqq `dedup_key` 维度去重 |
+| 12 | cloudflared 插件（无公网 IP 场景备选路线） | 未构建发布（`plugin.json` entryHash/zipHash 空串、`bin/` 空）；已知 bug：`main.ts:37-44` `getHostConfig` 调 `/api/v1/configs/*` 会被插件票据 403（开发指南明确该 scope 禁区），平台/端口探测静默回退默认值；quick tunnel 每次重启换随机域名，客户端需重填。2026-11-01 裁决：主路线走 Lucky 反代（§2.7），本插件修复发布顺延 |
 
 ---
 
