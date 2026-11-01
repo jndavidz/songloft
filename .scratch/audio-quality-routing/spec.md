@@ -86,7 +86,7 @@ Source: 会话讨论（songloft 音质语义考证 + kwqq 链路现状 + 联网�
 | 12 | **服务端全链路 E2E** | 办公室真实 server（`songloft.exe` :18091）+ 上传 kwqq 插件包 2026.11.2 + 加歌（kuwo id=228908）+ 三档位播放探针 | 三探针全部 **HTTP 206 + ID3 魔数**；server 日志实证：`tier=192k`（hint 原样透传、上游 snap 返回 320kbps 如实）、`tier=320k`（flac 探针被防御归一——无损不透传）、加歌元数据探测 `tier=320k`（恒空 hint，D4）；第 4 次（无 hint）命中后台缓存直出、不再解析 |
 | 13 | SDK 发版通道 | `git push --dry-run`（upstream）+ `npm whoami` | **双通道均无凭证**：GitHub 403 denied to jndavidz；npm ENEEDAUTH。非本次可解，kwqq 已不受阻塞（自持路由）；发版手册见 Further Notes |
 
-**仍需真机/人工的收尾**（非阻塞门，与 S-07 真机授权一致）：安卓真机冒烟四项（后台播放/通知栏/audio focus/插件歌起播延迟目测；debug APK 已备于家庭 PC `clients/player/build/app/outputs/flutter-apk/app-debug.apk`）；音箱端到端听感确认（服务端链路已 E2E 实证，见 #12）；SDK 2.19.0 发版需用户侧凭证（GitHub 对 songloft-org 无写权限 / npm 无 token）。
+**仍需真机/人工的收尾**（非阻塞门，与 S-07 真机授权一致）：① **kwqq `2026.11.2` 部署 NAS**——现网 songloft 容器仍跑 `2026.10.28`，新包在 `plugins/src/kwqq/dist/kwqq.jsplugin.zip`，经 songloft 管理页或 `POST /api/v1/jsplugins/upload` 上传即生效（无 hint 行为与旧版逐字节一致，向后兼容）；② 安卓真机冒烟四项（后台播放/通知栏/audio focus/插件歌起播延迟目测；debug APK 已备于家庭 PC `clients/player/build/app/outputs/flutter-apk/app-debug.apk`）；③ 音箱端到端听感确认（服务端链路已 E2E 实证，见 #12）；④ SDK 2.19.0 发版需用户侧凭证（GitHub 对 songloft-org 无写权限 / npm 无 token）。
 
 ## Further Notes
 
