@@ -1419,6 +1419,7 @@ func (h *SongHandler) UpdateSongLyrics(w http.ResponseWriter, r *http.Request) {
 // @Param id path int true "歌曲 ID"
 // @Param format query string false "目标转码格式（如 mp3、ogg），用于平台兼容性转码"
 // @Param quality query string false "目标音质码率（128/192/320），不传或不合法值表示原始音质。指定后默认转码为 mp3（除非同时指定了 format）"
+// @Param source_quality query string false "音源档位 hint（musicdl native 拼写：128k/192k/320k）。播放链路的音质路由参数：客户端只对网络歌曲追加，服务端把它原样透传给音源插件 /api/music/url 请求体的 quality 字段（向源索取对应档位、不足由插件/上游降档），**不参与本服务转码判定**（转码请用 quality）；本地歌曲与电台不追加；非法值由插件侧防御归一为 320k。与 quality 互不干扰，可同时缺省"
 // @Param track query int false "抽取指定音频流播放（audio-relative 0-based，对应 ffmpeg -map 0:a:N）。用于 Web 端双音轨（原唱/伴奏 mka）切轨：后端抽出单条音轨，AAC 编码时无损 remux 成 m4a、否则转 mp3。缺省/负数=不抽轨；与 media=video 互斥"
 // @Param prefetch query string false "传 1 时异步预热缓存/转码，立即返回 202"
 // @Param media query string false "传 video 时按视频播放：直出原容器（忽略 format/quality 转码，避免 -vn 丢画面），并按容器真实类型返回 Content-Type（如 video/mp4）。用于应用内视频画面渲染与 DLNA 视频投屏"

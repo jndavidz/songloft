@@ -10059,6 +10059,12 @@
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "音源档位 hint（musicdl native 拼写：128k/192k/320k）。播放链路的音质路由参数：客户端只对网络歌曲追加，服务端把它原样透传给音源插件 /api/music/url 请求体的 quality 字段（向源索取对应档位、不足由插件/上游降档），**不参与本服务转码判定**（转码请用 quality）；本地歌曲与电台不追加；非法值由插件侧防御归一为 320k。与 quality 互不干扰，可同时缺省",
+                        "name": "source_quality",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "抽取指定音频流播放（audio-relative 0-based，对应 ffmpeg -map 0:a:N）。用于 Web 端双音轨（原唱/伴奏 mka）切轨：后端抽出单条音轨，AAC 编码时无损 remux 成 m4a、否则转 mp3。缺省/负数=不抽轨；与 media=video 互斥",
                         "name": "track",
@@ -10174,6 +10180,12 @@
                         "type": "string",
                         "description": "目标音质码率（128/192/320），不传或不合法值表示原始音质。指定后默认转码为 mp3（除非同时指定了 format）",
                         "name": "quality",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "音源档位 hint（musicdl native 拼写：128k/192k/320k）。播放链路的音质路由参数：客户端只对网络歌曲追加，服务端把它原样透传给音源插件 /api/music/url 请求体的 quality 字段（向源索取对应档位、不足由插件/上游降档），**不参与本服务转码判定**（转码请用 quality）；本地歌曲与电台不追加；非法值由插件侧防御归一为 320k。与 quality 互不干扰，可同时缺省",
+                        "name": "source_quality",
                         "in": "query"
                     },
                     {

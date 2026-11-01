@@ -8,7 +8,6 @@ import {
   jsonResponse,
   parseQuery,
   createSearchHandler,
-  createMusicUrlHandler,
 } from '@songloft/plugin-sdk'
 
 // 音质档位 hint 防御归一（spec: songloft .scratch/audio-quality-routing D1/D6）。
@@ -16,10 +15,11 @@ import {
 // kwqq 构建走 npm 已发布版，故此处内联；归一/192k snap/per-source 白名单的
 // 单点真相在 kwqq-api 的 quality.py（ADR-0003），两张表都只做"合法透传/越权归 320k"。
 const QUALITY_TIERS = ['128k', '192k', '320k', 'low', 'standard', 'high', 'super']
+const DEFAULT_QUALITY_TIER = '320k'
 function resolveQualityHint(raw, fallback) {
   const v = (raw == null ? '' : String(raw)).trim().toLowerCase()
   if (!v) return fallback
-  return QUALITY_TIERS.includes(v) ? v : '320k'
+  return QUALITY_TIERS.includes(v) ? v : DEFAULT_QUALITY_TIER
 }
 
 const ALL_SOURCES = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou', 'bilibili']
@@ -211,31 +211,56 @@ router.post('/api/search', createSearchHandler({
 }))
 
 // 播放直链：source_data {s,i,c} → kwqq /{s}/song/url?quality=…（320k 封顶）
-// 音质档位路由（spec: songloft .scratch/audio-quality-routing D6）：
-//   播放链路带 quality hint（musicdl native/四档拼写）时经 resolveQualityHint 防御归一后
-//   透传（192k snap / per-source 白名单由 kwqq-api quality.py 单点完成）；无 hint（缓存
-//   下载/元数据探测）时维持插件配置档 cfg.quality（默认 320k）。
-router.post('/api/music/url', createMusicUrlHandler({
-  resolveUrl: async (sd, ctx) => {
-    if (!sd || !sd.s || !sd.i) throw new Error('source_data.s/i required')
-    const cfg = await getConfig()
-    const tier = ctx && ctx.quality ? resolveQualityHint(ctx.quality, cfg.quality || '320k') : (cfg.quality || '320k')
-    let path = '/' + sd.s + '/song/url?id=' + encodeURIComponent(sd.i) + '&quality=' + tier
-    if (sd.s === 'migu' && sd.c) path += '&copyright=' + encodeURIComponent(sd.c)
+// 音质档位路由（spec: songloft .scratch/audio-quality-routing D5/D6）：
+//   本路由自持而不用 SDK 的 createMusicUrlHandler——npm 已发布的 SDK 2.18.0 以单参调
+//   resolveUrl，context.quality 透传是 2.19.0 行为，依赖它 hint 会静默丢失（评审查实）。
+//   契约与 SDK 约定一致：POST {source_data, quality?, fallback?} →
+//   200 {url, headers?, source_data?, used_fallback?} / 404 {error:'source_not_available'}。
+//   hint 经内联 resolveQualityHint 防御归一（合法集透传/越权归 320k）；无 hint 维持
+//   cfg.quality；192k snap / per-source 白名单由 kwqq-api quality.py 单点完成。
+router.post('/api/music/url', async (req) => {
+  let body = {}
+  if (req.body) {
+    try {
+      body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {})
+    } catch (e) {
+      return jsonResponse({ error: 'invalid json body' }, 400)
+    }
+  }
+  const sd = body.source_data
+  if (!sd || typeof sd !== 'object') {
+    return jsonResponse({ error: 'source_data is required' }, 400)
+  }
+  const cfg = await getConfig()
+  const tier = resolveQualityHint(body.quality, cfg.quality || DEFAULT_QUALITY_TIER)
+  const resolveOnce = async (sd2) => {
+    if (!sd2 || !sd2.s || !sd2.i) throw new Error('source_data.s/i required')
+    let path = '/' + sd2.s + '/song/url?id=' + encodeURIComponent(sd2.i) + '&quality=' + tier
+    if (sd2.s === 'migu' && sd2.c) path += '&copyright=' + encodeURIComponent(sd2.c)
     const data = await kwqq(cfg, path, 10000)
     if (!data || !data.url) throw new Error('kwqq 未返回直链')
     const out = { url: data.url }
     if (data.headers && Object.keys(data.headers).length) out.headers = data.headers
-    console.log('[kwqq] url ' + sd.s + '/' + sd.i + ' ext=' + data.ext + ' ' + data.bitrate_kbps + 'kbps tier=' + tier)
+    console.log('[kwqq] url ' + sd2.s + '/' + sd2.i + ' ext=' + data.ext + ' ' + data.bitrate_kbps + 'kbps tier=' + tier)
     return out
-  },
-  // 主源失败换源：按宿主下发的 title/artist 自搜（kwqq 内部已按源顺序尝试）
-  fallbackSearch: async (hint) => {
-    if (!hint || !hint.title) return null
-    const hit = await findHit(hint.title, hint.artist || '')
-    return hit ? { source_data: hit.source_data, title: hit.title, artist: hit.artist } : null
-  },
-}))
+  }
+  try {
+    return jsonResponse(await resolveOnce(sd))
+  } catch (e) { /* 落入 fallback */ }
+  const fb = body.fallback
+  if (fb && fb.enabled && fb.title) {
+    try {
+      const hit = await findHit(fb.title, fb.artist || '')
+      if (hit && hit.source_data) {
+        const out = await resolveOnce(hit.source_data)
+        out.source_data = hit.source_data
+        out.used_fallback = true
+        return jsonResponse(out)
+      }
+    } catch (e) { /* 继续到 404 */ }
+  }
+  return jsonResponse({ error: 'source_not_available' }, 404)
+})
 
 // 歌词提供者（宿主对无歌词歌曲调用，预算 15s）
 router.get('/lyric-search', async (req) => {
