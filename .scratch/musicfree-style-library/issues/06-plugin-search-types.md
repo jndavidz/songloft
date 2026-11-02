@@ -22,3 +22,8 @@
 - 透传响应是上游原样 JSON（无 {code,msg,data} 信封），插件侧 netease 调用自持裸 fetch，不走 kwqq() 的信封拆包。
 - 测试：kwqq 插件 node --test 全绿（browse 24 项 + music-url 6 项回归）。
 - Not run：`music_ecosystem.py --lab`（本批 kwqq-api 零改动，跨项目回归面不存在）；curl 全链真机验证（无设备窗口）。
+
+### review 遗留（2026-11-03）
+
+- server 侧「501/超时的错误包装」测试项随复用 catch-all 的修订**由插件 Node 测试承担**（browse 24 项含 501/超时三态），server 只保留 401/403 接线断言——spec Testing Decisions 的原措辞按修订口径解释。
+- 判定项留后续：`/api/search` 内联聚合与 `searchMusicAggregated` 的同构重复（刻意保留既有路径原状）、9 个 browse 路由的 parseBody→校验→browseHandler 样板可表驱动收拢、`albumInfo` 的 501 靠 message 字符串分类（可改显式 error code）、`/browse/search` 类型搜索的 kugou 通道实测后可补。

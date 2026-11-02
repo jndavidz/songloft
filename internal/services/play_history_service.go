@@ -69,38 +69,7 @@ func (s *PlayHistoryService) List(ctx context.Context, contextType, contextKey s
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
-		return []models.PlayHistoryEntry{}, nil
-	}
-
-	ids := make([]int64, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, row.SongID)
-	}
-	songs, err := s.db.SongRepository().ListByIDs(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	byID := make(map[int64]*models.Song, len(songs))
-	for _, song := range songs {
-		byID[song.ID] = song
-	}
-
-	// 按 rows 的顺序输出（ListByIDs 的返回顺序不保证）。
-	// 查不到的 song_id 直接跳过：外键级联下不该发生，属防御性处理。
-	entries := make([]models.PlayHistoryEntry, 0, len(rows))
-	for _, row := range rows {
-		song, ok := byID[row.SongID]
-		if !ok {
-			continue
-		}
-		entries = append(entries, models.PlayHistoryEntry{
-			Song:      song,
-			PlayedAt:  row.PlayedAt,
-			PlayCount: row.PlayCount,
-		})
-	}
-	return entries, nil
+	return s.hydrateRows(ctx, rows)
 }
 
 // MaxRecentPlayHistory 「最近播放」跨上下文查询单次返回条数上限。
@@ -126,7 +95,10 @@ func (s *PlayHistoryService) ListRecent(ctx context.Context, limit, offset int) 
 	if err != nil {
 		return models.PlayHistoryListResponse{}, err
 	}
-	entries := s.hydrateRows(ctx, rows)
+	entries, err := s.hydrateRows(ctx, rows)
+	if err != nil {
+		return models.PlayHistoryListResponse{}, err
+	}
 	return models.PlayHistoryListResponse{Items: entries, Total: total}, nil
 }
 
@@ -135,10 +107,11 @@ func (s *PlayHistoryService) ClearAll(ctx context.Context) (int, error) {
 	return s.db.PlayHistoryRepository().ClearAll(ctx)
 }
 
-// hydrateRows 按 rows 顺序把歌曲详情水合进历史条目，查不到的 song_id 跳过（防御性）。
-func (s *PlayHistoryService) hydrateRows(ctx context.Context, rows []database.PlayHistoryRow) []models.PlayHistoryEntry {
+// hydrateRows 按 rows 顺序把歌曲详情水合进历史条目（List 与 ListRecent 共用）。
+// 查不到的 song_id 跳过：外键级联下不该发生，属防御性处理；ListByIDs 失败如实上抛。
+func (s *PlayHistoryService) hydrateRows(ctx context.Context, rows []database.PlayHistoryRow) ([]models.PlayHistoryEntry, error) {
 	if len(rows) == 0 {
-		return []models.PlayHistoryEntry{}
+		return []models.PlayHistoryEntry{}, nil
 	}
 	ids := make([]int64, 0, len(rows))
 	for _, row := range rows {
@@ -146,7 +119,7 @@ func (s *PlayHistoryService) hydrateRows(ctx context.Context, rows []database.Pl
 	}
 	songs, err := s.db.SongRepository().ListByIDs(ctx, ids)
 	if err != nil {
-		return []models.PlayHistoryEntry{}
+		return nil, err
 	}
 	byID := make(map[int64]*models.Song, len(songs))
 	for _, song := range songs {
@@ -164,7 +137,7 @@ func (s *PlayHistoryService) hydrateRows(ctx context.Context, rows []database.Pl
 			PlayCount: row.PlayCount,
 		})
 	}
-	return entries
+	return entries, nil
 }
 
 // Clear 清空该上下文的全部播放历史，返回删除条数。

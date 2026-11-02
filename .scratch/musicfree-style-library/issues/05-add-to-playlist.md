@@ -15,3 +15,7 @@
 ## Notes（2026-11-03 落地）
 
 - 离线施工完成；真机 UI 冒烟 Not run（本会话无设备窗口）。
+
+### review 遗留（2026-11-03）
+
+- **桌面端播放页同样加了入口**——spec Out of Scope 写「本轮只做 Android player」，桌面端共用 mobile_player 同族工具行，按钮一并覆盖（桌面端正可用、无新风险）；如需严格收敛 Android 范围可再摘除。

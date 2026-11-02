@@ -864,7 +864,7 @@ function registerBrowseRoutes(router) {
     if (!String(body.keywords || '').trim()) return jsonResponse({ error: 'keywords required' }, 400)
     const cfg = await getConfig()
     const cacheKey = 'bs|' + String(body.type || 'music') + '|' + String(body.keywords || '').trim() +
-      '|' + (Number(body.page) || 1) + '|' + cfg.sources.join(',')
+      '|' + (Number(body.page) || 1) + '|' + (Number(body.limit) || 20) + '|' + cfg.sources.join(',')
     return browseHandler(cacheKey, () => browseSearch(body))
   })
   router.post('/album/info', async (req) => {
@@ -920,8 +920,16 @@ function registerBrowseRoutes(router) {
     if (!String(body.id || '').trim() && !String(body.title || '').trim()) {
       return jsonResponse({ error: 'id 或 title 至少提供一个' }, 400)
     }
-    return browseHandler('cmt|' + String(body.id || '') + '|' + String(body.title || '') + '|' +
-      (Number(body.page) || 1) + '|' + (Number(body.limit) || 20), () => musicComments(body))
+    const key = 'cmt|' + String(body.id || '') + '|' + String(body.title || '') + '|' +
+      String(body.artist || '') + '|' + (Number(body.page) || 1) + '|' + (Number(body.limit) || 20)
+    try {
+      return jsonResponse(await musicComments(body))
+    } catch (e) {
+      const msg = String((e && e.message) || e)
+      console.log('[kwqq] comments error: ' + msg)
+      if (msg.indexOf('501') >= 0) return jsonResponse({ error: '该源暂不支持此能力', unsupported: true }, 501)
+      return jsonResponse({ error: msg }, 502)
+    }
   })
 }
 

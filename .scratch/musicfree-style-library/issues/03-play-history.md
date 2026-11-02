@@ -20,3 +20,7 @@
   - SQL 用 JOIN 子查询保持列类型（MAX/SUM 聚合会让 sqlc 推成 interface{}）；同歌同时刻撞行的极小概率重复由仓储层按 song_id 去重兜底
 - 验证：服务层测试 TestPlayHistoryServiceListRecentCrossContext（去重/倒序/分页/ClearAll）；swagger 已重生成；middleware/database/app 包 go test 全绿。
 - Not run：真机 UI 冒烟（本会话无设备）。
+
+### review 遗留（2026-11-03）
+
+- 「清空全部播放记录」= 清空**所有上下文**的历史（含各歌单的「上次听到哪」），破坏面大于 UI 所见——属该端点的既定语义，确认弹窗已明确「清空全部」；如需只清聚合视图，需要服务端另行设计 tombstone 方案，不在本票。
