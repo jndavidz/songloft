@@ -123,14 +123,16 @@
 ### 2.1 主机与容器
 
 - 主机：群晖 DS416play，DSM 6.2 / kernel 3.10.108 / Celeron N3060（老内核是 UPX 段错误的根因）。
-- 容器：`songloft`，镜像 `songloft-fork:full`，`network_mode: host`，`user 1028:100`（非 root，避免 Synology ACL 写出的文件权限为 `000`），`restart: unless-stopped`。
+- 容器：`songloft`，镜像 `songloft-fork:full`，`network_mode: host`，`user: "1028:101"`（**主组必须含 `administrators`=gid 101**；写成 `1028:100` 时 DSM ACL 连 `/app/music` 都列不出，表现为「曲库只剩 remote 歌、ingest 422/空转」。非 root 另为避免 Synology ACL 写出 `000` 权限文件），`restart: unless-stopped`。
 - 状态：`Up 10 hours (healthy)`；`http://10.10.10.2:58091/` 返回 200（Web 管理 UI，HTML 约 31KB）。
 - 健康检查：`wget -qO- http://127.0.0.1:58091/`，60s 间隔；日志里能看到每分钟一次 `GET / 200`。
 
 ### 2.2 版本与镜像差异
 
-- 运行版本：`v2.13.6-22-ga6065a9`，`build_type=full`，构建时间 2026-10-27 18:23:53。
-- 仓库 HEAD：`v2.13.6-28-gba72acb`。两者差 6 个 commit：插件 v2（专辑浏览）、full 变体支持、compose 对齐、CI 清理、gitignore/https、plan 文档。**服务端功能差异很小**（插件是独立 zip，full 变体已在镜像里），但"运行镜像落后于仓库"应在下次重建时对齐。
+- **运行版本（2026-11-02 实测）**：`v2.13.7-75-gc2a0b38`，`build_type=full`，`git_commit=c2a0b38`，`build_time=2026-11-02_00:51:23`；镜像 `songloft-fork:full` = `8e0905a56ba5`，`/api/v1/version` 与镜像一致、`/api/v1/health` 200。
+- **本次上线的是音质档位路由链**：`source_quality` hint（本地歌恒不带、网络歌带）→ 插件 `/api/music/url` 请求体 `quality`，生产自此不再由 App 档位触发后端「下载+转码」；kwqq 插件同步升到 `2026.11.2`（自持 handler，见 §3.8 第 1 条）。回滚支点两件：镜像 tag `songloft-fork:rollback-pre-quality-20261102`（= `d4b5189a9128`，`v2.13.7-55-g30213cd`）+ 容器内旧插件包 `/app/data/backups/kwqq-2026.10.28.jsplugin.zip`。
+- **构建法**：办公室 WSL（docker 29.8.0）交叉编译 `bin/songloft-linux-amd64-full`（go1.27，无 `lite` tag ⇒ 嵌 Web；复用 `clients/player-build/web-embedded` 既有前端产物）→ `docker build -f Dockerfile.nas`。ghcr 私有基础镜像不可达，故生产镜像**不是**主 `Dockerfile` 构的，是 fork 自己的轻量法（alpine minirootfs + COPY 预编译二进制），详见 `FORK.md` §1。
+- 仓库 HEAD 已推进到 `e450dbf`：`c2a0b38` 之后 4 笔全是文档/依赖锁/子模块指针，**服务端代码与运行镜像同源**，「运行镜像落后于仓库」在本条线上不再成立。
 - CI 产物是 **lite** 镜像（`ghcr.io/jndavidz/songloft-fork:latest`，无 Web 前端）；生产用的是**本地构建的 full 镜像**（`songloft-fork:full`）。二者不要混用。
 
 ### 2.3 卷与数据
