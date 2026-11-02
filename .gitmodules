@@ -6,7 +6,7 @@
 	url = https://github.com/jndavidz/songloft-player.git
 [submodule "plugins/toolchain"]
 	path = plugins/toolchain
-	url = https://github.com/songloft-org/plugin-toolchain.git
+	url = https://github.com/jndavidz/plugin-toolchain.git
 [submodule "plugins/src/songloft-plugin-miot"]
 	path = plugins/src/songloft-plugin-miot
 	url = https://github.com/songloft-org/songloft-plugin-miot.git
