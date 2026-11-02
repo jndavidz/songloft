@@ -27,10 +27,10 @@ Songloft 是自托管本地音乐服务器，支持**服务器部署**和 **Bund
 |------|------|------|
 | `/` | Go 1.26 + Chi v5 + SQLite | 后端 API 服务（默认端口 58091，账号 admin/admin） |
 | `/mobile` | Go + gomobile | Go 后端的移动端绑定入口（gomobile bind，导出 Start/Stop/IsRunning/GetPort） |
-| `/clients/player` ([独立仓库](https://github.com/songloft-org/songloft-player)) | Flutter 3.41+ / Dart 3.7+ | 跨平台前端（6 平台），支持 Bundle 本地模式。链接是公共上游身份；本工作区 fetch 走 `jndavidz/songloft-player` fork（见 `.gitmodules`） |
+| `/clients/player` ([独立仓库](https://github.com/songloft-org/songloft-player)) | Flutter 3.41+ / Dart 3.7+ | 跨平台前端（6 平台），支持 Bundle 本地模式。上游无写权限：子模块 `origin` 是 `jndavidz/songloft-player` fork，`upstream` 才是链接里的公共上游；pin 只存在于 fork |
 | `/clients/player-lynx` ([独立仓库](https://github.com/songloft-org/songloft-player-lynx)) | TS + ReactLynx | Android/iOS/HarmonyOS/Web 预览客户端，独立 main dev 构建与 v* 发版（子模块，无桌面/Bundle） |
 | `/clients/tv` ([独立仓库](https://github.com/songloft-org/songloft-tv)) | Kotlin | Android TV 客户端（子模块） |
-| `/plugins/toolchain` ([独立仓库](https://github.com/songloft-org/plugin-toolchain)) | TS + pnpm | JS 插件开发工具链（SDK / Builder / 脚手架）。链接是公共上游身份；自有 SDK 改动只在 `jndavidz/plugin-toolchain` fork（`main`=`27d3602`），fetch 走该 fork（见 `.gitmodules`） |
+| `/plugins/toolchain` ([独立仓库](https://github.com/songloft-org/plugin-toolchain)) | TS + pnpm | JS 插件开发工具链（SDK / Builder / 脚手架）。自有 SDK 改动只在 fork（`main`=`27d3602`）：子模块 `origin` 是 `jndavidz/plugin-toolchain`，`upstream` 才是链接里的公共上游；pin 只存在于 fork |
 | `/plugins/src` | TS | JS 插件源码（子模块集合，各插件在自己仓库分发 release） |
 | `/pkg/tag` | Go | 音频元数据**读写**库（基于上游 tag 库扩展 MP3/FLAC 写入） |
 | `/integrations/home-assistant` ([独立仓库](https://github.com/songloft-org/home-assistant-addon)) | HA add-on | Home Assistant 加载项（薄层复用 Docker 镜像）。**清单 `repository.yaml` 必须在该仓库根目录**，这是拆出独立仓库的原因（#340）；设计/踩坑见 [README](integrations/home-assistant/README.md) |
