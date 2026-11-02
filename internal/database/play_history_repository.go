@@ -98,6 +98,44 @@ func (r *PlayHistoryRepository) Count(ctx context.Context, contextType, contextK
 	return int(n), nil
 }
 
+// ListRecent 跨上下文返回最近播放记录：按歌曲去重（同一首歌取最近一次），按播放时间倒序。
+// 极小概率下同一首歌在两个上下文的 played_at 完全相同会产生重复行，由调用方按 song_id 去重。
+func (r *PlayHistoryRepository) ListRecent(ctx context.Context, limit, offset int) ([]PlayHistoryRow, error) {
+	if limit <= 0 {
+		return []PlayHistoryRow{}, nil
+	}
+	rows, err := r.queries.ListRecentPlayHistory(ctx, sqlc.ListRecentPlayHistoryParams{
+		Limit:  int64(limit),
+		Offset: int64(offset),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list recent play history: %w", err)
+	}
+	out := make([]PlayHistoryRow, 0, len(rows))
+	seen := make(map[int64]struct{}, len(rows))
+	for _, row := range rows {
+		if _, dup := seen[row.SongID]; dup {
+			continue
+		}
+		seen[row.SongID] = struct{}{}
+		out = append(out, PlayHistoryRow{
+			SongID:    row.SongID,
+			PlayedAt:  row.PlayedAt,
+			PlayCount: int(row.PlayCount),
+		})
+	}
+	return out, nil
+}
+
+// CountRecent 返回跨上下文去重后的歌曲数。
+func (r *PlayHistoryRepository) CountRecent(ctx context.Context) (int, error) {
+	n, err := r.queries.CountRecentPlayHistory(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count recent play history: %w", err)
+	}
+	return int(n), nil
+}
+
 // Clear 清空该上下文的全部历史，返回删除行数。
 func (r *PlayHistoryRepository) Clear(ctx context.Context, contextType, contextKey string) (int, error) {
 	rows, err := r.queries.ClearPlayHistory(ctx, sqlc.ClearPlayHistoryParams{
@@ -142,6 +180,15 @@ func (r *PlayHistoryRepository) ClearByTag(ctx context.Context, tagID int64) (in
 	rows, err := r.queries.ClearPlayHistoryByTag(ctx, strconv.FormatInt(tagID, 10))
 	if err != nil {
 		return 0, fmt.Errorf("clear play history by tag: %w", err)
+	}
+	return int(rows), nil
+}
+
+// ClearAll 清空全部上下文的播放历史，返回删除行数。
+func (r *PlayHistoryRepository) ClearAll(ctx context.Context) (int, error) {
+	rows, err := r.queries.ClearAllPlayHistory(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("clear all play history: %w", err)
 	}
 	return int(rows), nil
 }

@@ -4,10 +4,19 @@
 
 **Blocked by:** 01（曲库入口宫格）。
 
-**Status:** ready-for-agent
+**Status:** resolved（2026-11-03，含规格修订：原票「server 零改动」前提不成立——实测 GET /play-history 强制 context_type+context_key（单上下文视图），跨上下文最近播放不存在。已在 server 新增 GET/DELETE /play-history/recent（sqlc ListRecentPlayHistory JOIN 去重 + Service.ListRecent + swag + 服务层测试）。player 侧 RecentPlaysPage：倒序/点击重播/清空/触底分页 50/页）
 
-- [ ] 播放若干歌后，历史页按时间倒序展示
-- [ ] 点击历史记录重播该曲且不产生重复入库
-- [ ] 清空历史生效（server 侧与 UI 一致）
-- [ ] 空历史给空态引导
-- [ ] 分页或触底加载不漏不重
+- [x] 播放若干歌后，历史页按时间倒序展示
+- [x] 点击历史记录重播该曲且不产生重复入库
+- [x] 清空历史生效（server 侧与 UI 一致）
+- [x] 空历史给空态引导
+- [x] 分页或触底加载不漏不重
+
+## Notes（2026-11-03 落地）
+
+- **规格修订**：原票「复用现有播放历史端点，server 零改动」前提经实测推翻——`GET /play-history` 的 `parsePlayContext` 强制要求 `context_type`+`context_key`（400 拒绝），历史按上下文隔离（每上下文 50 条），不存在跨上下文聚合视图。已按最小增量在 server 新增：
+  - `GET /play-history/recent`（limit≤200/offset，按歌曲去重取最近一次、全局倒序，total=去重后总数供分页）
+  - `DELETE /play-history/recent`（跨上下文清空）
+  - SQL 用 JOIN 子查询保持列类型（MAX/SUM 聚合会让 sqlc 推成 interface{}）；同歌同时刻撞行的极小概率重复由仓储层按 song_id 去重兜底
+- 验证：服务层测试 TestPlayHistoryServiceListRecentCrossContext（去重/倒序/分页/ClearAll）；swagger 已重生成；middleware/database/app 包 go test 全绿。
+- Not run：真机 UI 冒烟（本会话无设备）。

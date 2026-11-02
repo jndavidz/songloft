@@ -16,6 +16,7 @@ type Querier interface {
 	CleanExpiredTokens(ctx context.Context, expiresAt time.Time) (int64, error)
 	ClearAllCachePaths(ctx context.Context) error
 	ClearAllFingerprints(ctx context.Context) error
+	ClearAllPlayHistory(ctx context.Context) (int64, error)
 	ClearCachePath(ctx context.Context, id int64) error
 	ClearPlayHistory(ctx context.Context, arg ClearPlayHistoryParams) (int64, error)
 	ClearPlayHistoryByPlaylist(ctx context.Context, contextKey string) (int64, error)
@@ -28,6 +29,7 @@ type Querier interface {
 	CountPlaylistSongs(ctx context.Context, playlistID int64) (int64, error)
 	CountPlaylistsByCoverPath(ctx context.Context, coverPath string) (int64, error)
 	CountPlaylistsContainingSong(ctx context.Context, songID int64) (int64, error)
+	CountRecentPlayHistory(ctx context.Context) (int64, error)
 	CountSongsByCoverPath(ctx context.Context, coverPath string) (int64, error)
 	CountSongsByFilePath(ctx context.Context, filePath string) (int64, error)
 	CountSongsByTag(ctx context.Context, tagID int64) (int64, error)
@@ -109,6 +111,7 @@ type Querier interface {
 	ListPlaylistsContainingSong(ctx context.Context, songID int64) ([]int64, error)
 	ListPluginStorageEntryPaths(ctx context.Context) ([]string, error)
 	ListPluginStorageKeys(ctx context.Context, pluginEntryPath string) ([]string, error)
+	ListRecentPlayHistory(ctx context.Context, arg ListRecentPlayHistoryParams) ([]ListRecentPlayHistoryRow, error)
 	ListSongsByFingerprint(ctx context.Context, fingerprint string) ([]ListSongsByFingerprintRow, error)
 	ListSongsNeedingMetadata(ctx context.Context) ([]ListSongsNeedingMetadataRow, error)
 	ListSongsWithCache(ctx context.Context) ([]Song, error)

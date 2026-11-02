@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+const clearAllPlayHistory = `-- name: ClearAllPlayHistory :execrows
+DELETE FROM play_history
+`
+
+func (q *Queries) ClearAllPlayHistory(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearAllPlayHistory)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const clearPlayHistory = `-- name: ClearPlayHistory :execrows
 DELETE FROM play_history WHERE context_type = ? AND context_key = ?
 `
@@ -67,6 +79,17 @@ func (q *Queries) CountPlayHistory(ctx context.Context, arg CountPlayHistoryPara
 	return count, err
 }
 
+const countRecentPlayHistory = `-- name: CountRecentPlayHistory :one
+SELECT COUNT(DISTINCT song_id) FROM play_history
+`
+
+func (q *Queries) CountRecentPlayHistory(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRecentPlayHistory)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deletePlayHistoryEntry = `-- name: DeletePlayHistoryEntry :execrows
 DELETE FROM play_history WHERE context_type = ? AND context_key = ? AND song_id = ?
 `
@@ -113,6 +136,52 @@ func (q *Queries) ListPlayHistory(ctx context.Context, arg ListPlayHistoryParams
 	items := []ListPlayHistoryRow{}
 	for rows.Next() {
 		var i ListPlayHistoryRow
+		if err := rows.Scan(&i.SongID, &i.PlayedAt, &i.PlayCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentPlayHistory = `-- name: ListRecentPlayHistory :many
+SELECT p.song_id, p.played_at, p.play_count
+FROM play_history p
+JOIN (
+    SELECT song_id, MAX(played_at) AS max_at
+    FROM play_history
+    GROUP BY song_id
+) m ON m.song_id = p.song_id AND m.max_at = p.played_at
+ORDER BY p.played_at DESC, p.song_id DESC
+LIMIT ? OFFSET ?
+`
+
+type ListRecentPlayHistoryParams struct {
+	Limit  int64
+	Offset int64
+}
+
+type ListRecentPlayHistoryRow struct {
+	SongID    int64
+	PlayedAt  time.Time
+	PlayCount int64
+}
+
+func (q *Queries) ListRecentPlayHistory(ctx context.Context, arg ListRecentPlayHistoryParams) ([]ListRecentPlayHistoryRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRecentPlayHistory, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentPlayHistoryRow{}
+	for rows.Next() {
+		var i ListRecentPlayHistoryRow
 		if err := rows.Scan(&i.SongID, &i.PlayedAt, &i.PlayCount); err != nil {
 			return nil, err
 		}

@@ -2,6 +2,7 @@
 
 > Triage: ready-for-agent（2026-11-03，来源：用户对 APK 曲库与播放页的功能要求，参考成熟播放器 MusicFree 的界面与功能范式）
 > 能力基线：上游 kwqq-api 已具备本文所需全部通道（musicdl 仓 docs/API-REFERENCE.md §4 精装端点 + §5 酷狗/网易云透传端点，2026-10-29 v1.12）。本 spec 不改 kwqq-api 契约，只消费。
+> **落地快照（2026-11-03）**：13 票全部离线施工完成（issues/ 各自 Notes 记录验收证据与 Not run）。两处规格修订：票 03 的「server 零改动」前提不成立（既有 play-history 强制单上下文，已新增 `GET/DELETE /play-history/recent`）；票 06 的「server 新增代理路由」落地为复用既有 jsplugin catch-all 转发链（新增接线测试），manifest scope 无需扩展。类型搜索与详情页主通道取 netease 透传（形状经 NAS 实测），kugou 类型通道留后续。真机 UI 冒烟 Not run。
 
 ## Problem Statement
 

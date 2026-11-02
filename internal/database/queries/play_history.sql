@@ -36,3 +36,20 @@ DELETE FROM play_history WHERE context_type = 'playlist' AND context_key = ?;
 
 -- name: ClearPlayHistoryByTag :execrows
 DELETE FROM play_history WHERE context_type = 'tag' AND context_key = ?;
+
+-- name: ListRecentPlayHistory :many
+SELECT p.song_id, p.played_at, p.play_count
+FROM play_history p
+JOIN (
+    SELECT song_id, MAX(played_at) AS max_at
+    FROM play_history
+    GROUP BY song_id
+) m ON m.song_id = p.song_id AND m.max_at = p.played_at
+ORDER BY p.played_at DESC, p.song_id DESC
+LIMIT ? OFFSET ?;
+
+-- name: CountRecentPlayHistory :one
+SELECT COUNT(DISTINCT song_id) FROM play_history;
+
+-- name: ClearAllPlayHistory :execrows
+DELETE FROM play_history;

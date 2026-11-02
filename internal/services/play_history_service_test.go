@@ -262,3 +262,76 @@ func TestPlayHistoryServiceEmptyContextReturnsEmptySlice(t *testing.T) {
 		t.Errorf("expected 0 entries, got %d", len(entries))
 	}
 }
+
+// TestPlayHistoryServiceListRecentCrossContext ListRecent 跨上下文按歌曲去重、
+// 全局按最后播放时间倒序；total 为去重后总数；ClearAll 一键清空。
+func TestPlayHistoryServiceListRecentCrossContext(t *testing.T) {
+	svc := NewPlayHistoryService(testutil.OpenMemoryDB(t))
+	ctx := context.Background()
+	songs := seedPlayHistorySongs(t, svc, 3)
+	base := time.Now().Add(-time.Hour)
+
+	// songs[0] 在两个上下文都播过（去重应只留一行）；
+	// songs[2] 最新，songs[1] 次新
+	if err := svc.Record(ctx, models.PlayContextPlaylist, "1", songs[0].ID, base); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := svc.Record(ctx, "artist", "周杰伦", songs[0].ID, base.Add(time.Minute)); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := svc.Record(ctx, models.PlayContextPlaylist, "1", songs[1].ID, base.Add(2*time.Minute)); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := svc.Record(ctx, "album", "范特西", songs[2].ID, base.Add(3*time.Minute)); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	resp, err := svc.ListRecent(ctx, 200, 0)
+	if err != nil {
+		t.Fatalf("ListRecent: %v", err)
+	}
+	if resp.Total != 3 {
+		t.Fatalf("total = %d, want 3 (deduped songs)", resp.Total)
+	}
+	want := []int64{songs[2].ID, songs[1].ID, songs[0].ID}
+	if len(resp.Items) != len(want) {
+		t.Fatalf("entries = %d, want %d", len(resp.Items), len(want))
+	}
+	for i, id := range want {
+		if resp.Items[i].Song.ID != id {
+			t.Errorf("pos %d: song = %d, want %d", i, resp.Items[i].Song.ID, id)
+		}
+	}
+	// 去重行取最近一次播放
+	if !resp.Items[2].PlayedAt.Equal(base.Add(time.Minute)) {
+		t.Errorf("dedup row should keep latest played_at, got %v", resp.Items[2].PlayedAt)
+	}
+
+	// 分页：offset 跳过第一条
+	paged, err := svc.ListRecent(ctx, 1, 1)
+	if err != nil {
+		t.Fatalf("ListRecent paged: %v", err)
+	}
+	if len(paged.Items) != 1 || paged.Items[0].Song.ID != songs[1].ID {
+		t.Fatalf("paged entry = %+v, want song %d", paged.Items, songs[1].ID)
+	}
+	if paged.Total != 3 {
+		t.Fatalf("paged total = %d, want 3 (global count)", paged.Total)
+	}
+
+	// ClearAll：跨上下文一键清空
+	deleted, err := svc.ClearAll(ctx)
+	if err != nil {
+		t.Fatalf("ClearAll: %v", err)
+	}
+	if deleted != 4 {
+		t.Fatalf("deleted = %d, want 4 rows", deleted)
+	}
+	empty, err := svc.ListRecent(ctx, 200, 0)
+	if err != nil {
+		t.Fatalf("ListRecent after clear: %v", err)
+	}
+	if len(empty.Items) != 0 || empty.Total != 0 {
+		t.Fatalf("expected empty after ClearAll, got %+v", empty)
+	}
+}

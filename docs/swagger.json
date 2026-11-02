@@ -3275,6 +3275,83 @@
                 }
             }
         },
+        "/play-history/recent": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回全部播放上下文聚合后的最近播放记录：按歌曲去重（同一首歌取最近一次）、按最后播放时间倒序，含完整歌曲详情。\n与 GET /play-history 的区别：本端点不要求 context_type/context_key，面向「我最近听了什么」的全局视角；\ntotal 为去重后的歌曲总数（非本次返回条数），配合 limit/offset 可做触底分页。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "播放历史"
+                ],
+                "summary": "查询最近播放（跨上下文）",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "返回条数，缺省 200，上限 200",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "偏移量，缺省 0",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功返回最近播放列表",
+                        "schema": {
+                            "$ref": "#/definitions/models.PlayHistoryListResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器错误",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "删除所有播放上下文中的全部播放记录（跨上下文），返回删除条数。「最近播放」页的全局清空走本端点。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "播放历史"
+                ],
+                "summary": "清空全部播放历史",
+                "responses": {
+                    "200": {
+                        "description": "成功返回 {deleted: 删除条数}",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "服务器错误",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/playlists": {
             "get": {
                 "security": [

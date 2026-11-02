@@ -142,3 +142,54 @@ func (h *PlayHistoryHandler) DeletePlayHistoryEntry(w http.ResponseWriter, r *ht
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// GetRecentPlayHistory 跨上下文查询最近播放记录。
+// @Summary 查询最近播放（跨上下文）
+// @Description 返回全部播放上下文聚合后的最近播放记录：按歌曲去重（同一首歌取最近一次）、按最后播放时间倒序，含完整歌曲详情。
+// @Description 与 GET /play-history 的区别：本端点不要求 context_type/context_key，面向「我最近听了什么」的全局视角；
+// @Description total 为去重后的歌曲总数（非本次返回条数），配合 limit/offset 可做触底分页。
+// @Tags 播放历史
+// @Produce json
+// @Param limit query int false "返回条数，缺省 200，上限 200"
+// @Param offset query int false "偏移量，缺省 0"
+// @Success 200 {object} models.PlayHistoryListResponse "成功返回最近播放列表"
+// @Failure 500 {object} models.ErrorResponse "服务器错误"
+// @Security BearerAuth
+// @Router /play-history/recent [get]
+func (h *PlayHistoryHandler) GetRecentPlayHistory(w http.ResponseWriter, r *http.Request) {
+	limit := services.MaxRecentPlayHistory
+	if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 {
+		limit = l
+	}
+	offset := 0
+	if o, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && o > 0 {
+		offset = o
+	}
+
+	resp, err := h.service.ListRecent(r.Context(), limit, offset)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "获取最近播放失败", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// ClearRecentPlayHistory 清空全部上下文的播放历史。
+// @Summary 清空全部播放历史
+// @Description 删除所有播放上下文中的全部播放记录（跨上下文），返回删除条数。「最近播放」页的全局清空走本端点。
+// @Tags 播放历史
+// @Produce json
+// @Success 200 {object} map[string]int "成功返回 {deleted: 删除条数}"
+// @Failure 500 {object} models.ErrorResponse "服务器错误"
+// @Security BearerAuth
+// @Router /play-history/recent [delete]
+func (h *PlayHistoryHandler) ClearRecentPlayHistory(w http.ResponseWriter, r *http.Request) {
+	deleted, err := h.service.ClearAll(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "清空播放历史失败", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]int{"deleted": deleted})
+}

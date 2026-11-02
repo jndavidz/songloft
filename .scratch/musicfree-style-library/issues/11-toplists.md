@@ -4,10 +4,14 @@
 
 **Blocked by:** 01（曲库入口）、06（后端模式）。
 
-**Status:** ready-for-agent
+**Status:** resolved（2026-11-03：ToplistsPage（netease toplist 主通道，名称/封面/更新频率网格）+ ToplistDetailPage（榜单 id=平台歌单 id，playlist/track/all 分页可播）。kugou rank 系列通道未接（§5.1 二选主通道取 netease）；上游失败错误态可重试）
 
-- [ ] 榜单入口可见，列表展示多平台或主平台榜单
-- [ ] 点击榜单进详情，曲目与平台一致
-- [ ] 榜单曲目可播（add-remote dedup + hint 链）
-- [ ] 榜单详情长列表分页正常
-- [ ] 上游失败给错误态可重试
+- [x] 榜单入口可见，列表展示多平台或主平台榜单
+- [x] 点击榜单进详情，曲目与平台一致
+- [x] 榜单曲目可播（add-remote dedup + hint 链）
+- [x] 榜单详情长列表分页正常
+- [x] 上游失败给错误态可重试
+
+## Notes（2026-11-03 落地）
+
+- 离线施工完成；真机 UI 冒烟 Not run（本会话无设备窗口）。

@@ -237,6 +237,10 @@ func (a *App) setupAPIV1Router() {
 			r.Delete("/play-history", playHistoryHandler.ClearPlayHistory)
 			r.Delete("/play-history/entry", playHistoryHandler.DeletePlayHistoryEntry)
 
+			// 播放历史（跨上下文聚合：最近播放页）
+			r.Get("/play-history/recent", playHistoryHandler.GetRecentPlayHistory)
+			r.Delete("/play-history/recent", playHistoryHandler.ClearRecentPlayHistory)
+
 			// 主题包管理
 			r.Get("/theme-packs", themePackHandler.ListThemePacks)
 			r.Post("/theme-packs", themePackHandler.ImportThemePack)

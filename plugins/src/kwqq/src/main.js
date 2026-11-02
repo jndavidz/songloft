@@ -1,7 +1,9 @@
 // kwqq 音源插件 —— 包装自建 kw-qq-music-api（kwqq）
 // 契约：POST /api/search、POST /api/music/url（@songloft/plugin-sdk 约定）；
 //       GET /lyric-search、GET /cover-search（宿主歌词/封面提供者，onInit 注册）；
-//       GET/POST /config（设置页读写，storage 持久化）。
+//       GET/POST /config（设置页读写，storage 持久化）；
+//       POST /browse/*（player 在线浏览：多类型搜索/专辑/歌手/歌单/榜单/推荐/评论，
+//       spec: songloft .scratch/musicfree-style-library，端点按 MusicFree 函数语义归一）。
 // 运行环境：宿主 QuickJS（es2020，全局 fetch 免权限）。不依赖 Node 内置模块。
 import {
   createRouter,
@@ -58,6 +60,8 @@ const searchCache = ttlCache(60_000, 200)
 const lyricCache = ttlCache(24 * 3600_000, 300)
 const coverCache = ttlCache(24 * 3600_000, 300)
 const failCache = ttlCache(60_000, 100)
+const browseCache = ttlCache(10 * 60_000, 300)   // 浏览态（专辑/歌手/歌单/榜单/推荐），在线浏览不落库、仅内存缓存
+const commentCache = ttlCache(60_000, 100)        // 评论短缓存（热评随点赞变动）
 const cfgCacheKey = '__cfg__'
 const inflight = new Map()
 
@@ -79,6 +83,7 @@ async function saveConfig(patch) {
   try { await songloft.storage.set('config', cfg) } catch (e) { /* 只影响重启后丢失 */ }
   cfgCache = cfg
   searchCache.clear(); lyricCache.clear(); coverCache.clear(); failCache.clear()
+  browseCache.clear(); commentCache.clear()
   return cfg
 }
 
@@ -189,7 +194,12 @@ router.post('/api/search', createSearchHandler({
     const per = await Promise.allSettled(cfg.sources.map(async (s) => {
       const data = await kwqq(cfg, '/' + s + '/search?keywords=' +
         encodeURIComponent(keyword) + '&page=' + (Number(page) || 1) + '&limit=' + limit, 4000)
-      return (data.items || []).map(itemToResult)
+      return (data.items || []).map(it => {
+        const r = itemToResult(it)
+        r.source = it.source
+        r.dedup_key = 'kwqq_' + it.source + '_' + it.id
+        return r
+      })
     }))
     if (per[0] && per[0].status === 'rejected') {
       console.log('[kwqq] first source error: ' + String((per[0].reason && per[0].reason.message) || per[0].reason))
@@ -403,6 +413,519 @@ router.post('/import', async (req) => {
   console.log('[kwqq] imported ' + songs.length + ' songs (ids: ' + songs.map(s => s.id).join(',') + ')')
   return jsonResponse({ songs, count: j.count })
 })
+
+// ===== 在线浏览（player 曲库 MusicFree 式，spec: musicfree-style-library） =====
+// 逐源能力（musicdl API-REFERENCE §4/§5.1，2026-10-29 v1.12）：专辑/歌手/歌单/榜单/推荐/评论
+// 走 netease 透传（形状已实测）；专辑另支持精装 /{source}/album（netease/kugou/migu/qianqian ✅，
+// kuwo/qq 501）。music 类型沿用 /api/search 的多源聚合。所有音乐条目自带 dedup_key
+// （与 /import 同式：'kwqq_' + s + '_' + i），player 点播直接透传 /songs/remote，不在客户端拼格式。
+
+const BROWSE_SOURCES_WITH_ALBUM = ['netease', 'kugou', 'migu', 'qianqian']
+const NETEASE_SEARCH_TYPE = { album: 10, artist: 100, sheet: 1000 }
+
+// 透传返回的 netease song 对象（al/ar/dt 形状）→ 播放条目（对齐 itemToResult 输出形状）
+function neteaseSongToResult(song) {
+  const albumName = (song.al && song.al.name) || (song.album && song.album.name) || ''
+  const artist = (song.ar || song.artists || []).map(a => a.name).filter(Boolean).join(' / ')
+  const cover = (song.al && song.al.picUrl) || (song.album && song.album.picUrl) || ''
+  const sd = { s: 'netease', i: String(song.id), n: song.name || '', a: artist, al: albumName, d: Math.round((song.dt || 0) / 1000) }
+  return {
+    title: song.name || 'Unknown',
+    artist: artist || 'Unknown',
+    album: albumName || undefined,
+    duration: sd.d,
+    cover_url: cover || undefined,
+    source: 'netease',
+    source_data: sd,
+    dedup_key: 'kwqq_netease_' + song.id,
+  }
+}
+
+// netease 透传封面加尺寸参数（MusicFree 同款 ?param=WxH）
+function neteaseCover(url, size) {
+  if (!url) return undefined
+  return url + '?param=' + (size || 300) + 'y' + (size || 300)
+}
+
+// 通用 POST body 解析（对齐 /api/music/url 风格）
+function parseBody(req) {
+  if (!req.body) return {}
+  try {
+    return typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {})
+  } catch (e) {
+    return null
+  }
+}
+function bodyError() {
+  return jsonResponse({ error: 'invalid json body' }, 400)
+}
+
+// 浏览端点包装：缓存命中 → handler；异常按 501 能力缺失 / 502 上游错误归一
+async function browseHandler(cacheKey, fn) {
+  const cached = browseCache.get(cacheKey)
+  if (cached) return jsonResponse(cached)
+  try {
+    const out = await fn()
+    browseCache.set(cacheKey, out)
+    return jsonResponse(out)
+  } catch (e) {
+    const msg = String((e && e.message) || e)
+    console.log('[kwqq] browse error: ' + msg)
+    if (msg.indexOf('501') >= 0) return jsonResponse({ error: '该源暂不支持此能力', unsupported: true }, 501)
+    return jsonResponse({ error: msg }, 502)
+  }
+}
+
+// netease 透传调用：透传返回的是上游原样 JSON（无 {code,msg,data} 信封），
+// 不能走 kwqq()（它会拆信封返回 j.data → undefined），必须自持裸 fetch。
+async function neteaseApi(cfg, path, timeoutMs) {
+  const url = cfg.base.replace(/\/+$/, '') + '/netease/api/' + path
+  const headers = {}
+  if (cfg.key) headers['X-API-Key'] = cfg.key
+  const resp = await withTimeout(fetch(url, { headers }), timeoutMs || 10000, 'netease')
+  if (resp.status === 401) throw new Error('kwqq 401：API key 缺失或错误')
+  if (!resp.ok) throw new Error('kwqq http ' + resp.status)
+  const j = await resp.json()
+  if (j && typeof j.code === 'number' && j.code !== 200) throw new Error('netease code ' + j.code)
+  return j
+}
+
+// 多类型搜索：music 走多源聚合（复用 /api/search 逻辑），album/artist/sheet 走 netease cloudsearch
+async function browseSearch(body) {
+  const cfg = await getConfig()
+  const keywords = String(body.keywords || '').trim()
+  const type = ['music', 'album', 'artist', 'sheet'].indexOf(body.type) >= 0 ? body.type : 'music'
+  const page = Math.max(1, Number(body.page) || 1)
+  const limit = Math.min(50, Math.max(1, Number(body.limit) || 20))
+  if (!keywords) return { type, page, limit, isEnd: true, items: [] }
+
+  if (type === 'music') {
+    const items = await searchMusicAggregated(cfg, keywords, page, limit)
+    return { type, page, limit, isEnd: items.length < limit ? true : undefined, items }
+  }
+
+  const offset = (page - 1) * limit
+  const data = await neteaseApi(cfg, 'cloudsearch?keywords=' + encodeURIComponent(keywords) +
+    '&type=' + NETEASE_SEARCH_TYPE[type] + '&limit=' + limit + '&offset=' + offset, 10000)
+  const res = (data && data.result) || {}
+  let items, total
+  if (type === 'album') {
+    total = res.albumCount || 0
+    items = (res.albums || []).map(al => ({
+      id: String(al.id),
+      name: al.name || '',
+      artist: (al.artist && al.artist.name) || ((al.artists || []).map(a => a.name).filter(Boolean).join(' / ')) || '',
+      cover_url: neteaseCover(al.picUrl),
+      track_count: al.size || 0,
+      publish_time: al.publishTime || undefined,
+      company: al.company || undefined,
+      source: 'netease',
+    }))
+  } else if (type === 'artist') {
+    total = res.artistCount || 0
+    items = (res.artists || []).map(ar => ({
+      id: String(ar.id),
+      name: ar.name || '',
+      avatar_url: neteaseCover(ar.picUrl || ar.img1v1Url, 200),
+      alias: (ar.alias && ar.alias[0]) || undefined,
+      album_count: ar.albumSize || 0,
+      music_count: ar.musicSize || 0,
+      source: 'netease',
+    }))
+  } else {
+    total = res.playlistCount || 0
+    items = (res.playlists || []).map(pl => ({
+      id: String(pl.id),
+      name: pl.name || '',
+      creator: (pl.creator && pl.creator.nickname) || '',
+      cover_url: neteaseCover(pl.coverImgUrl || pl.picUrl),
+      track_count: pl.trackCount || 0,
+      play_count: pl.playCount || 0,
+      description: pl.description || undefined,
+      source: 'netease',
+    }))
+  }
+  return { type, page, limit, isEnd: offset + items.length >= total, items, source: 'netease' }
+}
+
+// 从 /api/search 抽出的多源聚合主体（music 类型两处共用）
+async function searchMusicAggregated(cfg, keyword, page, limit) {
+  const per = await Promise.allSettled(cfg.sources.map(async (s) => {
+    const data = await kwqq(cfg, '/' + s + '/search?keywords=' +
+      encodeURIComponent(keyword) + '&page=' + (Number(page) || 1) + '&limit=' + limit, 4000)
+    return (data.items || []).map(it => {
+      const r = itemToResult(it)
+      r.source = it.source
+      r.dedup_key = 'kwqq_' + it.source + '_' + it.id
+      return r
+    })
+  }))
+  const lists = per.filter(r => r.status === 'fulfilled').map(r => r.value).filter(l => l.length)
+  const merged = []
+  for (let i = 0; i < limit; i++) {
+    for (const l of lists) if (l[i]) merged.push(l[i])
+  }
+  return merged
+}
+
+// 专辑详情：netease 有 id 走透传（精确）；否则精装二段式 /{source}/album?name=&artist=
+async function albumInfo(body) {
+  const cfg = await getConfig()
+  const source = String(body.source || 'netease')
+  const id = body.id ? String(body.id) : ''
+  const name = String(body.name || '').trim()
+  const artist = String(body.artist || '').trim()
+
+  if (source === 'netease' && id) {
+    const data = await neteaseApi(cfg, 'album?id=' + encodeURIComponent(id), 12000)
+    const al = (data && data.album) || {}
+    const songs = (data && data.songs) || []
+    return {
+      album: {
+        id: String(al.id || id),
+        name: al.name || name,
+        artist: (al.artist && al.artist.name) || '',
+        cover_url: neteaseCover(al.picUrl, 500),
+        publish_time: al.publishTime || undefined,
+        company: al.company || undefined,
+        description: al.description || undefined,
+        track_count: al.size || songs.length,
+        source: 'netease',
+      },
+      tracks: songs.map(s => {
+        const r = neteaseSongToResult(s)
+        r.track_no = s.no || undefined
+        return r
+      }),
+    }
+  }
+
+  if (!name) return { error: 'name required（该源无 id 精确检索能力，需专辑名）' }
+  if (BROWSE_SOURCES_WITH_ALBUM.indexOf(source) < 0) {
+    const err = new Error('kwqq http 501')
+    throw err
+  }
+  const data = await kwqq(cfg, '/' + source + '/album?name=' + encodeURIComponent(name) +
+    (artist ? '&artist=' + encodeURIComponent(artist) : ''), 12000)
+  const candidates = (data && data.albums) || []
+  const tracks = ((data && data.items) || []).map(it => {
+    const r = itemToResult(it)
+    r.source = it.source
+    r.dedup_key = 'kwqq_' + it.source + '_' + it.id
+    r.track_no = it.track_no || undefined
+    return r
+  })
+  const al0 = candidates[0] || {}
+  return {
+    album: {
+      id: al0.id ? String(al0.id) : undefined,
+      name: (data && data.name) || name,
+      artist: (data && data.artist) || artist,
+      cover_url: al0.cover || undefined,
+      track_count: (data && data.total) || tracks.length,
+      source: source,
+      candidates: candidates.length > 1
+        ? candidates.map(c => ({ id: c.id ? String(c.id) : undefined, name: c.name, artist: c.artist, cover_url: c.cover }))
+        : undefined,
+    },
+    tracks,
+  }
+}
+
+// 歌手详情 + 作品（netease 透传）
+async function artistInfo(body) {
+  const id = String(body.id || '').trim()
+  if (!id) return { error: 'id required' }
+  const cfg = await getConfig()
+  const data = await neteaseApi(cfg, 'artists?id=' + encodeURIComponent(id), 10000)
+  const ar = (data && data.artist) || {}
+  return {
+    artist: {
+      id: String(ar.id || id),
+      name: ar.name || '',
+      avatar_url: neteaseCover(ar.picUrl || ar.img1v1Url, 300),
+      alias: (ar.alias && ar.alias[0]) || undefined,
+      description: ar.briefDesc || ar.description || undefined,
+      album_count: ar.albumSize || 0,
+      music_count: ar.musicSize || 0,
+      source: 'netease',
+    },
+  }
+}
+
+async function artistWorks(body) {
+  const id = String(body.id || '').trim()
+  const type = body.type === 'album' ? 'album' : 'music'
+  const page = Math.max(1, Number(body.page) || 1)
+  const limit = Math.min(50, Math.max(1, Number(body.limit) || 30))
+  if (!id) return { error: 'id required' }
+  const cfg = await getConfig()
+  const offset = (page - 1) * limit
+  if (type === 'music') {
+    const data = await neteaseApi(cfg, 'artist/songs?id=' + encodeURIComponent(id) +
+      '&limit=' + limit + '&offset=' + offset + '&order=hot', 10000)
+    const songs = (data && data.songs) || []
+    const total = (data && data.total) || songs.length
+    return { type, page, isEnd: offset + songs.length >= total, items: songs.map(neteaseSongToResult) }
+  }
+  const data = await neteaseApi(cfg, 'artist/album?id=' + encodeURIComponent(id) +
+    '&limit=' + limit + '&offset=' + offset, 10000)
+  const albums = (data && data.hotAlbums) || []
+  const total = ((data && data.artist && data.artist.albumSize) || albums.length)
+  return {
+    type, page,
+    isEnd: offset + albums.length >= total,
+    items: albums.map(al => ({
+      id: String(al.id),
+      name: al.name || '',
+      artist: (al.artist && al.artist.name) || '',
+      cover_url: neteaseCover(al.picUrl),
+      track_count: al.size || 0,
+      publish_time: al.publishTime || undefined,
+      company: al.company || undefined,
+      source: 'netease',
+    })),
+  }
+}
+
+// 歌单详情：曲目分页走 playlist/track/all，首页并拉 playlist/detail 元数据
+async function sheetInfo(body) {
+  const id = String(body.id || '').trim()
+  const page = Math.max(1, Number(body.page) || 1)
+  const limit = Math.min(100, Math.max(1, Number(body.limit) || 50))
+  if (!id) return { error: 'id required' }
+  const cfg = await getConfig()
+  const offset = (page - 1) * limit
+  const data = await neteaseApi(cfg, 'playlist/track/all?id=' + encodeURIComponent(id) +
+    '&limit=' + limit + '&offset=' + offset, 15000)
+  const songs = (data && data.songs) || []
+  const total = (data && data.total) || songs.length
+  const out = {
+    page, isEnd: offset + songs.length >= total, total,
+    tracks: songs.map(neteaseSongToResult),
+  }
+  if (page === 1) {
+    try {
+      const det = await neteaseApi(cfg, 'playlist/detail?id=' + encodeURIComponent(id), 10000)
+      const pl = (det && det.playlist) || {}
+      out.sheet = {
+        id: String(pl.id || id),
+        name: pl.name || '',
+        creator: (pl.creator && pl.creator.nickname) || '',
+        cover_url: neteaseCover(pl.coverImgUrl, 500),
+        track_count: pl.trackCount || total,
+        play_count: pl.playCount || 0,
+        description: pl.description || undefined,
+        source: 'netease',
+      }
+    } catch (e) { /* 元数据缺失不阻塞曲目 */ }
+  }
+  return out
+}
+
+// 榜单列表 + 详情（netease toplist；榜单项 id 即 playlist id，详情复用 track/all 分页）
+async function toplists() {
+  const cfg = await getConfig()
+  const data = await neteaseApi(cfg, 'toplist', 10000)
+  const lists = (data && data.list) || []
+  return {
+    source: 'netease',
+    items: lists.map(it => ({
+      id: String(it.id),
+      name: it.name || '',
+      cover_url: neteaseCover(it.coverImgUrl || it.picUrl),
+      description: it.description || undefined,
+      update_frequency: it.updateFrequency || undefined,
+      track_count: it.trackCount || undefined,
+      source: 'netease',
+    })),
+  }
+}
+
+async function toplistDetail(body) {
+  const id = String(body.id || '').trim()
+  const page = Math.max(1, Number(body.page) || 1)
+  const limit = Math.min(100, Math.max(1, Number(body.limit) || 50))
+  if (!id) return { error: 'id required' }
+  const cfg = await getConfig()
+  const offset = (page - 1) * limit
+  const data = await neteaseApi(cfg, 'playlist/track/all?id=' + encodeURIComponent(id) +
+    '&limit=' + limit + '&offset=' + offset, 15000)
+  const songs = (data && data.songs) || []
+  const total = (data && data.total) || songs.length
+  return { page, isEnd: offset + songs.length >= total, total, tracks: songs.map(neteaseSongToResult) }
+}
+
+// 推荐歌单：热门标签（pinned）+ 全量分类（grouped），来自平台接口
+async function recommendTags() {
+  const cfg = await getConfig()
+  const hot = await neteaseApi(cfg, 'playlist/hot', 8000)
+  const pinned = (((hot && hot.tags) || [])).slice(0, 8).map(t => ({ id: t.name, title: t.name }))
+  let categories = []
+  try {
+    const cat = await neteaseApi(cfg, 'playlist/catlist', 8000)
+    const subs = (cat && cat.sub) || []
+    const names = (cat && cat.categories) || {}
+    const grouped = {}
+    for (const s of subs) {
+      const catName = names[String(s.category)] || '其他'
+      if (!grouped[catName]) grouped[catName] = []
+      grouped[catName].push({ id: s.name, title: s.name })
+    }
+    categories = Object.keys(grouped).map(title => ({ title, data: grouped[title] }))
+  } catch (e) { /* catlist 失败时只给 pinned */ }
+  return { pinned, categories }
+}
+
+async function recommendSheets(body) {
+  const cat = String(body.cat || '').trim()
+  const page = Math.max(1, Number(body.page) || 1)
+  const limit = Math.min(50, Math.max(1, Number(body.limit) || 30))
+  const cfg = await getConfig()
+  const offset = (page - 1) * limit
+  const data = await neteaseApi(cfg, 'top/playlist?cat=' + encodeURIComponent(cat) +
+    '&limit=' + limit + '&offset=' + offset + '&order=hot', 10000)
+  const playlists = (data && data.playlists) || []
+  const total = (data && data.total) || playlists.length
+  return {
+    cat, page,
+    isEnd: offset + playlists.length >= total,
+    items: playlists.map(pl => ({
+      id: String(pl.id),
+      name: pl.name || '',
+      creator: (pl.creator && pl.creator.nickname) || '',
+      cover_url: neteaseCover(pl.coverImgUrl || pl.picUrl),
+      track_count: pl.trackCount || 0,
+      play_count: pl.playCount || 0,
+      description: pl.description || undefined,
+      source: 'netease',
+    })),
+  }
+}
+
+// 评论（只读，MusicFree IComment 形状；热评首页随 hotComments 一次返回）。
+// id 可省：给 title+artist 时回搜 netease id（播放页对任意来源的已入库歌开评论用）。
+async function musicComments(body) {
+  let id = String(body.id || '').trim()
+  const title = String(body.title || '').trim()
+  const artist = String(body.artist || '').trim()
+  const page = Math.max(1, Number(body.page) || 1)
+  const limit = Math.min(50, Math.max(1, Number(body.limit) || 20))
+  if (!id && !title) return { error: 'id 或 title 至少提供一个' }
+  const cfg = await getConfig()
+  if (!id) {
+    const found = await neteaseApi(cfg, 'cloudsearch?keywords=' +
+      encodeURIComponent((title + ' ' + artist).trim()) + '&type=1&limit=1&offset=0', 8000)
+    const songs = (found && found.result && found.result.songs) || []
+    if (!songs.length) return { total: 0, has_more: false, hot: [], comments: [] }
+    id = String(songs[0].id)
+  }
+  const cacheKey = 'comments|' + id + '|' + page + '|' + limit
+  const cached = commentCache.get(cacheKey)
+  if (cached) return cached
+  const offset = (page - 1) * limit
+  const data = await neteaseApi(cfg, 'comment/music?id=' + encodeURIComponent(id) +
+    '&limit=' + limit + '&offset=' + offset, 10000)
+  const toComment = (c) => {
+    if (!c) return null
+    const replies = (c.beReplied || []).map(r => ({
+      id: String(r.beRepliedCommentId || ''),
+      nickName: (r.user && r.user.nickname) || '已注销',
+      avatar: (r.user && r.user.avatarUrl) || undefined,
+      comment: r.content || '',
+    }))
+    return {
+      id: String(c.commentId || ''),
+      nickName: (c.user && c.user.nickname) || '匿名用户',
+      avatar: (c.user && c.user.avatarUrl) || undefined,
+      comment: c.content || '',
+      like: c.likedCount || 0,
+      createAt: c.time || undefined,
+      replies: replies.length ? replies : undefined,
+    }
+  }
+  const out = {
+    page,
+    total: (data && data.total) || 0,
+    has_more: !!(data && data.more),
+    hot: (((data && data.hotComments) || []).map(toComment).filter(Boolean)),
+    comments: (((data && data.comments) || []).map(toComment).filter(Boolean)),
+  }
+  commentCache.set(cacheKey, out)
+  return out
+}
+
+// 浏览路由注册（全部 POST + JSON body，对齐 /api/music/url 风格；player 经
+// /api/v1/jsplugin/kwqq/* 调用，宿主 catch-all 已带 JWT 鉴权与透传）
+function registerBrowseRoutes(router) {
+  router.post('/browse/search', async (req) => {
+    const body = parseBody(req)
+    if (body === null) return bodyError()
+    if (!String(body.keywords || '').trim()) return jsonResponse({ error: 'keywords required' }, 400)
+    const cfg = await getConfig()
+    const cacheKey = 'bs|' + String(body.type || 'music') + '|' + String(body.keywords || '').trim() +
+      '|' + (Number(body.page) || 1) + '|' + cfg.sources.join(',')
+    return browseHandler(cacheKey, () => browseSearch(body))
+  })
+  router.post('/album/info', async (req) => {
+    const body = parseBody(req)
+    if (body === null) return bodyError()
+    const source = String(body.source || 'netease')
+    const hasLocator = (body.id && String(body.id).trim()) || String(body.name || '').trim()
+    if (!hasLocator) return jsonResponse({ error: 'id 或 name 至少提供一个' }, 400)
+    if (source !== 'netease' && BROWSE_SOURCES_WITH_ALBUM.indexOf(source) < 0) {
+      return jsonResponse({ error: '该源暂不支持专辑检索', unsupported: true }, 501)
+    }
+    return browseHandler('al|' + source + '|' + (body.id || '') + '|' +
+      String(body.name || '') + '|' + String(body.artist || ''), () => albumInfo(body))
+  })
+  router.post('/artist/info', async (req) => {
+    const body = parseBody(req)
+    if (body === null) return bodyError()
+    if (!String(body.id || '').trim()) return jsonResponse({ error: 'id required' }, 400)
+    return browseHandler('ar|' + String(body.id || ''), () => artistInfo(body))
+  })
+  router.post('/artist/works', async (req) => {
+    const body = parseBody(req)
+    if (body === null) return bodyError()
+    if (!String(body.id || '').trim()) return jsonResponse({ error: 'id required' }, 400)
+    return browseHandler('arw|' + String(body.id || '') + '|' + (body.type || 'music') + '|' +
+      (Number(body.page) || 1) + '|' + (Number(body.limit) || 30), () => artistWorks(body))
+  })
+  router.post('/sheet/info', async (req) => {
+    const body = parseBody(req)
+    if (body === null) return bodyError()
+    if (!String(body.id || '').trim()) return jsonResponse({ error: 'id required' }, 400)
+    return browseHandler('sh|' + String(body.id || '') + '|' + (Number(body.page) || 1) + '|' +
+      (Number(body.limit) || 50), () => sheetInfo(body))
+  })
+  router.post('/toplists', async () => browseHandler('tls', () => toplists()))
+  router.post('/toplist/detail', async (req) => {
+    const body = parseBody(req)
+    if (body === null) return bodyError()
+    if (!String(body.id || '').trim()) return jsonResponse({ error: 'id required' }, 400)
+    return browseHandler('tld|' + String(body.id || '') + '|' + (Number(body.page) || 1) + '|' +
+      (Number(body.limit) || 50), () => toplistDetail(body))
+  })
+  router.post('/recommend/tags', async () => browseHandler('rtags', () => recommendTags()))
+  router.post('/recommend/sheets', async (req) => {
+    const body = parseBody(req)
+    if (body === null) return bodyError()
+    return browseHandler('rsh|' + String(body.cat || '') + '|' + (Number(body.page) || 1) + '|' +
+      (Number(body.limit) || 30), () => recommendSheets(body))
+  })
+  router.post('/music/comments', async (req) => {
+    const body = parseBody(req)
+    if (body === null) return bodyError()
+    if (!String(body.id || '').trim() && !String(body.title || '').trim()) {
+      return jsonResponse({ error: 'id 或 title 至少提供一个' }, 400)
+    }
+    return browseHandler('cmt|' + String(body.id || '') + '|' + String(body.title || '') + '|' +
+      (Number(body.page) || 1) + '|' + (Number(body.limit) || 20), () => musicComments(body))
+  })
+}
+
+registerBrowseRoutes(router)
 
 // ===== 生命周期 =====
 async function onInit() {

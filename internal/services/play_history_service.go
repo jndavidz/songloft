@@ -103,6 +103,70 @@ func (s *PlayHistoryService) List(ctx context.Context, contextType, contextKey s
 	return entries, nil
 }
 
+// MaxRecentPlayHistory 「最近播放」跨上下文查询单次返回条数上限。
+const MaxRecentPlayHistory = 200
+
+// ListRecent 跨上下文返回最近播放的歌曲（按歌曲去重、播放时间倒序，含完整歌曲详情）。
+// 供「最近播放」页使用：用户不关心当时在哪个上下文听的，只关心「昨天那首」。
+func (s *PlayHistoryService) ListRecent(ctx context.Context, limit, offset int) (models.PlayHistoryListResponse, error) {
+	if limit <= 0 {
+		limit = MaxRecentPlayHistory
+	}
+	if limit > MaxRecentPlayHistory {
+		limit = MaxRecentPlayHistory
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.PlayHistoryRepository().ListRecent(ctx, limit, offset)
+	if err != nil {
+		return models.PlayHistoryListResponse{}, err
+	}
+	total, err := s.db.PlayHistoryRepository().CountRecent(ctx)
+	if err != nil {
+		return models.PlayHistoryListResponse{}, err
+	}
+	entries := s.hydrateRows(ctx, rows)
+	return models.PlayHistoryListResponse{Items: entries, Total: total}, nil
+}
+
+// ClearAll 清空全部上下文的播放历史，返回删除条数。
+func (s *PlayHistoryService) ClearAll(ctx context.Context) (int, error) {
+	return s.db.PlayHistoryRepository().ClearAll(ctx)
+}
+
+// hydrateRows 按 rows 顺序把歌曲详情水合进历史条目，查不到的 song_id 跳过（防御性）。
+func (s *PlayHistoryService) hydrateRows(ctx context.Context, rows []database.PlayHistoryRow) []models.PlayHistoryEntry {
+	if len(rows) == 0 {
+		return []models.PlayHistoryEntry{}
+	}
+	ids := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.SongID)
+	}
+	songs, err := s.db.SongRepository().ListByIDs(ctx, ids)
+	if err != nil {
+		return []models.PlayHistoryEntry{}
+	}
+	byID := make(map[int64]*models.Song, len(songs))
+	for _, song := range songs {
+		byID[song.ID] = song
+	}
+	entries := make([]models.PlayHistoryEntry, 0, len(rows))
+	for _, row := range rows {
+		song, ok := byID[row.SongID]
+		if !ok {
+			continue
+		}
+		entries = append(entries, models.PlayHistoryEntry{
+			Song:      song,
+			PlayedAt:  row.PlayedAt,
+			PlayCount: row.PlayCount,
+		})
+	}
+	return entries
+}
+
 // Clear 清空该上下文的全部播放历史，返回删除条数。
 func (s *PlayHistoryService) Clear(ctx context.Context, contextType, contextKey string) (int, error) {
 	if !IsValidPlayContextType(contextType) {
