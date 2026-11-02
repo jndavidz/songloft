@@ -242,7 +242,7 @@ webgui（:3004，按需拉起）把下载文件写入 `/volume1/music`，Songlof
 
 ### 3.8 宿主能给 musicdl 的支持
 
-1. **现成消费端**：kwqq 插件（`2026.10.28`，`minHostVersion 2.9.0`，权限 `storage,net`）已是生产形态的消费者，接口契约稳定。
+1. **现成消费端**：kwqq 插件（**现网 `2026.11.2`**，`minHostVersion 2.9.0`，权限 `storage,net`；2026-11-02 经 `/api/v1/jsplugins/upload` 部署，`zip_hash=2dd3cb5a…` 与办公室构建一致，`status=active`；回滚包在容器内 `/app/data/backups/kwqq-2026.10.28.jsplugin.zip`。`2026.11.2` 起自持 `/api/music/url` 并支持播放链路 `source_quality` 档位 hint——旧版 server（≤30213cd）不下发该参数，行为与旧版逐字节一致，见 `.scratch/audio-quality-routing/spec.md`）已是生产形态的消费者，接口契约稳定。
 2. **把 10 分钟直链风险挡在宿主侧**：remote 条目导入后，`/songs/{id}/play` 由宿主重新解析并代理拉流+缓存，音箱/客户端拿到的是可长期复用的宿主 URL。
 3. **插件分发渠道**：插件商店/注册表/自动更新可把 kwqq 作为自建源上架，版本随插件走，无需手动传 zip。
 4. **共享目录解耦**：webgui 下载 → `/volume1/music` → Songloft 扫描 → Lyrion 同读，无 API 耦合。

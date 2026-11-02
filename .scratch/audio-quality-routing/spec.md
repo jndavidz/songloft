@@ -85,8 +85,9 @@ Source: 会话讨论（songloft 音质语义考证 + kwqq 链路现状 + 联网�
 | 11 | 跨项目离线验收 | workspace `music_ecosystem.py --lab`（修复 runner 孤儿注册 + 补齐 bridge/musicdl venv 与 ffmpeg 后） | **8 passed / 2 failed / 0 blocked**（修复前 2/1/7）；musicdl 五套件 197/0 全绿；两失败均为 Windows 既存（bridge shell-quoting/temp-cleanup + songloft jsplugin fs-path，基线复现、与本次零交集） |
 | 12 | **服务端全链路 E2E** | 办公室真实 server（`songloft.exe` :18091）+ 上传 kwqq 插件包 2026.11.2 + 加歌（kuwo id=228908）+ 三档位播放探针 | 三探针全部 **HTTP 206 + ID3 魔数**；server 日志实证：`tier=192k`（hint 原样透传、上游 snap 返回 320kbps 如实）、`tier=320k`（flac 探针被防御归一——无损不透传）、加歌元数据探测 `tier=320k`（恒空 hint，D4）；第 4 次（无 hint）命中后台缓存直出、不再解析 |
 | 13 | SDK 发版通道 | `git push --dry-run`（upstream）+ `npm whoami` | **双通道均无凭证**：GitHub 403 denied to jndavidz；npm ENEEDAUTH。非本次可解，kwqq 已不受阻塞（自持路由）；发版手册见 Further Notes |
+| 14 | **生产部署** | NAS songloft 容器 `POST /api/v1/jsplugins/upload`（2026-11-02） | `kwqq 2026.11.2` 上线：`status=active`、`zip_hash=2dd3cb5a…` 与办公室构建一致；生产 kwqq 歌曲三探针（id 40/39/38）全部 **206+ID3 魔数**；日志 `js plugin updated via upload … version=2026.11.2`。回滚点：容器内 `/app/data/backups/kwqq-2026.10.28.jsplugin.zip`。边界：现网 server 仍为 ≤30213cd 旧版（无 `source_quality` 管道），新插件对旧 server 行为与旧版逐字节一致——hint 语义待下次 server 镜像更新激活；三探针均命中缓存副本故无 tier 行（解析路径证据见 #12） |
 
-**仍需真机/人工的收尾**（非阻塞门，与 S-07 真机授权一致）：① **kwqq `2026.11.2` 部署 NAS**——现网 songloft 容器仍跑 `2026.10.28`，新包在 `plugins/src/kwqq/dist/kwqq.jsplugin.zip`，经 songloft 管理页或 `POST /api/v1/jsplugins/upload` 上传即生效（无 hint 行为与旧版逐字节一致，向后兼容）；② 安卓真机冒烟四项（后台播放/通知栏/audio focus/插件歌起播延迟目测；debug APK 已备于家庭 PC `clients/player/build/app/outputs/flutter-apk/app-debug.apk`）；③ 音箱端到端听感确认（服务端链路已 E2E 实证，见 #12）；④ SDK 2.19.0 发版需用户侧凭证（GitHub 对 songloft-org 无写权限 / npm 无 token）。
+**仍需真机/人工的收尾**（非阻塞门，与 S-07 真机授权一致）：① ~~kwqq `2026.11.2` 部署 NAS~~（**已完成**，见 #14；回滚包在容器内 `/app/data/backups/`）；② 安卓真机冒烟四项（后台播放/通知栏/audio focus/插件歌起播延迟目测；debug APK 已备于家庭 PC `clients/player/build/app/outputs/flutter-apk/app-debug.apk`）；③ 音箱端到端听感确认（服务端链路已 E2E 实证，见 #12；注意：`source_quality` 语义需 server 镜像更新到含 fd78f54 链的版本后才有真机意义，在那之前现网行为=旧版 320k）；④ SDK 2.19.0 发版需用户侧凭证（GitHub 对 songloft-org 无写权限 / npm 无 token）。
 
 ## Further Notes
 
