@@ -25,10 +25,10 @@ Songloft is a self-hosted local music server that supports both **server deploym
 |------|------|------|
 | `/` | Go 1.26 + Chi v5 + SQLite | Backend API service (default port 58091, account admin/admin) |
 | `/mobile` | Go + gomobile | Mobile binding entry point for the Go backend (gomobile bind; exports Start/Stop/IsRunning/GetPort) |
-| `/clients/player` ([separate repo](https://github.com/songloft-org/songloft-player)) | Flutter 3.41+ / Dart 3.7+ | Cross-platform frontend (6 platforms), supports Bundle local mode |
+| `/clients/player` ([separate repo](https://github.com/songloft-org/songloft-player)) | Flutter 3.41+ / Dart 3.7+ | Cross-platform frontend (6 platforms), supports Bundle local mode. The link is the public upstream identity; this workspace fetches from the `jndavidz/songloft-player` fork (see `.gitmodules`) |
 | `/clients/player-lynx` ([separate repo](https://github.com/songloft-org/songloft-player-lynx)) | TS + ReactLynx | Android/iOS/HarmonyOS/Web preview client, separate main dev builds and v* releases (submodule; no desktop/Bundle) |
 | `/clients/tv` ([separate repo](https://github.com/songloft-org/songloft-tv)) | Kotlin | Android TV client (submodule) |
-| `/plugins/toolchain` ([separate repo](https://github.com/songloft-org/plugin-toolchain)) | TS + pnpm | JS plugin development toolchain (SDK / Builder / scaffolding) |
+| `/plugins/toolchain` ([separate repo](https://github.com/songloft-org/plugin-toolchain)) | TS + pnpm | JS plugin development toolchain (SDK / Builder / scaffolding). The link is the public upstream identity; our own SDK changes live only on the `jndavidz/plugin-toolchain` fork (`main`=`27d3602`), which is what this workspace fetches (see `.gitmodules`) |
 | `/plugins/src` | TS | JS plugin source (a collection of submodules; each plugin distributes releases from its own repo) |
 | `/pkg/tag` | Go | Audio metadata **read/write** library (extends the upstream tag library with MP3/FLAC writing) |
 | `/integrations/home-assistant` ([separate repo](https://github.com/songloft-org/home-assistant-addon)) | HA add-on | Home Assistant add-on (thin layer reusing the Docker image). **The `repository.yaml` manifest must sit at that repo's root**, which is exactly why it was split out (#340); design/pitfalls: see [README](integrations/home-assistant/README.md) |
