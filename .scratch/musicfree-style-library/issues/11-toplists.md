@@ -15,3 +15,4 @@
 ## Notes（2026-11-03 落地）
 
 - 离线施工完成；真机 UI 冒烟 Not run（本会话无设备窗口）。
+- 第二批（2026-11-03）：榜单详情页 AppBar 加「播放全部」——首屏导入 300 立即起播，后台按 `toplist/detail` 的 total 补齐到 500 上限（`RemotePlayback.startBackgroundCatchUp`，代次过期自动停）。补齐链路口径见 06 号票 Notes。

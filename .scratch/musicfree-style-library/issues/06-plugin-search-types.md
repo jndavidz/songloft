@@ -26,4 +26,31 @@
 ### review 遗留（2026-11-03）
 
 - server 侧「501/超时的错误包装」测试项随复用 catch-all 的修订**由插件 Node 测试承担**（browse 24 项含 501/超时三态），server 只保留 401/403 接线断言——spec Testing Decisions 的原措辞按修订口径解释。
-- 判定项留后续：`/api/search` 内联聚合与 `searchMusicAggregated` 的同构重复（刻意保留既有路径原状）、9 个 browse 路由的 parseBody→校验→browseHandler 样板可表驱动收拢、`albumInfo` 的 501 靠 message 字符串分类（可改显式 error code）、`/browse/search` 类型搜索的 kugou 通道实测后可补。
+- 判定项留后续：`/api/search` 内联聚合与 `searchMusicAggregated` 的同构重复（刻意保留既有路径原状）、9 个 browse 路由的 parseBody→校验→browseHandler 样板可表驱动收拢、`albumInfo` 的 501 靠 message 字符串分类（可改显式 error code）、`/browse/search` 类型搜索的 kugou 通道实测后可补。（→ 四项已在下节「类型搜索多源化」第二批收口）
+
+### 类型搜索多源化 + 分页点播补齐（2026-11-03 第二批）
+
+用户裁决范围两次扩大后的结果：`/browse/search` 的 album/artist/sheet 三类型不再 netease 单源，改按源能力 fan-out；分页详情页补后台队列补齐。
+
+- **七源能力矩阵**（对照 `D:\_work\repos\musicfree-plugins` 现役插件的 `supportedSearchType` 与 search 实现逐一实测）：
+
+| 源 | album | artist | sheet | 类型搜索通道 |
+|---|---|---|---|---|
+| netease | ✅ | ✅ | ✅ | 容器透传 `cloudsearch` type=10/100/1000（插件直连，不经 server） |
+| kugou | ✅ | ✅ | ✅ | 容器透传 `/kugou/api/search?type=`（字符串枚举，见下条） |
+| qq | ✅ | ✅ | ✅ | server 精装 P7（fcg `DoSearchForQQMusicMobile` search_type 2/1/3） |
+| kuwo | ✅ | ✅ | ✅ | server 精装 P7（`r.s` 的 ft=album/artist/playlist） |
+| migu | ✅ | ✅ | ❌ | server 精装 P7（官方 `search_all.do`） |
+| qianqian | ✅ | ✅ | ❌ | server 精装 P7（`/v1/search` type=3/2） |
+| bilibili | — | — | — | 不纳入：其 album 类型与 music 同源、无独立类型通道 |
+
+  插件侧 `SERVER_MULTI_SOURCES = ['qq','kuwo','migu','qianqian']`（`src/main.js:608`）走 `GET /{source}/search/multi`，netease/kugou 走透传；单源 501/超时按源跳过、不阻塞其余源。musicdl 侧契约见 API-REFERENCE §4.5b（v1.13）。
+- **kugou 数字 type 不分流**：`/kugou/api/search` 的 type=1/2/3/4/8 实测全返回单曲，仅字符串枚举 `album/author/special` 分流（`KUGOU_MULTI_TYPE`，`src/main.js:573`）。API-REFERENCE §5.1 原映射表的数字 type 口径对该容器不成立。
+- **kugou 歌手作品行 id 取 `hash_128 || hash`**：对齐 kwqq-api `/kugou/song/url` 以 FileHash 取链，取错字段会得到不可播条目。
+- **P6「kuwo/qq 专辑检索 501」前提已被推翻**：kwqq-api 已实现两源专辑，musicdl 离线测试原断言 501 的那例改用 bilibili 作 501 样例。
+- **review 遗留四项收口**：① browse 路由改表驱动 `BROWSE_ROUTES` + `registerBrowseRoutes`（parseBody→validate→unsupported→cacheKey 四段样板合一）；② 501 分类由 message 字符串匹配改显式标记 `err.unsupported`，`browseHandler` 据此归一 envelope（仍兼容上游 501 原样透传）；③ kugou 类型通道实测并接入；④ `/api/search` 内联聚合消除同构重复、委托 `searchMusicAggregated`（首源错误与失败计数日志一并下沉）。
+- **分页点播后台补齐（player）**：`PlayerNotifier.loadRemainingQueue`（复用 QueueLoader 代次语义，代次过期自动停）+ `RemotePlayback.startBackgroundCatchUp`（补齐上限 `kCatchUpCap=500`、首屏导入 `kPlayAllImportCap=300`，后者自 sheet 页局部常量收拢到 data 层）。接线页：歌单详情、榜单详情、歌手热门单曲（AppBar 播放全部）。边界两条：插件 `artist/works` 不返回 total → 用 `artistInfo` 的 `music_count`，未知（0）时只播已加载页不补齐；该端点 limit 上限 50 ⇒ 补齐页固定 30，以保持 offset↔分页换算对齐（否则 QueueLoader 的 pageSize 100 会被插件钳到 50，页码换算错位导致同页重复入队）。
+- **详情链边界（本批未扩展）**：qq/kuwo/migu/qianqian 只有类型搜索通道，其条目详情页未接入（点开出既有 501 envelope）；歌手作品 = netease + kugou，歌单/榜单详情 = netease。
+- 测试：kwqq `node --test` 28 项 + music-url 6 项回归全绿；player `flutter analyze` browse 零告警、`flutter test test/features/browse` 11 项全绿；musicdl 离线 46/46 + WSL live probe 全通。player 全量 `flutter test` 802 通过 / 4 失败（共 806）——4 项失败均为 Windows 伪影（res 扫描与路径断言用 `/` split、temp 目录被占用致删除失败），与本批无因果。
+- Not run：真机点歌/补齐链（无设备窗口）；`music_ecosystem.py --lab`（kwqq-api 与 bridge 契约零改动，仅 musicdl server 新增端点）。
+
