@@ -36,7 +36,8 @@ globalThis.fetch = async (url) => {
       return { ok: true, status: 200, json: async () => ({ code: 200, msg: 'ok', data: v }) };
     }
   }
-  if (url.includes('/search')) {
+  // 精装单曲搜索专用兜底：/search/multi（P7）与 /kugou/api/* 透传不落这里
+  if (url.includes('/search') && !url.includes('search/multi') && !url.includes('/kugou/api/')) {
     return {
       ok: true, status: 200,
       json: async () => ({
@@ -97,7 +98,7 @@ test('browse/search：album 类型走 netease cloudsearch type=10，条目含 so
   const out = JSON.parse(res.body);
   assert.equal(out.type, 'album');
   assert.equal(out.isEnd, true);
-  assert.equal(out.source, 'netease');
+  assert.deepEqual(out.sources, ['netease']);
   assert.equal(out.items[0].id, '272566217');
   assert.equal(out.items[0].source, 'netease');
   assert.equal(out.items[0].track_count, 1);
@@ -171,13 +172,19 @@ test('album/info：非 netease 走精装二段式，候选归一', async () => {
   assert.equal(out.tracks[0].dedup_key, 'kwqq_kugou_77');
 });
 
-test('album/info：kuwo 未接入精装 → 501 envelope（unsupported 如实透出）', async () => {
+test('album/info：上游 501 如实透出（kuwo 现已接入精装，上游不可用仍归一 501）', async () => {
   setUpstream({ premium: { 'kuwo/album?name=': 501 } });
   const res = await post('/album/info', { source: 'kuwo', name: 'X' });
   assert.equal(res.statusCode, 501);
   const out = JSON.parse(res.body);
   assert.equal(out.unsupported, true);
   assert.ok(out.error.length > 0);
+});
+
+test('album/info：bilibili 无精装通道 → 路由层 501 envelope', async () => {
+  const res = await post('/album/info', { source: 'bilibili', name: 'X' });
+  assert.equal(res.statusCode, 501);
+  assert.equal(JSON.parse(res.body).unsupported, true);
 });
 
 test('album/info：缺 id 与 name → 400；不支持的源 → 501', async () => {
@@ -375,4 +382,74 @@ test('music/comments：无 id 时按 title+artist 回搜 netease id', async () =
   const out = JSON.parse(res.body);
   assert.equal(out.comments[0].id, '5');
   assert.ok(upstreamCalls.some((u) => u.includes('type=1&limit=1')));
+});
+
+test('browse/search：类型搜索多源 fan-out（netease+kugou 透传，server multi 归一）', async () => {
+  setUpstream({
+    netease: {
+      'cloudsearch?keywords=%E5%91%A8%E6%9D%B0%E4%BC%A6&type=10': {
+        code: 200,
+        result: { albumCount: 1, albums: [{ id: 1, name: 'N专辑', picUrl: 'https://p/n.jpg', size: 5, artist: { name: '周杰伦' } }] },
+      },
+    },
+    premium: {
+      'kugou/api/search?': {
+        // 透传 = 上游原样 JSON（无信封）
+        lists: [{ albumid: 958706, albumname: 'K专辑', singer: '周杰伦', img: 'https://p/k.jpg' }],
+        total: 1,
+      },
+      'qq/search/multi?': { items: [{ id: '8217', name: 'Q专辑', artist: '周杰伦', cover: 'https://p/q.jpg' }], total: 1 },
+    },
+  });
+  const res = await post('/browse/search', { keywords: '周杰伦', type: 'album' });
+  assert.equal(res.statusCode, 200);
+  const out = JSON.parse(res.body);
+  // 轮询交错：N、K、Q 各出一行
+  assert.deepEqual(out.items.map(x => x.source), ['netease', 'kugou', 'qq']);
+  assert.equal(out.items[1].id, '958706');
+  assert.equal(out.items[1].name, 'K专辑');
+  assert.equal(out.items[2].cover_url, 'https://p/q.jpg');   // server multi 的 cover → cover_url 归一
+  assert.ok(upstreamCalls.some(u => u.includes('/qq/search/multi?') && u.includes('type=album')));
+});
+
+test('artist/info + works：kugou 透传通道（detail/audios/albums）', async () => {
+  setUpstream({
+    premium: {
+      'kugou/api/artist/detail?': {
+        status: 1, error_code: 0,
+        data: { author_id: 3520, author_name: '周杰伦', sizable_avatar: 'http://img/{size}/a.jpg',
+                album_count: 49, audio_count: 1859, long_intro: [{ content: '简介' }] },
+      },
+      'kugou/api/artist/audios?': {
+        total: 1,
+        data: [{ album_audio_id: 1, audio_name: '歌曲A', author_name: '周杰伦', album_name: '专辑X',
+                 hash_128: 'HASHA', timelength_128: 239000, trans_param: { union_cover: 'https://p/c.jpg' } }],
+      },
+      'kugou/api/artist/albums?': {
+        total: 1,
+        data: [{ album_id: 958706, album_name: '专辑B', sizable_cover: 'http://img/{size}/b.jpg', author_name: '周杰伦' }],
+      },
+    },
+  });
+  const r1 = await post('/artist/info', { id: '3520', source: 'kugou' });
+  const a1 = JSON.parse(r1.body);
+  assert.equal(a1.artist.name, '周杰伦');
+  assert.equal(a1.artist.avatar_url, 'http://img/240/a.jpg');
+  assert.equal(a1.artist.source, 'kugou');
+
+  const r2 = await post('/artist/works', { id: '3520', type: 'music', source: 'kugou' });
+  const a2 = JSON.parse(r2.body);
+  assert.equal(a2.items[0].dedup_key, 'kwqq_kugou_HASHA');
+  assert.equal(a2.items[0].duration, 239);
+
+  const r3 = await post('/artist/works', { id: '3520', type: 'album', source: 'kugou' });
+  const a3 = JSON.parse(r3.body);
+  assert.equal(a3.items[0].id, '958706');
+  assert.equal(a3.items[0].cover_url, 'http://img/240/b.jpg');
+});
+
+test('artist/info：不支持源（qq）→ 501 envelope', async () => {
+  const res = await post('/artist/info', { id: '4558', source: 'qq' });
+  assert.equal(res.statusCode, 501);
+  assert.equal(JSON.parse(res.body).unsupported, true);
 });
