@@ -921,175 +921,75 @@ async function kugouSheetInfo(cfg, id, page, limit) {
   return out
 }
 
-// —— kuwo 浏览归一（官方 wapi 免登通道，musicfree 酷我插件现役实现对齐，
-// 形状 2026-11-04 现网实测；曲目 id=rid，与 kwqq-api kuwo 播放链口径一致）——
-const KUWO_HEADERS = { 'User-Agent': 'kwplayer_pc_9.0.5.0', Referer: 'https://www.kuwo.cn/' }
-
-async function kuwoOfficialGet(url, params, timeoutMs) {
-  const parts = []
-  for (const k in params) {
-    if (params[k] === undefined || params[k] === null) continue
-    parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k]))
-  }
-  const fullUrl = url + (parts.length ? '?' + parts.join('&') : '')
-  const headers = KUWO_HEADERS
-  const resp = await withTimeout(fetch(fullUrl, { headers }), timeoutMs || 10000, 'kuwo')
-  if (!resp.ok) throw new Error('kwqq http ' + resp.status)
-  return resp.json()
-}
-
-function kuwoSongToResult(id, title, artist, album, duration, cover) {
-  const rid = String(id || '').replace(/^MUSIC_/, '')
-  const d = Number(duration) || 0
-  return {
-    title: title || 'Unknown',
-    artist: artist || 'Unknown',
-    album: album || undefined,
-    duration: d,
-    cover_url: cover || undefined,
+// —— kuwo 浏览归一（P8：走 kwqq-api 统一门面 /kuwo/*，归一在 adapter 内完成；
+// 形状 2026-11-04 现网实测。曲目 id=rid 与播放链口径一致）——
+async function kuwoToplists(cfg) {
+  const data = await kwqq(cfg, '/kuwo/toplists', 10000)
+  return (data && data.items || []).map(it => ({
+    id: it.id,
+    name: it.name || '',
+    cover_url: it.cover || undefined,
+    description: it.description || undefined,
     source: 'kuwo',
-    source_data: { s: 'kuwo', i: rid, n: title || '', a: artist || '', al: album || '', d },
-    dedup_key: 'kwqq_kuwo_' + rid,
-  }
+  }))
 }
 
-// 榜单：wapi/pc/bang/list（分组平铺为 items）
-async function kuwoToplists() {
-  const data = await kuwoOfficialGet('http://wapi.kuwo.cn/api/pc/bang/list', {}, 10000)
-  const groups = (data && data.child) || []
-  const items = []
-  for (const g of groups) {
-    for (const b of g.child || []) {
-      items.push({
-        id: String(b.sourceid || ''),
-        name: b.name || '',
-        cover_url: b.pic5 || b.pic2 || b.pic || undefined,
-        description: b.intro || undefined,
-        source: 'kuwo',
-      })
-    }
-  }
-  return items
+async function kuwoToplistDetail(cfg, id, page, limit) {
+  const data = await kwqq(cfg, '/kuwo/toplist/songs?id=' + encodeURIComponent(id) +
+    '&page=' + page + '&limit=' + limit, 20000)
+  const tracks = ((data && data.items) || []).map(itemToResult)
+  for (const t of tracks) { t.source = 'kuwo'; t.dedup_key = 'kwqq_kuwo_' + t.source_data.i }
+  return { page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined, tracks }
 }
 
-// 榜单详情：kbangserver ksong.s（pn 从 0 起；total 不返回，用不足一页判尽）
-async function kuwoToplistDetail(id, page, limit) {
-  const data = await kuwoOfficialGet('http://kbangserver.kuwo.cn/ksong.s', {
-    from: 'pc', fmt: 'json', pn: page - 1, rn: limit, type: 'bang', data: 'content',
-    id, show_copyright_off: 0, pcmp4: 1, isbang: 1, userid: 0, httpStatus: 1,
-  }, 15000)
-  const songs = (data && data.musiclist) || []
-  return {
-    page, isEnd: songs.length < limit,
-    total: (data && data.num) || undefined,
-    tracks: songs.map(m => kuwoSongToResult(
-      m.id, m.name, m.artist, m.album, m.song_duration || m.duration, undefined,
-    )),
-  }
-}
-
-// 歌单详情：nplserver pl.svc（pn 从 0 起；total 分页判据；page=1 自带元数据）
-async function kuwoSheetInfo(id, page, limit) {
-  const data = await kuwoOfficialGet('http://nplserver.kuwo.cn/pl.svc', {
-    op: 'getlistinfo', pid: id, pn: page - 1, rn: limit,
-    encode: 'utf8', keyset: 'pl2012', vipver: 'MUSIC_9.1.1.2_BCS2', newver: 1,
-  }, 15000)
-  const songs = (data && data.musiclist) || []
-  const total = (data && data.total) || songs.length
+async function kuwoSheetInfo(cfg, id, page, limit) {
+  const data = await kwqq(cfg, '/kuwo/playlist/songs?id=' + encodeURIComponent(id) +
+    '&page=' + page + '&limit=' + limit, 20000)
+  const tracks = ((data && data.items) || []).map(itemToResult)
+  for (const t of tracks) { t.source = 'kuwo'; t.dedup_key = 'kwqq_kuwo_' + t.source_data.i }
   const out = {
-    page, isEnd: (page - 1) * limit + songs.length >= total, total,
-    tracks: songs.map(m => kuwoSongToResult(
-      m.musicrid || m.id, m.name || m.FNAME, m.artist || m.FARTIST, m.album || m.FALBUM,
-      m.duration || m.song_duration, m.albumpic || m.pic,
-    )),
+    page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined,
+    tracks,
   }
-  if (page === 1) {
+  const meta = data && data.meta
+  if (page === 1 && meta) {
     out.sheet = {
-      id: String((data && data.id) || id),
-      name: (data && data.title) || '',
-      creator: (data && data.uname) || '',
-      cover_url: (data && data.pic) || undefined,
-      track_count: total,
-      play_count: (data && data.playnum) || 0,
-      description: (data && data.info) || undefined,
+      id: String(meta.id || id),
+      name: meta.name || '',
+      creator: meta.creator || '',
+      cover_url: meta.cover || undefined,
+      track_count: meta.track_count || 0,
+      play_count: (meta.extra && meta.extra.play_count) || 0,
+      description: (meta.extra && meta.extra.description) || undefined,
       source: 'kuwo',
     }
   }
   return out
 }
 
-// 推荐标签：wapi getTagList。专区标签（digest!=10000）的 id 编码为 `<id>@<digest>`，
-// recommend/sheets 侧按 '@' 分流（对客户端零改动）
-async function kuwoRecommendTags() {
-  const data = await kuwoOfficialGet(
-    'http://wapi.kuwo.cn/api/pc/classify/playlist/getTagList',
-    {
-      cmd: 'rcm_keyword_playlist', user: 0, prod: 'kwplayer_pc_9.0.5.0',
-      vipver: '9.0.5.0', source: 'kwplayer_pc_9.0.5.0',
-      loginUid: 0, loginSid: 0, appUid: 76039576,
-    }, 10000)
-  const cats = (data && data.data) || []
-  const groups = []
-  const pinned = []
-  for (const cat of cats) {
-    const tags = (cat.data || []).map(t => ({
-      id: String(t.digest === '10000' || !t.digest ? t.id : t.id + '@' + t.digest),
-      title: t.name || '',
-    }))
-    if (!tags.length) continue
-    groups.push({ title: cat.name || '', data: tags })
-    for (const t of cat.data || []) {
-      if (String(t.digest) === '10000' && pinned.length < 8) {
-        pinned.push({ id: String(t.id), title: t.name || '' })
-      }
-    }
-  }
-  return { pinned, categories: groups }
+// 推荐标签：pinned + 分组，TagEntry {id,title} 与 browse 契约同形，原样透传
+async function kuwoRecommendTags(cfg) {
+  const data = await kwqq(cfg, '/kuwo/playlist/tags', 10000)
+  return { pinned: (data && data.pinned) || [], groups: (data && data.groups) || [] }
 }
 
-// 推荐歌单：热门/普通标签走 getTagPlayList 分页，空标签走 getRcmPlayList，
-// 专区标签（id 带 @digest）走 er.s 聚合一次返回、切片分页
-async function kuwoRecommendSheets(cat, page, limit) {
-  const decodeSheet = p => ({
-    id: String(p.playlistid || p.id || ''),
-    name: p.name || '',
-    creator: p.nickname || p.uname || '',
-    cover_url: p.pic || p.img || undefined,
-    track_count: Number(p.songnum || p.total) || 0,
-    play_count: Number(p.playcnt || p.listencnt) || 0,
-    source: 'kuwo',
-  })
-  let items = []
-  let isEnd = true
-  if (cat.indexOf('@') >= 0) {
-    // 专区：er.s 无分页，一次拉全后切片
-    const raw = await kuwoOfficialGet('http://mobileinterfaces.kuwo.cn/er.s', {
-      type: 'get_pc_qz_data', f: 'web', id: cat.split('@')[0], prod: 'pc',
-    }, 10000)
-    const flat = []
-    for (const sec of Array.isArray(raw) ? raw : []) {
-      for (const p of (sec && sec.list) || []) flat.push(p)
-    }
-    items = flat.slice((page - 1) * limit, page * limit).map(decodeSheet)
-    isEnd = page * limit >= flat.length
-  } else {
-    const params = { loginUid: 0, loginSid: 0, appUid: 76039576, pn: page - 1, rn: limit }
-    if (cat) params.id = cat
-    else params.order = 'hot'
-    const data = await kuwoOfficialGet(
-      cat
-        ? 'http://wapi.kuwo.cn/api/pc/classify/playlist/getTagPlayList'
-        : 'http://wapi.kuwo.cn/api/pc/classify/playlist/getRcmPlayList',
-      params, 10000)
-    const inner = (data && data.data) || {}
-    items = (inner.data || []).map(decodeSheet)
-    const total = Number(inner.total) || items.length
-    isEnd = page * limit >= total
+async function kuwoRecommendSheets(cfg, cat, page, limit) {
+  const data = await kwqq(cfg, '/kuwo/playlist/sheets?tag=' + encodeURIComponent(cat) +
+    '&page=' + page + '&limit=' + limit, 20000)
+  return {
+    cat, page,
+    isEnd: !!(data && data.is_end),
+    items: ((data && data.items) || []).map(it => ({
+      id: it.id,
+      name: it.name || '',
+      creator: it.creator || '',
+      cover_url: it.cover || undefined,
+      track_count: it.track_count || 0,
+      play_count: it.play_count || 0,
+      source: 'kuwo',
+    })),
   }
-  return { cat, page, isEnd, items }
 }
-
-// 歌单详情：按 source 分发（netease 曲目分页 playlist/track/all，首页并拉
 // playlist/detail 元数据；kugou 见 kugouSheetInfo；kuwo 见 kuwoSheetInfo）
 async function sheetInfo(body) {
   const id = String(body.id || '').trim()
@@ -1099,7 +999,7 @@ async function sheetInfo(body) {
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
   if (source === 'kugou') return kugouSheetInfo(cfg, id, page, limit)
-  if (source === 'kuwo') return kuwoSheetInfo(id, page, limit)
+  if (source === 'kuwo') return kuwoSheetInfo(cfg, id, page, limit)
   const offset = (page - 1) * limit
   const data = await neteaseApi(cfg, 'playlist/track/all?id=' + encodeURIComponent(id) +
     '&limit=' + limit + '&offset=' + offset, 15000)
@@ -1160,7 +1060,7 @@ async function toplists() {
     }))
   }
   if (cfg.sources.indexOf('kuwo') >= 0) {
-    tasks.push(kuwoToplists())
+    tasks.push(kuwoToplists(cfg))
   }
   const per = await Promise.allSettled(tasks)
   const items = []
@@ -1194,7 +1094,7 @@ async function toplistDetail(body) {
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
   if (source === 'kugou') return kugouToplistDetail(cfg, id, page, limit)
-  if (source === 'kuwo') return kuwoToplistDetail(id, page, limit)
+  if (source === 'kuwo') return kuwoToplistDetail(cfg, id, page, limit)
   const offset = (page - 1) * limit
   const data = await neteaseApi(cfg, 'playlist/track/all?id=' + encodeURIComponent(id) +
     '&limit=' + limit + '&offset=' + offset, 15000)
@@ -1241,9 +1141,9 @@ async function recommendTags() {
   }
   if (cfg.sources.indexOf('kuwo') >= 0) {
     try {
-      const kw = await kuwoRecommendTags()
-      if (kw.categories.length) {
-        out.platforms.push({ source: 'kuwo', pinned: kw.pinned, categories: kw.categories })
+      const kw = await kuwoRecommendTags(cfg)
+      if (kw.groups.length) {
+        out.platforms.push({ source: 'kuwo', pinned: kw.pinned, categories: kw.groups })
       }
     } catch (e) {
       console.log('[kwqq] kuwo recommend tags error: ' + String((e && e.message) || e))
@@ -1259,7 +1159,7 @@ async function recommendSheets(body) {
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
   if (source === 'kugou') return kugouRecommendSheets(cfg, cat, page, limit)
-  if (source === 'kuwo') return kuwoRecommendSheets(cat, page, limit)
+  if (source === 'kuwo') return kuwoRecommendSheets(cfg, cat, page, limit)
   const offset = (page - 1) * limit
   const data = await neteaseApi(cfg, 'top/playlist?cat=' + encodeURIComponent(cat) +
     '&limit=' + limit + '&offset=' + offset + '&order=hot', 10000)
