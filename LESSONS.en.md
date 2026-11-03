@@ -10,6 +10,29 @@ Evidence-backed lessons for the parent and public host contracts; see the [AI wo
 
 ## Entries
 
+### CUE-001: Successful decoding or Chinese characters cannot identify a legacy encoding
+
+- Scope: external CUE encoding detection, songloft-org/songloft#554; baseline `5a9bed40ec8542acf72f5afb71074a8046245214`.
+- Evidence: the reporter's equivalent CP950 / UTF-8 samples produce different albums, artists and all 16 tracks with the old parser. `tag.FixEncoding` accepts GBK output containing Chinese characters even with U+FFFD. A separate regression confirms that the same Big5 input can decode to different GB18030 text without replacement characters, so rejecting replacements alone is insufficient.
+- Rule and fix: preserve valid Unicode; compare statistical confidence and candidate margins for legacy input, then separately reject replacement characters and unexpected controls. Undecidable input needs an actionable UTF-8 conversion error instead of silently guessing by decoder order. Reimport must parse successfully before deleting old records.
+- Done right: an isolated Go overlay of the old parser makes new parsing and real SQLite persistence regressions fail; the fix passes. A temporary backend's HTTP scan and reimport verify all 16 tracks. Final identities, commands, logs and boundaries: [verification record](docs/en/issue-554.md).
+- Seen 1× (2026-11-03). Status: local fix and verification; no commit, push or release.
+
+### DOC-001: A repository-relative file is not necessarily a documentation-site route
+
+- Scope: parent VitePress pages linking to client verification records, songloft-org/songloft#550; commit `24b05df18c03630968fd0aead904d1f68a349809`.
+- Evidence: [Pages CI](https://github.com/songloft-org/songloft/actions/runs/41391858600) reports four dead links. The `../clients/...` files exist in the checkout but lie outside the VitePress documentation root and are not included in its synchronization list.
+- Rule and fix: link to a pinned GitHub commit for client documents that are not synchronized. File-existence checks do not replace a full documentation build; retain dead-link validation.
+- Done right: replace all four bilingual links with pushed client commit URLs and run `npm run docs:build`; log: `/tmp/songloft-550-delivery-docs.log`. Final local/CI outcomes are recorded in this delivery.
+- Seen 1× (2026-11-02). Status: documentation link repair, with ordering code unchanged.
+
+### PLAYLIST-002: Built-in identity protection must not prohibit member ordering
+
+- Scope: playlist song reorder / move / sort and both clients, songloft-org/songloft#550; baseline `71635ae30ec76a6a0a8bf4efa94304fe2276a057`.
+- Rule: review identity guards separately from member operations. Permit favorites member position changes while preserving built-in name, type, label, visibility and deletion constraints.
+- Evidence and Done right: all 12 new real SQLite / HTTP cases failed with 403 against old code. After the fix, all three endpoints, persisted positions, membership, built-in identity and deletion protection pass. Verify real drags, backend positions and reads after reload for each client rather than extrapolating ordinary playlist behavior. Final identities, logs and device limits: [record](docs/en/issue-550.md).
+- Seen 1× (2026-11-02). Status: local fix and verification; no commit, push or release.
+
 ### AUTH-001: Distinguish permanent device credentials from signed-in sessions
 
 - Scope: authentication middleware, token management and permanent tokens in both clients; songloft-org/songloft#546, baseline `022a56cebe4b4b6bc1ff7ca043f56d426bddaf71`.
