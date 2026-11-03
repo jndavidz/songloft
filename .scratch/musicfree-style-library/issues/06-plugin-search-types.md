@@ -35,6 +35,21 @@
 
 仍未做：手机装机与整链真机冒烟（新 APK 已备：`app-arm64-v8a-debug.apk` 133,859,921B，sha1 `8af5b78a8d8d`，构建自 player `a31ee98`）。
 
+### 真机冒烟（2026-11-03，第三批收口）
+
+设备：**Redmi 22041211AC（rubens）**，Android 14 / SDK 34 / `arm64-v8a`，1080x2400@420。装机 = `app-arm64-v8a-debug.apk`（sha1 `8af5b78a8d8d`，`versionName 2.13.7` / `versionCode 2001`，`adb install -r -t` Success，全新安装无签名冲突）。MIUI 侧需开「通过 USB 安装应用」与「USB调试（安全设置）」，否则 `INSTALL_FAILED_USER_RESTRICTED` / `input tap` 无效。**华为 NOH-AN00（HarmonyOS 4.2）这台 adb 路线不通**（接口枚举与 WinUSB 绑定都正常、无进程抢占，但 adbd 不应答，`adb devices` 连 `unauthorized` 都不出），改机是唯一解。
+
+出声纪律：测前把 `STREAM_MUSIC` 压到 `Muted: true / streamVolume 0`，验完恢复（收尾实测 `Muted: false / 3`）。
+
+判据（UI 截图 + 服务端 access 日志双向）：
+- **歌手页播放全部 + 后台补齐 = 成立**：hero 显示「专辑 52 · 单曲 331」，点 AppBar ▶ 后播放队列徽标 = **331**（首屏 30 起播，其余由 `startBackgroundCatchUp` 逐批补到 `music_count`），列表无重复条目 ⇒ `kArtistWorksPageSize=30` 与插件 limit≤50 的换算对齐有效。
+- **榜单页播放全部 = 成立**：飙升榜 AppBar ▶ 起播首曲并高亮当前行；服务端 `toplist/detail` 仅 1 次调用 = 该榜 total ≤ 已加载页，补齐按设计提前返回（未产生多余请求）。
+- 服务端 30 分钟窗口计数：`artist/works` 16、`/api/v1/songs/remote` 17、`browse/search` 8、`artist/info` 3、`api/search` 3、`toplists` 2、`album` 2、`toplist/detail` 1、`recommend/tags` 1、`recommend/sheets` 1、`music/comments` 1。
+- 票面入口在真机可见：曲库入口行四枚（推荐歌单/榜单/播放历史/本地音乐）、筛选 chips（全部/本地/网络/电台/文件夹/歌手）、搜索四类型 tab（单曲/专辑/歌手/歌单）、单曲行带 kuwo/qq/netease/kugou/migu 源徽标、封面与时长渲染、正在播放行高亮（`isCurrent`）。
+
+真机仍未验（同机制或无窗口）：歌单详情的补齐链（与歌手页共用 `startBackgroundCatchUp`，未单独走一遍）、评论面板交互、加入歌单弹层、DLNA 投送与音箱出声链路。
+
+
 
 ### review 遗留（2026-11-03）
 

@@ -14,5 +14,6 @@
 
 ## Notes（2026-11-03 落地）
 
-- 离线施工完成；真机 UI 冒烟 Not run（本会话无设备窗口）。
+- 离线施工完成；真机冒烟已于 2026-11-03 补做（见下条与 06 号票「真机冒烟」节）。
 - 第二批（2026-11-03）：歌手页 AppBar 加「播放全部」（仅单曲模式显示）——热门单曲首屏 300 起播后，按 `artistInfo` 的 `music_count` 后台补齐。插件 `artist/works` 不返回 total，故总数未知（`music_count` 为 0）时只播已加载页；补齐页固定 limit=30 以对齐插件 50 上限的 offset 换算。歌手作品类型通道（kugou audios 行 id 取 `hash_128||hash`）见 06 号票 Notes。
+- 真机（Redmi 22041211AC / Android 14 / arm64）：李健歌手页 hero「专辑 52 · 单曲 331」，点 AppBar ▶ 后**播放队列徽标 = 331**、列表无重复条目；服务端 30 分钟窗口内 `artist/works` 16 次、`/songs/remote` 17 次。歌手 tab 的头像/名称渲染正常。
