@@ -23,6 +23,19 @@
 - 测试：kwqq 插件 node --test 全绿（browse 24 项 + music-url 6 项回归）。
 - Not run：`music_ecosystem.py --lab`（本批 kwqq-api 零改动，跨项目回归面不存在）；curl 全链真机验证（无设备窗口）。
 
+### 现网部署与探针更正（2026-11-03 第三批）
+
+上一节写「kugou 通道实测并接入」时**只有离线测试为凭**；本轮把三件套发到 NAS 后做现网探针，才发现两处只在真上游成立的缺陷（详见 `docs/plan/songloft-deployment-and-integration-20261028.md` §3.8 第 1 条）：
+
+- `kwqq()` 无条件按 `{code,msg,data}` 信封校验透传响应 ⇒ 每条 kugou 路径抛 `kwqq undefined:`：`browse/search` 三类型实际只出 netease、`artist/works?source=kugou` 直接 502。修法 = 仅对数字 `code` 的精装响应做信封校验与拆包，其余原样返回（与 `neteaseApi` 同式）；`kugouMultiSearch` 同步改读嵌套 `data.lists/total`。
+- kugou 歌手详情的歌数字段现网是 `song_count`（代码读 `audio_count`）⇒ `music_count` 恒 0，连带 player 播放全部取不到补齐总数。
+- **测试桩根因**：`browse.test.mjs` 的通用分支给所有非 `/netease/api/` 的响应统一套信封，连 `/kugou/api/*` 也套 ⇒ 28 项离线全绿与现网行为相反。已改为按现网原样 JSON 返回，并把 fixture 嵌回 `data` 层、加 `music_count` 断言。**教训：透传类端点的 stub 必须照上游原样，不能共用精装的信封分支。**
+
+现网复验（NAS `10.10.10.2`，三件套到位后）：`musicdl:latest` 已含 P7（qq 专辑 total 820 / kuwo 歌手 66 / migu 专辑 41 / qianqian 歌手，`bilibili` 按契约 501）；插件 `2026.11.3`（`entry_hash=9b2b8aa1…` = 本地 `main.jsc` sha256）active；`browse/search` album 31 条 6 源、artist 5 源、sheet 4 源；`artist/info` `music_count=1859`；`artist/works` kugou 出 128 位 FileHash 形态 id 与 `dedup_key`；宿主合约 `/api/search` 82 条六源零回归。server 镜像同步重建到 `aefe5a8`（`/play-history/recent` 实测 401/200 两态），回滚 = `songloft-fork:rollback-pre-browse-20261103` + `data.bak-browse-20261103/`。
+
+仍未做：手机装机与整链真机冒烟（新 APK 已备：`app-arm64-v8a-debug.apk` 133,859,921B，sha1 `8af5b78a8d8d`，构建自 player `a31ee98`）。
+
+
 ### review 遗留（2026-11-03）
 
 - server 侧「501/超时的错误包装」测试项随复用 catch-all 的修订**由插件 Node 测试承担**（browse 24 项含 501/超时三态），server 只保留 401/403 接线断言——spec Testing Decisions 的原措辞按修订口径解释。

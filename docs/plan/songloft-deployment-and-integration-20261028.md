@@ -129,7 +129,8 @@
 
 ### 2.2 版本与镜像差异
 
-- **运行版本（2026-11-02 实测）**：`v2.13.7-75-gc2a0b38`，`build_type=full`，`git_commit=c2a0b38`，`build_time=2026-11-02_00:51:23`；镜像 `songloft-fork:full` = `8e0905a56ba5`，`/api/v1/version` 与镜像一致、`/api/v1/health` 200。
+- **运行版本（2026-11-03 实测）**：`v2.13.7-91-gaefe5a8`，`build_type=full`，`git_commit=aefe5a86b63f…`，`build_time=2026-11-03T02:31:00Z`；镜像 `songloft-fork:full` = `06cc5f4d1557`，容器 `health=healthy`（recreate 后 65s 达健康），`goose: no migrations to run. current version: 45`。回滚支点：tag `songloft-fork:previous` / `songloft-fork:rollback-pre-browse-20261103`（均 = `8e0905a56ba5`）+ NAS 数据备份 `data.bak-browse-20261103/`（db+wal+shm、jsplugins、jsplugins_data，3.1MB；`managed`/`music_cache` 两缓存目录未备）。本批上线 = 曲库 MusicFree 式浏览的 server 面（`/play-history/recent` 等，票 03）——实测无 JWT 401、带 JWT 200 `{items:[],total:0}`。
+- **前一次运行版本（2026-11-02 实测）**：`v2.13.7-75-gc2a0b38`，`build_time=2026-11-02_00:51:23`，镜像 = `8e0905a56ba5`。
 - **本次上线的是音质档位路由链**：`source_quality` hint（本地歌恒不带、网络歌带）→ 插件 `/api/music/url` 请求体 `quality`，生产自此不再由 App 档位触发后端「下载+转码」；kwqq 插件同步升到 `2026.11.2`（自持 handler，见 §3.8 第 1 条）。回滚支点两件：镜像 tag `songloft-fork:rollback-pre-quality-20261102`（= `d4b5189a9128`，`v2.13.7-55-g30213cd`）+ 容器内旧插件包 `/app/data/backups/kwqq-2026.10.28.jsplugin.zip`。
 - **构建法**：办公室 WSL（docker 29.8.0）交叉编译 `bin/songloft-linux-amd64-full`（go1.27，无 `lite` tag ⇒ 嵌 Web；复用 `clients/player-build/web-embedded` 既有前端产物）→ `docker build -f Dockerfile.nas`。ghcr 私有基础镜像不可达，故生产镜像**不是**主 `Dockerfile` 构的，是 fork 自己的轻量法（alpine minirootfs + COPY 预编译二进制），详见 `FORK.md` §1。
 - 仓库 HEAD 已推进到 `e450dbf`：`c2a0b38` 之后 4 笔全是文档/依赖锁/子模块指针，**服务端代码与运行镜像同源**，「运行镜像落后于仓库」在本条线上不再成立。
@@ -208,7 +209,7 @@
 
 插件默认配置：`base=http://10.10.10.2:3003`、`key` 留空（内网免 key）、六源默认、`quality=320k`。kwqq 返回 401 时插件给出"填 key 或让 API 信任当前网段"的提示。
 
-musicdl 侧事实（2026-10-28 核对）：`api-server` 分支 HEAD `9145d6c`；FastAPI 单镜像双容器（API `:3003`、webgui `:3004`，webgui `restart:"no"` 按需拉起）；统一信封 `{code,msg,data,timestamp}`；直链缓存 10 分钟；七源 kuwo/qq/qianqian/migu/netease/kugou/bilibili；未完成项见其 `docs/plan/OPEN-ITEMS.md`（kuwo/QQ 专辑、kugou 歌单、上游同步）。
+musicdl 侧事实（2026-11-03 核对）：`api-server` 分支 HEAD `12373ca`（P7 多类型搜索 `GET /{source}/search/multi` = qq/kuwo/migu/qianqian，P6 kuwo/qq 专辑检索补齐）；FastAPI 单镜像双容器（API `:3003`、webgui `:3004`，webgui `restart:"no"` 按需拉起）；**2026-11-03 镜像重建并部署 NAS**（`musicdl:latest` 换新，回滚 tag `musicdl:previous` / `musicdl:rollback-20261030` = `6cb7e5067509`；只 recreate `musicdl-api`，`musicdl-webgui` 保持原容器未动）；现网实测 `/healthz` 200、四源 multi 出结果（qq 专辑 820、kuwo 歌手 66、migu 专辑 41、qianqian 歌手），`bilibili/search/multi` 按契约 501；透传族（`/kugou/api/*`、`/netease/api/*`）返回**上游原样 JSON、无信封**——消费方按信封拆包会拿到 undefined。统一信封 `{code,msg,data,timestamp}` 只适用于精装端点；直链缓存 10 分钟；七源 kuwo/qq/qianqian/migu/netease/kugou/bilibili；未完成项见其 `docs/plan/OPEN-ITEMS.md`。
 
 ### 3.3 鉴权与网络
 
@@ -244,7 +245,7 @@ webgui（:3004，按需拉起）把下载文件写入 `/volume1/music`，Songlof
 
 ### 3.8 宿主能给 musicdl 的支持
 
-1. **现成消费端**：kwqq 插件（**现网 `2026.11.2`**，`minHostVersion 2.9.0`，权限 `storage,net`；2026-11-02 经 `/api/v1/jsplugins/upload` 部署，`zip_hash=2dd3cb5a…` 与办公室构建一致，`status=active`；回滚包在容器内 `/app/data/backups/kwqq-2026.10.28.jsplugin.zip`。`2026.11.2` 起自持 `/api/music/url` 并支持播放链路 `source_quality` 档位 hint——旧版 server（≤30213cd）不下发该参数，行为与旧版逐字节一致，见 `.scratch/audio-quality-routing/spec.md`）已是生产形态的消费者，接口契约稳定。
+1. **现成消费端**：kwqq 插件（**现网 `2026.11.3`**，`minHostVersion 2.9.0`，权限 `storage,net`；2026-11-03 经 `/api/v1/jsplugins/upload` 覆盖更新并热重载，`zip_hash=5cf905f0…`、`entry_hash=9b2b8aa1…`（与本地 `dist/_build/main.jsc` 的 sha256 逐字节一致），`status=active`；回滚件两份——NAS `data/jsplugins/kwqq.jsplugin.zip` 的快照 `data.bak-browse-20261103/jsplugins/`（2026.11.2 包）与容器内 `/app/data/backups/`。`2026.11.3` 带曲库浏览端点群 + 类型搜索多源 fan-out；**上线时现网探针挖出并修掉两处只在真上游成立的缺陷**（① `kwqq()` 对透传响应强做 `{code,msg,data}` 信封校验 ⇒ 每条 kugou 路径抛 `kwqq undefined:`，三类型只剩 netease、歌手作品 502；② kugou 歌手详情歌数字段现网是 `song_count` 而非 `audio_count` ⇒ `music_count` 恒 0，连带 player 播放全部拿不到补齐总数）。离线 28 项测试当时全绿也照不出，根因是测试桩给透传也套了信封——已改回原样 JSON。修后现网复验：`browse/search` album 31 条 / 6 源、artist 5 源、sheet 4 源（migu/qianqian 的 sheet 上游 501 按源跳过）、`artist/info` `music_count=1859`、宿主合约 `/api/search` 82 条六源零回归。旧版 `2026.11.2` 起自持 `/api/music/url` 并支持播放链路 `source_quality` 档位 hint——旧 server（≤30213cd）不下发该参数，行为与旧版逐字节一致，见 `.scratch/audio-quality-routing/spec.md`）已是生产形态的消费者，接口契约稳定。
 2. **把 10 分钟直链风险挡在宿主侧**：remote 条目导入后，`/songs/{id}/play` 由宿主重新解析并代理拉流+缓存，音箱/客户端拿到的是可长期复用的宿主 URL。
 3. **插件分发渠道**：插件商店/注册表/自动更新可把 kwqq 作为自建源上架，版本随插件走，无需手动传 zip。
 4. **共享目录解耦**：webgui 下载 → `/volume1/music` → Songloft 扫描 → Lyrion 同读，无 API 耦合。
@@ -391,7 +392,7 @@ LX06 语音 ─→ bridge:9092 ──URL──────┴→ Songloft:58091 
 - **攻击面**（2026-11-01 外网化后修订）：内网 `:58091` 无 TLS（边界 = 家庭 LAN）；外网唯一入口 = Lucky TLS 反代 `songloft.pegbiotec.com:4433`（见 §2.7），认证边界 = JWT（全 API 强制）+ admin 口令（已轮换强随机）；`/api/v1/health` 公开。不要把 :58091 端口映射到公网（绕过 Lucky 的 TLS 与日志面）。
 - **文件权限**：容器非 root（1028:100），下载/扫描文件需对该用户可读；webgui 已修 `000` 权限问题。
 - **上游风险**：单人主导、发版频繁；插件依赖 `/api/v1/songs/remote` 与 `player.setQueue` 两个宿主契约，升级必须回归；fork 的 CI 与 `Dockerfile.nas` 要跟随上游构建参数变化。
-- **运行镜像落后仓库 6 个 commit**：功能影响小，但应在下次变更时重建并对齐版本号。
+- **运行镜像已对齐仓库 HEAD**（2026-11-03 重建：`v2.13.7-91-gaefe5a8`；构建口径 = WSL `/home/user/go-sdk/go/bin/go` go1.27.0 交叉编译 `GOOS=linux GOARCH=amd64 GOAMD64=v1 CGO_ENABLED=0` + `Dockerfile.nas` full 变体，嵌入的 Web 前端仍是 `clients/player-build/web-embedded` 的 2026-10-28 产物（未重建 Lynx 前端，与上一镜像同资产，故 Web UI 无变化、API 为新版）。
 - **凭据 hygiene**：媒体 URL 带 token（日志脱敏，外网化后亦进 Lucky 访问日志，见 §2.7）；musicdl 注册表文档含明文口令；NAS compose 的 admin 口令已于 2026-11-01 移出 git（`.env` 0600 注入），git 历史残留旧口令已随轮换作废。
 
 ---
@@ -406,7 +407,7 @@ LX06 语音 ─→ bridge:9092 ──URL──────┴→ Songloft:58091 
 | 4 | access token 7 天到期与长播 | 单曲不受影响；跨天连续投送需 App 刷新 token；未实测 |
 | 5 | bilibili 投送 | 不可行（m4s/fMP4），已裁决接受 |
 | 6 | bridge 与 Songloft 的 TTS 打断/音量归属 | 未联调 |
-| 7 | 运行镜像 vs 仓库 HEAD | 差 6 commit，建议重建（P0） |
+| 7 | 运行镜像 vs 仓库 HEAD | **已对齐**（2026-11-03 重建为 `v2.13.7-91-gaefe5a8`，见 §2.2） |
 | 8 | 上游升级回归 | 需要 SOP 与插件回归清单 |
 | 9 | bridge 语音播放改走 Songloft URL | 未实施（P1）；需先解决 token 续期 |
 | 10 | bridge `playback_next/prev` 真机验证 | 未验证（open-xiaoai 2026-10-28 记录：仅设备自有队列、DLNA 投送中无效） |
