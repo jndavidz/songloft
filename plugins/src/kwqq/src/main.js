@@ -600,7 +600,8 @@ async function kugouMultiSearch(cfg, keywords, type, page, limit) {
     }))
   } else {
     items = rows.filter(r => r.specialid || r.gid).map(r => ({
-      id: String(r.specialid || r.gid),
+      // 歌单详情 playlist/track/all 只认 gid（global_collection_id），specialid 实测 20010
+      id: String(r.gid || r.specialid),
       name: r.specialname || '',
       creator: r.nickname || '',
       cover_url: r.img || undefined,
@@ -840,13 +841,265 @@ async function artistWorks(body) {
   }
 }
 
-// 歌单详情：曲目分页走 playlist/track/all，首页并拉 playlist/detail 元数据
+// —— kugou 浏览归一（形状 2026-11-03 现网实测：rank/audio 用 audio_info，歌单 track/all
+// 用顶层 hash/relate_goods/singerinfo；播放 id 口径 320k hash 优先、无则降档）——
+function kugouRankSongToResult(s) {
+  const ai = (s && s.audio_info) || {}
+  const authors = Array.isArray(s.authors) ? s.authors.map(a => a.author_name).filter(Boolean) : []
+  const artist = authors.join(' / ') || s.author_name || ''
+  const albumName = (s.album_info && s.album_info.album_name) || ''
+  const cover = ((s.album_info && s.album_info.sizable_cover) ||
+    (s.trans_param && s.trans_param.union_cover) || '').replace('{size}', '240')
+  const hash = ai.hash_320 || ai.hash_128 || ai.hash || ''
+  const d = Math.round((ai.duration_128 || 0) / 1000)
+  return {
+    title: s.songname || 'Unknown',
+    artist: artist || 'Unknown',
+    album: albumName || undefined,
+    duration: d,
+    cover_url: cover || undefined,
+    source: 'kugou',
+    source_data: { s: 'kugou', i: hash, n: s.songname || '', a: artist, al: albumName, d },
+    dedup_key: 'kwqq_kugou_' + (s.album_audio_id || hash),
+  }
+}
+
+function kugouPlaylistSongToResult(it) {
+  // 老接口形状：name 是「歌手 - 歌名」，singerinfo 才可靠
+  let title = (it && it.name) || ''
+  let artist = ''
+  const dash = title.indexOf(' - ')
+  if (dash >= 0) { artist = title.substring(0, dash); title = title.substring(dash + 3) }
+  if (!artist && Array.isArray(it.singerinfo)) {
+    artist = it.singerinfo.map(s => s.name).filter(Boolean).join(' / ')
+  }
+  let hash320 = ''
+  if (Array.isArray(it.relate_goods)) {
+    for (const g of it.relate_goods) { if (g && g.level === 4) { hash320 = g.hash; break } }
+  }
+  const hash = hash320 || it.hash || ''
+  const albumName = (it.albuminfo && it.albuminfo.name) || ''
+  const cover = (it.cover || (it.trans_param && it.trans_param.union_cover) || '').replace('{size}', '240')
+  const d = Math.round((it.timelen || 0) / 1000)
+  return {
+    title: title || 'Unknown',
+    artist: artist || 'Unknown',
+    album: albumName || undefined,
+    duration: d,
+    cover_url: cover || undefined,
+    source: 'kugou',
+    source_data: { s: 'kugou', i: hash, n: title, a: artist, al: albumName, d },
+    dedup_key: 'kwqq_kugou_' + (it.mixsongid || it.add_mixsongid || hash),
+  }
+}
+
+// kugou 歌单详情：曲目分页 playlist/track/all（**必须 global_collection_id**，
+// specialid 实测 20010）；page=1 并用响应自带 list_info 元数据（免额外请求）
+async function kugouSheetInfo(cfg, id, page, limit) {
+  const data = await kwqq(cfg, '/kugou/api/playlist/track/all?id=' + encodeURIComponent(id) +
+    '&page=' + page + '&pagesize=' + limit, 15000)
+  const d = (data && data.data) || {}
+  const songs = d.songs || []
+  const total = d.count || songs.length
+  const out = {
+    page, isEnd: page * limit >= total, total,
+    tracks: songs.map(kugouPlaylistSongToResult),
+  }
+  if (page === 1 && d.list_info) {
+    const li = d.list_info
+    out.sheet = {
+      id: String(li.global_collection_id || li.specialid || id),
+      name: li.name || '',
+      creator: li.list_create_username || '',
+      cover_url: (li.pic || '').replace('{size}', '480') || undefined,
+      track_count: li.count || total,
+      play_count: li.collect_total || 0,
+      description: li.intro || undefined,
+      source: 'kugou',
+    }
+  }
+  return out
+}
+
+// —— kuwo 浏览归一（官方 wapi 免登通道，musicfree 酷我插件现役实现对齐，
+// 形状 2026-11-04 现网实测；曲目 id=rid，与 kwqq-api kuwo 播放链口径一致）——
+const KUWO_HEADERS = { 'User-Agent': 'kwplayer_pc_9.0.5.0', Referer: 'https://www.kuwo.cn/' }
+
+async function kuwoOfficialGet(url, params, timeoutMs) {
+  const parts = []
+  for (const k in params) {
+    if (params[k] === undefined || params[k] === null) continue
+    parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k]))
+  }
+  const fullUrl = url + (parts.length ? '?' + parts.join('&') : '')
+  const headers = KUWO_HEADERS
+  const resp = await withTimeout(fetch(fullUrl, { headers }), timeoutMs || 10000, 'kuwo')
+  if (!resp.ok) throw new Error('kwqq http ' + resp.status)
+  return resp.json()
+}
+
+function kuwoSongToResult(id, title, artist, album, duration, cover) {
+  const rid = String(id || '').replace(/^MUSIC_/, '')
+  const d = Number(duration) || 0
+  return {
+    title: title || 'Unknown',
+    artist: artist || 'Unknown',
+    album: album || undefined,
+    duration: d,
+    cover_url: cover || undefined,
+    source: 'kuwo',
+    source_data: { s: 'kuwo', i: rid, n: title || '', a: artist || '', al: album || '', d },
+    dedup_key: 'kwqq_kuwo_' + rid,
+  }
+}
+
+// 榜单：wapi/pc/bang/list（分组平铺为 items）
+async function kuwoToplists() {
+  const data = await kuwoOfficialGet('http://wapi.kuwo.cn/api/pc/bang/list', {}, 10000)
+  const groups = (data && data.child) || []
+  const items = []
+  for (const g of groups) {
+    for (const b of g.child || []) {
+      items.push({
+        id: String(b.sourceid || ''),
+        name: b.name || '',
+        cover_url: b.pic5 || b.pic2 || b.pic || undefined,
+        description: b.intro || undefined,
+        source: 'kuwo',
+      })
+    }
+  }
+  return items
+}
+
+// 榜单详情：kbangserver ksong.s（pn 从 0 起；total 不返回，用不足一页判尽）
+async function kuwoToplistDetail(id, page, limit) {
+  const data = await kuwoOfficialGet('http://kbangserver.kuwo.cn/ksong.s', {
+    from: 'pc', fmt: 'json', pn: page - 1, rn: limit, type: 'bang', data: 'content',
+    id, show_copyright_off: 0, pcmp4: 1, isbang: 1, userid: 0, httpStatus: 1,
+  }, 15000)
+  const songs = (data && data.musiclist) || []
+  return {
+    page, isEnd: songs.length < limit,
+    total: (data && data.num) || undefined,
+    tracks: songs.map(m => kuwoSongToResult(
+      m.id, m.name, m.artist, m.album, m.song_duration || m.duration, undefined,
+    )),
+  }
+}
+
+// 歌单详情：nplserver pl.svc（pn 从 0 起；total 分页判据；page=1 自带元数据）
+async function kuwoSheetInfo(id, page, limit) {
+  const data = await kuwoOfficialGet('http://nplserver.kuwo.cn/pl.svc', {
+    op: 'getlistinfo', pid: id, pn: page - 1, rn: limit,
+    encode: 'utf8', keyset: 'pl2012', vipver: 'MUSIC_9.1.1.2_BCS2', newver: 1,
+  }, 15000)
+  const songs = (data && data.musiclist) || []
+  const total = (data && data.total) || songs.length
+  const out = {
+    page, isEnd: (page - 1) * limit + songs.length >= total, total,
+    tracks: songs.map(m => kuwoSongToResult(
+      m.musicrid || m.id, m.name || m.FNAME, m.artist || m.FARTIST, m.album || m.FALBUM,
+      m.duration || m.song_duration, m.albumpic || m.pic,
+    )),
+  }
+  if (page === 1) {
+    out.sheet = {
+      id: String((data && data.id) || id),
+      name: (data && data.title) || '',
+      creator: (data && data.uname) || '',
+      cover_url: (data && data.pic) || undefined,
+      track_count: total,
+      play_count: (data && data.playnum) || 0,
+      description: (data && data.info) || undefined,
+      source: 'kuwo',
+    }
+  }
+  return out
+}
+
+// 推荐标签：wapi getTagList。专区标签（digest!=10000）的 id 编码为 `<id>@<digest>`，
+// recommend/sheets 侧按 '@' 分流（对客户端零改动）
+async function kuwoRecommendTags() {
+  const data = await kuwoOfficialGet(
+    'http://wapi.kuwo.cn/api/pc/classify/playlist/getTagList',
+    {
+      cmd: 'rcm_keyword_playlist', user: 0, prod: 'kwplayer_pc_9.0.5.0',
+      vipver: '9.0.5.0', source: 'kwplayer_pc_9.0.5.0',
+      loginUid: 0, loginSid: 0, appUid: 76039576,
+    }, 10000)
+  const cats = (data && data.data) || []
+  const groups = []
+  const pinned = []
+  for (const cat of cats) {
+    const tags = (cat.data || []).map(t => ({
+      id: String(t.digest === '10000' || !t.digest ? t.id : t.id + '@' + t.digest),
+      title: t.name || '',
+    }))
+    if (!tags.length) continue
+    groups.push({ title: cat.name || '', data: tags })
+    for (const t of cat.data || []) {
+      if (String(t.digest) === '10000' && pinned.length < 8) {
+        pinned.push({ id: String(t.id), title: t.name || '' })
+      }
+    }
+  }
+  return { pinned, categories: groups }
+}
+
+// 推荐歌单：热门/普通标签走 getTagPlayList 分页，空标签走 getRcmPlayList，
+// 专区标签（id 带 @digest）走 er.s 聚合一次返回、切片分页
+async function kuwoRecommendSheets(cat, page, limit) {
+  const decodeSheet = p => ({
+    id: String(p.playlistid || p.id || ''),
+    name: p.name || '',
+    creator: p.nickname || p.uname || '',
+    cover_url: p.pic || p.img || undefined,
+    track_count: Number(p.songnum || p.total) || 0,
+    play_count: Number(p.playcnt || p.listencnt) || 0,
+    source: 'kuwo',
+  })
+  let items = []
+  let isEnd = true
+  if (cat.indexOf('@') >= 0) {
+    // 专区：er.s 无分页，一次拉全后切片
+    const raw = await kuwoOfficialGet('http://mobileinterfaces.kuwo.cn/er.s', {
+      type: 'get_pc_qz_data', f: 'web', id: cat.split('@')[0], prod: 'pc',
+    }, 10000)
+    const flat = []
+    for (const sec of Array.isArray(raw) ? raw : []) {
+      for (const p of (sec && sec.list) || []) flat.push(p)
+    }
+    items = flat.slice((page - 1) * limit, page * limit).map(decodeSheet)
+    isEnd = page * limit >= flat.length
+  } else {
+    const params = { loginUid: 0, loginSid: 0, appUid: 76039576, pn: page - 1, rn: limit }
+    if (cat) params.id = cat
+    else params.order = 'hot'
+    const data = await kuwoOfficialGet(
+      cat
+        ? 'http://wapi.kuwo.cn/api/pc/classify/playlist/getTagPlayList'
+        : 'http://wapi.kuwo.cn/api/pc/classify/playlist/getRcmPlayList',
+      params, 10000)
+    const inner = (data && data.data) || {}
+    items = (inner.data || []).map(decodeSheet)
+    const total = Number(inner.total) || items.length
+    isEnd = page * limit >= total
+  }
+  return { cat, page, isEnd, items }
+}
+
+// 歌单详情：按 source 分发（netease 曲目分页 playlist/track/all，首页并拉
+// playlist/detail 元数据；kugou 见 kugouSheetInfo；kuwo 见 kuwoSheetInfo）
 async function sheetInfo(body) {
   const id = String(body.id || '').trim()
   const page = Math.max(1, Number(body.page) || 1)
   const limit = Math.min(100, Math.max(1, Number(body.limit) || 50))
   if (!id) return { error: 'id required' }
   const cfg = await getConfig()
+  const source = String(body.source || 'netease')
+  if (source === 'kugou') return kugouSheetInfo(cfg, id, page, limit)
+  if (source === 'kuwo') return kuwoSheetInfo(id, page, limit)
   const offset = (page - 1) * limit
   const data = await neteaseApi(cfg, 'playlist/track/all?id=' + encodeURIComponent(id) +
     '&limit=' + limit + '&offset=' + offset, 15000)
@@ -875,23 +1128,62 @@ async function sheetInfo(body) {
   return out
 }
 
-// 榜单列表 + 详情（netease toplist；榜单项 id 即 playlist id，详情复用 track/all 分页）
+// 榜单列表：多源聚合（netease toplist + kugou rank/list），items 各带 source，
+// 单源失败静默跳过（其余源仍有结果）。netease 在前（现有排序不变）。
 async function toplists() {
   const cfg = await getConfig()
-  const data = await neteaseApi(cfg, 'toplist', 10000)
-  const lists = (data && data.list) || []
-  return {
-    source: 'netease',
-    items: lists.map(it => ({
-      id: String(it.id),
-      name: it.name || '',
-      cover_url: neteaseCover(it.coverImgUrl || it.picUrl),
-      description: it.description || undefined,
-      update_frequency: it.updateFrequency || undefined,
-      track_count: it.trackCount || undefined,
-      source: 'netease',
-    })),
+  const tasks = [
+    neteaseApi(cfg, 'toplist', 10000).then(data => {
+      const lists = (data && data.list) || []
+      return lists.map(it => ({
+        id: String(it.id),
+        name: it.name || '',
+        cover_url: neteaseCover(it.coverImgUrl || it.picUrl),
+        description: it.description || undefined,
+        update_frequency: it.updateFrequency || undefined,
+        track_count: it.trackCount || undefined,
+        source: 'netease',
+      }))
+    }),
+  ]
+  if (cfg.sources.indexOf('kugou') >= 0) {
+    tasks.push(kwqq(cfg, '/kugou/api/rank/list', 10000).then(data => {
+      const info = ((data && data.data) && data.data.info) || (data && data.info) || []
+      return info.map(it => ({
+        id: String(it.rankid || it.rank_cid || it.id),
+        name: it.rankname || '',
+        cover_url: (it.album_img_9 || it.img_9 || it.imgurl || '').replace('{size}', '240') || undefined,
+        description: it.intro || undefined,
+        update_frequency: it.update_frequency || undefined,
+        source: 'kugou',
+      }))
+    }))
   }
+  if (cfg.sources.indexOf('kuwo') >= 0) {
+    tasks.push(kuwoToplists())
+  }
+  const per = await Promise.allSettled(tasks)
+  const items = []
+  let lastErr = null
+  for (const r of per) {
+    if (r.status === 'fulfilled') items.push(...r.value)
+    else {
+      lastErr = r.reason
+      console.log('[kwqq] toplists one-source error: ' + String((r.reason && r.reason.message) || r.reason))
+    }
+  }
+  if (!items.length && lastErr) throw lastErr // 全部源失败才归一 502
+  return { source: 'multi', items }
+}
+
+// kugou 榜单详情：rank/audio 分页（rankid 口径，非 playlist id）
+async function kugouToplistDetail(cfg, id, page, limit) {
+  const data = await kwqq(cfg, '/kugou/api/rank/audio?rankid=' + encodeURIComponent(id) +
+    '&page=' + page + '&pagesize=' + limit, 15000)
+  const d = (data && data.data) || {}
+  const songs = d.songlist || []
+  const total = d.total || songs.length
+  return { page, isEnd: page * limit >= total, total, tracks: songs.map(kugouRankSongToResult) }
 }
 
 async function toplistDetail(body) {
@@ -900,6 +1192,9 @@ async function toplistDetail(body) {
   const limit = Math.min(100, Math.max(1, Number(body.limit) || 50))
   if (!id) return { error: 'id required' }
   const cfg = await getConfig()
+  const source = String(body.source || 'netease')
+  if (source === 'kugou') return kugouToplistDetail(cfg, id, page, limit)
+  if (source === 'kuwo') return kuwoToplistDetail(id, page, limit)
   const offset = (page - 1) * limit
   const data = await neteaseApi(cfg, 'playlist/track/all?id=' + encodeURIComponent(id) +
     '&limit=' + limit + '&offset=' + offset, 15000)
@@ -908,7 +1203,9 @@ async function toplistDetail(body) {
   return { page, isEnd: offset + songs.length >= total, total, tracks: songs.map(neteaseSongToResult) }
 }
 
-// 推荐歌单：热门标签（pinned）+ 全量分类（grouped），来自平台接口
+// 推荐歌单：热门标签（pinned）+ 全量分类（grouped），来自平台接口。
+// 多源：顶层 pinned/categories 保持 netease（旧客户端兼容），新增 platforms
+// 数组（netease/kugou 各自的 pinned+categories）供新客户端按平台展示。
 async function recommendTags() {
   const cfg = await getConfig()
   const hot = await neteaseApi(cfg, 'playlist/hot', 8000)
@@ -926,7 +1223,33 @@ async function recommendTags() {
     }
     categories = Object.keys(grouped).map(title => ({ title, data: grouped[title] }))
   } catch (e) { /* catlist 失败时只给 pinned */ }
-  return { pinned, categories }
+  const out = { pinned, categories, platforms: [{ source: 'netease', pinned, categories }] }
+  if (cfg.sources.indexOf('kugou') >= 0) {
+    try {
+      const raw = await kwqq(cfg, '/kugou/api/playlist/tags', 8000)
+      const tags = (raw && raw.data) || []
+      const groups = tags.map(cat => ({
+        title: cat.tag_name || '',
+        data: (cat.son || []).map(s => ({ id: String(s.tag_id), title: s.tag_name || '' })),
+      })).filter(g => g.data.length)
+      const kPinned = (tags[0] && tags[0].son || []).slice(0, 8)
+        .map(s => ({ id: String(s.tag_id), title: s.tag_name || '' }))
+      out.platforms.push({ source: 'kugou', pinned: kPinned, categories: groups })
+    } catch (e) {
+      console.log('[kwqq] kugou recommend tags error: ' + String((e && e.message) || e))
+    }
+  }
+  if (cfg.sources.indexOf('kuwo') >= 0) {
+    try {
+      const kw = await kuwoRecommendTags()
+      if (kw.categories.length) {
+        out.platforms.push({ source: 'kuwo', pinned: kw.pinned, categories: kw.categories })
+      }
+    } catch (e) {
+      console.log('[kwqq] kuwo recommend tags error: ' + String((e && e.message) || e))
+    }
+  }
+  return out
 }
 
 async function recommendSheets(body) {
@@ -934,6 +1257,9 @@ async function recommendSheets(body) {
   const page = Math.max(1, Number(body.page) || 1)
   const limit = Math.min(50, Math.max(1, Number(body.limit) || 30))
   const cfg = await getConfig()
+  const source = String(body.source || 'netease')
+  if (source === 'kugou') return kugouRecommendSheets(cfg, cat, page, limit)
+  if (source === 'kuwo') return kuwoRecommendSheets(cat, page, limit)
   const offset = (page - 1) * limit
   const data = await neteaseApi(cfg, 'top/playlist?cat=' + encodeURIComponent(cat) +
     '&limit=' + limit + '&offset=' + offset + '&order=hot', 10000)
@@ -955,6 +1281,32 @@ async function recommendSheets(body) {
   }
 }
 
+// kugou 推荐歌单：top/playlist 分页（category_id=0 为全部），has_next 驱动 isEnd；
+// 该标签无结果时降级为全部推荐（musicfree kugou 现役实现对齐）
+async function kugouRecommendSheets(cfg, cat, page, limit) {
+  let data = await kwqq(cfg, '/kugou/api/top/playlist?category_id=' + encodeURIComponent(cat) +
+    '&page=' + page + '&pagesize=' + limit, 10000)
+  let specials = ((data && data.data) && data.data.special_list) || []
+  if (!specials.length && cat && cat !== '0') {
+    data = await kwqq(cfg, '/kugou/api/top/playlist?category_id=0&page=' + page +
+      '&pagesize=' + limit, 10000)
+    specials = ((data && data.data) && data.data.special_list) || []
+  }
+  const d = (data && data.data) || {}
+  return {
+    cat, page,
+    isEnd: !d.has_next,
+    items: specials.map(sp => ({
+      id: String(sp.global_collection_id || sp.specialid),
+      name: sp.specialname || '',
+      creator: sp.nickname || '',
+      cover_url: (sp.flexible_cover || sp.imgurl || '').replace('{size}', '240') || undefined,
+      track_count: sp.songcount || sp.song_count || 0,
+      play_count: sp.play_count || 0,
+      source: 'kugou',
+    })),
+  }
+}
 // 评论（只读，MusicFree IComment 形状；热评首页随 hotComments 一次返回）。
 // id 可省：给 title+artist 时回搜 netease id（播放页对任意来源的已入库歌开评论用）。
 async function musicComments(body) {
@@ -1046,7 +1398,8 @@ const BROWSE_ROUTES = [
   {
     path: '/sheet/info',
     validate: (b) => (String(b.id || '').trim() ? null : 'id required'),
-    cacheKey: (b) => 'sh|' + String(b.id || '') + '|' + (Number(b.page) || 1) + '|' + (Number(b.limit) || 50),
+    cacheKey: (b) => 'sh|' + String(b.source || 'netease') + '|' + String(b.id || '') + '|' +
+      (Number(b.page) || 1) + '|' + (Number(b.limit) || 50),
     run: (b) => sheetInfo(b),
   },
   {
@@ -1058,7 +1411,8 @@ const BROWSE_ROUTES = [
   {
     path: '/toplist/detail',
     validate: (b) => (String(b.id || '').trim() ? null : 'id required'),
-    cacheKey: (b) => 'tld|' + String(b.id || '') + '|' + (Number(b.page) || 1) + '|' + (Number(b.limit) || 50),
+    cacheKey: (b) => 'tld|' + String(b.source || 'netease') + '|' + String(b.id || '') + '|' +
+      (Number(b.page) || 1) + '|' + (Number(b.limit) || 50),
     run: (b) => toplistDetail(b),
   },
   {
@@ -1070,7 +1424,8 @@ const BROWSE_ROUTES = [
   {
     path: '/recommend/sheets',
     validate: null,
-    cacheKey: (b) => 'rsh|' + String(b.cat || '') + '|' + (Number(b.page) || 1) + '|' + (Number(b.limit) || 30),
+    cacheKey: (b) => 'rsh|' + String(b.source || 'netease') + '|' + String(b.cat || '') + '|' +
+      (Number(b.page) || 1) + '|' + (Number(b.limit) || 30),
     run: (b) => recommendSheets(b),
   },
   {

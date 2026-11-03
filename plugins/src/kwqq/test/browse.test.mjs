@@ -10,9 +10,11 @@ globalThis.songloft = {
   },
 };
 
-// —— 上游 stub：netease 透传（/netease/api/*，上游原样 JSON）与精装端点（/{source}/album）——
+// —— 上游 stub：netease 透传（/netease/api/*，上游原样 JSON）、精装端点（/{source}/album）
+// 与 kuwo 官方 wapi 免登通道（wapi.kuwo.cn / kbangserver / nplserver / mobileinterfaces）——
 let neteaseResponses = {};
 let premiumResponses = {};
+let kuwoResponses = {};
 let timeoutPaths = [];
 const upstreamCalls = [];
 globalThis.fetch = async (url) => {
@@ -21,6 +23,17 @@ globalThis.fetch = async (url) => {
     return new Promise((_, rej) => setTimeout(() => rej(new Error('kwqq timeout 8000ms')), 5));
   }
   const path = new URL(url).pathname + new URL(url).search;
+  if (url.includes('wapi.kuwo.cn') || url.includes('kbangserver') || url.includes('nplserver') || url.includes('mobileinterfaces.kuwo.cn')) {
+    // kuwo 官方通道按 URL 子串匹配（key 写完整可辨识片段）
+    for (const key of Object.keys(kuwoResponses)) {
+      if (url.includes(key)) {
+        const v = kuwoResponses[key];
+        if (v === 501) return { ok: false, status: 501, json: async () => ({}) };
+        return { ok: true, status: 200, json: async () => v };
+      }
+    }
+    return { ok: false, status: 404, json: async () => ({}) };
+  }
   if (url.includes('/netease/api/')) {
     for (const key of Object.keys(neteaseResponses)) {
       if (path.startsWith('/netease/api/' + key)) {
@@ -64,9 +77,10 @@ function post(path, body) {
 }
 
 // 每个用例独立上游配置
-function setUpstream({ netease = {}, premium = {}, timeout = [] } = {}) {
+function setUpstream({ netease = {}, premium = {}, kuwo = {}, timeout = [] } = {}) {
   neteaseResponses = netease;
   premiumResponses = premium;
+  kuwoResponses = kuwo;
   timeoutPaths = timeout;
 }
 
@@ -458,4 +472,301 @@ test('artist/info：不支持源（qq）→ 501 envelope', async () => {
   const res = await post('/artist/info', { id: '4558', source: 'qq' });
   assert.equal(res.statusCode, 501);
   assert.equal(JSON.parse(res.body).unsupported, true);
+});
+
+// ===== kugou 浏览多源（2026-11-04 批：榜单/推荐/歌单详情按 source 分发）=====
+// 形状依据 2026-11-03 现网实测：rank/audio 用 audio_info，歌单 track/all 必须走
+// global_collection_id（specialid 20010），tag/top playlist 走 data 信封。
+
+test('toplists：kugou rank/list 与 netease 多源聚合，items 各带 source', async () => {
+  await post('/config', {});
+  setUpstream({
+    netease: {
+      'toplist': { code: 200, list: [{ id: 19723756, name: '飙升榜', coverImgUrl: 'https://p/top.jpg', updateFrequency: '每天更新' }] },
+    },
+    premium: {
+      'kugou/api/rank/list': {
+        data: { info: [{ rankid: 8888, rankname: 'TOP500', album_img_9: 'http://img/{size}/kg.jpg', update_frequency: '每天更新', intro: 'i' }] },
+      },
+    },
+  });
+  const res = await post('/toplists');
+  assert.equal(res.statusCode, 200);
+  const a = JSON.parse(res.body);
+  assert.deepEqual(a.items.map(x => x.source), ['netease', 'kugou']);
+  assert.equal(a.items[1].id, '8888');
+  assert.equal(a.items[1].name, 'TOP500');
+  assert.equal(a.items[1].cover_url, 'http://img/240/kg.jpg');  // {size} 占位归一
+});
+
+test('toplists：单源失败静默跳过（netease 挂，kugou 仍有结果）', async () => {
+  await post('/config', {});
+  setUpstream({ timeout: ['toplist'] });
+  setUpstream({
+    timeout: ['toplist'],
+    premium: {
+      'kugou/api/rank/list': { data: { info: [{ rankid: 8888, rankname: 'TOP500' }] } },
+    },
+  });
+  const res = await post('/toplists');
+  assert.equal(res.statusCode, 200);
+  const a = JSON.parse(res.body);
+  assert.deepEqual(a.items.map(x => x.source), ['kugou']);
+});
+
+test('toplist/detail：source=kugou 走 rank/audio，hash/dedup/source_data 归一', async () => {
+  await post('/config', {});
+  setUpstream({
+    premium: {
+      'kugou/api/rank/audio?': {
+        total: 2, status: 1,
+        data: {
+          total: 2,
+          songlist: [{
+            songname: '时过境迁', album_audio_id: 967249675,
+            authors: [{ author_name: '苏艺馨Chency' }],
+            album_info: { album_name: '时过境迁', sizable_cover: 'http://img/{size}/c.jpg' },
+            audio_info: { hash_128: 'H128', hash_320: 'H320', duration_128: 236000 },
+          }],
+        },
+      },
+    },
+  });
+  const res = await post('/toplist/detail', { id: '8888', source: 'kugou' });
+  assert.equal(res.statusCode, 200);
+  const a = JSON.parse(res.body);
+  assert.equal(a.total, 2);
+  assert.equal(a.isEnd, true);  // 1 * 50 >= 2
+  const t = a.tracks[0];
+  assert.equal(t.title, '时过境迁');
+  assert.equal(t.source, 'kugou');
+  assert.equal(t.dedup_key, 'kwqq_kugou_967249675');
+  assert.equal(t.duration, 236);
+  assert.equal(t.cover_url, 'http://img/240/c.jpg');
+  assert.equal(t.source_data.i, 'H320');   // 播放 id 口径 = 320k hash 优先
+  assert.equal(t.source_data.s, 'kugou');
+  assert.ok(upstreamCalls.some(u => u.includes('/kugou/api/rank/audio?rankid=8888')));
+});
+
+test('sheet/info：source=kugou 走 playlist/track/all（gid 口径）+ list_info 元数据', async () => {
+  await post('/config', {});
+  setUpstream({
+    premium: {
+      'kugou/api/playlist/track/all?': {
+        status: 1,
+        data: {
+          count: 99,
+          list_info: {
+            global_collection_id: 'collection_3_978504152_15_0', name: '经典华语金曲',
+            list_create_username: 'swift', pic: 'http://img/{size}/p.jpg', intro: '简介', count: 99,
+          },
+          songs: [{
+            name: '光良 - 童话', hash: 'H472', mixsongid: 32164767, timelen: 260000,
+            albuminfo: { name: '童话' }, singerinfo: [{ name: '光良' }],
+            cover: 'http://img/{size}/song.jpg',
+            relate_goods: [{ hash: 'H320G', level: 4 }, { hash: 'H472', level: 2 }],
+          }],
+        },
+      },
+    },
+  });
+  const res = await post('/sheet/info', { id: 'collection_3_978504152_15_0', source: 'kugou' });
+  assert.equal(res.statusCode, 200);
+  const a = JSON.parse(res.body);
+  assert.equal(a.total, 99);
+  assert.equal(a.isEnd, false);  // 1 * 50 < 99
+  assert.equal(a.sheet.name, '经典华语金曲');
+  assert.equal(a.sheet.creator, 'swift');
+  assert.equal(a.sheet.cover_url, 'http://img/480/p.jpg');
+  const t = a.tracks[0];
+  assert.equal(t.title, '童话');         // 「歌手 - 歌名」拆分
+  assert.equal(t.artist, '光良');
+  assert.equal(t.source_data.i, 'H320G'); // 320k hash 优先（relate_goods level 4）
+  assert.equal(t.dedup_key, 'kwqq_kugou_32164767');
+});
+
+test('recommend/tags：多源 platforms（netease 顶层兼容 + kugou 分组）', async () => {
+  await post('/config', {});
+  setUpstream({
+    netease: {
+      'playlist/hot': { code: 200, tags: [{ name: '华语', hot: true }] },
+      'playlist/catlist': { code: 200, sub: [{ name: '轻音乐', category: '0' }], categories: { '0': '语种' } },
+    },
+    premium: {
+      'kugou/api/playlist/tags': {
+        status: 1,
+        data: [
+          { tag_name: '热歌', son: [{ tag_id: 1, tag_name: '热歌' }, { tag_id: 2, tag_name: '新歌' }] },
+          { tag_name: '语种', son: [{ tag_id: 3, tag_name: '国语' }] },
+        ],
+      },
+    },
+  });
+  const res = await post('/recommend/tags');
+  assert.equal(res.statusCode, 200);
+  const a = JSON.parse(res.body);
+  assert.equal(a.pinned.length, 1);  // 顶层兼容字段仍是 netease
+  assert.equal(a.platforms.length, 2);
+  assert.deepEqual(a.platforms.map(p => p.source), ['netease', 'kugou']);
+  assert.equal(a.platforms[1].pinned[0].id, '1');
+  assert.equal(a.platforms[1].categories.length, 2);
+  assert.equal(a.platforms[1].categories[0].title, '热歌');
+});
+
+test('recommend/sheets：source=kugou 走 top/playlist，gid 口径 + has_next 驱动 isEnd', async () => {
+  await post('/config', {});
+  setUpstream({
+    premium: {
+      'kugou/api/top/playlist?': {
+        status: 1,
+        data: {
+          has_next: 1,
+          special_list: [{
+            specialid: 8743644, global_collection_id: 'collection_3_978504152_15_0',
+            specialname: '经典华语金曲', nickname: 'swift',
+            flexible_cover: 'http://c1/{size}/c.jpg', play_count: 49059412,
+          }],
+        },
+      },
+    },
+  });
+  const res = await post('/recommend/sheets', { cat: '1', source: 'kugou' });
+  assert.equal(res.statusCode, 200);
+  const a = JSON.parse(res.body);
+  assert.equal(a.isEnd, false);
+  assert.equal(a.items[0].id, 'collection_3_978504152_15_0');  // gid 优先（详情可达）
+  assert.equal(a.items[0].source, 'kugou');
+  assert.equal(a.items[0].play_count, 49059412);
+  assert.ok(upstreamCalls.some(u => u.includes('category_id=1')));
+});
+
+// ===== kuwo 官方 wapi 免登通道（2026-11-04 批：榜单/推荐/歌单详情直连）=====
+// 形状依据 2026-11-04 现网实测：bang/list 分组 child、ksong.s musiclist、
+// getTagList digest 语义、getRcmPlayList 信封、pl.svc 元数据与 rid 口径。
+
+test('toplists：kuwo bang/list 平铺为 items（三源聚合）', async () => {
+  await post('/config', {});
+  setUpstream({
+    netease: { 'toplist': { code: 200, list: [{ id: 19723756, name: '飙升榜' }] } },
+    premium: { 'kugou/api/rank/list': { data: { info: [{ rankid: 8888, rankname: 'TOP500' }] } } },
+    kuwo: {
+      'api/pc/bang/list': {
+        child: [
+          { disname: '官方榜', child: [{ sourceid: 16, name: '酷我热歌榜', pic5: 'https://p/kw.png', intro: 'i' }] },
+        ],
+      },
+    },
+  });
+  const res = await post('/toplists');
+  assert.equal(res.statusCode, 200);
+  const a = JSON.parse(res.body);
+  assert.deepEqual(a.items.map(x => x.source), ['netease', 'kugou', 'kuwo']);
+  const kw = a.items[2];
+  assert.equal(kw.id, '16');
+  assert.equal(kw.name, '酷我热歌榜');
+  assert.equal(kw.cover_url, 'https://p/kw.png');
+});
+
+test('toplist/detail：source=kuwo 走 ksong.s，rid 口径归一', async () => {
+  await post('/config', {});
+  setUpstream({
+    kuwo: {
+      'ksong.s': {
+        num: 300,
+        musiclist: [{ id: 624683929, name: '山风山风等等我', artist: '万海东', album: '山风山风等等我', song_duration: 245 }],
+      },
+    },
+  });
+  const res = await post('/toplist/detail', { id: '16', source: 'kuwo' });
+  assert.equal(res.statusCode, 200);
+  const a = JSON.parse(res.body);
+  assert.equal(a.isEnd, true); // 1 首不足 50 → 尽
+  const t = a.tracks[0];
+  assert.equal(t.source, 'kuwo');
+  assert.equal(t.dedup_key, 'kwqq_kuwo_624683929');
+  assert.equal(t.duration, 245);
+  assert.equal(t.source_data.i, '624683929');
+  assert.equal(t.source_data.s, 'kuwo');
+});
+
+test('sheet/info：source=kuwo 走 pl.svc，rid 口径 + 元数据', async () => {
+  await post('/config', {});
+  setUpstream({
+    kuwo: {
+      'pl.svc': {
+        id: 2399331172, title: '经典｜用粤语歌唤起年少的记忆', uname: 'Boom',
+        pic: 'http://img1/c.jpg', playnum: 506702, info: '简介', total: 24,
+        musiclist: [{ id: 80458, name: '沉默是金', artist: '张国荣', album: '粤语超白金', duration: 252, albumpic: 'http://img1/al.jpg' }],
+      },
+    },
+  });
+  const res = await post('/sheet/info', { id: '2399331172', source: 'kuwo' });
+  assert.equal(res.statusCode, 200);
+  const a = JSON.parse(res.body);
+  assert.equal(a.total, 24);
+  assert.equal(a.isEnd, false); // 1 首 < 24，未到末页
+  assert.equal(a.sheet.name, '经典｜用粤语歌唤起年少的记忆');
+  assert.equal(a.sheet.creator, 'Boom');
+  assert.equal(a.sheet.play_count, 506702);
+  const t = a.tracks[0];
+  assert.equal(t.title, '沉默是金');
+  assert.equal(t.source_data.i, '80458');
+  assert.equal(t.cover_url, 'http://img1/al.jpg');
+});
+
+test('recommend/tags：kuwo getTagList 分组 + digest 编码（专区 id 带 @）', async () => {
+  await post('/config', {});
+  setUpstream({
+    netease: { 'playlist/hot': { code: 200, tags: [{ name: '华语' }] } },
+    kuwo: {
+      'getTagList': {
+        data: [
+          { name: '专区', data: [{ id: 211, name: '经典老歌专区', digest: '43' }] },
+          { name: '主题', data: [{ id: 999, name: '热歌', digest: '10000' }] },
+        ],
+      },
+    },
+  });
+  const res = await post('/recommend/tags');
+  assert.equal(res.statusCode, 200);
+  const a = JSON.parse(res.body);
+  const kwP = a.platforms.find(p => p.source === 'kuwo');
+  assert.ok(kwP, 'kuwo platform 缺失');
+  const qzTag = kwP.categories[0].data[0];
+  assert.equal(qzTag.id, '211@43');
+  const hotTag = kwP.categories[1].data[0];
+  assert.equal(hotTag.id, '999');
+  assert.deepEqual(kwP.pinned, [{ id: '999', title: '热歌' }]);
+});
+
+test('recommend/sheets：source=kuwo 空标签走 getRcmPlayList，专区走 er.s 切片', async () => {
+  await post('/config', {});
+  setUpstream({
+    kuwo: {
+      'getRcmPlayList': {
+        data: {
+          total: 1753,
+          data: [{ id: 2399331172, name: '经典｜用粤语歌唤起年少的记忆', uname: 'Boom', img: 'http://img1/c.jpg', total: '24', listencnt: '506702' }],
+        },
+      },
+      'er.s': [
+        { name: '经典老歌专区', list: [{ id: 3003724795, name: '经典国语', img: 'http://img1/e.jpg' }, { id: 3003724796, name: '粤语' }] },
+      ],
+    },
+  });
+  // 空标签（全部推荐）
+  const r1 = await post('/recommend/sheets', { cat: '', source: 'kuwo' });
+  assert.equal(r1.statusCode, 200);
+  const a1 = JSON.parse(r1.body);
+  assert.equal(a1.isEnd, false); // 1*30 < 1753
+  assert.equal(a1.items[0].id, '2399331172');
+  assert.equal(a1.items[0].source, 'kuwo');
+  assert.equal(a1.items[0].play_count, 506702);
+  // 专区标签（@digest）
+  const r2 = await post('/recommend/sheets', { cat: '211@43', source: 'kuwo', limit: 1 });
+  const a2 = JSON.parse(r2.body);
+  assert.equal(a2.items.length, 1);
+  assert.equal(a2.items[0].id, '3003724795');
+  assert.equal(a2.isEnd, false); // 1*1 < 2
+  assert.ok(upstreamCalls.some(u => u.includes('get_pc_qz_data')));
 });
