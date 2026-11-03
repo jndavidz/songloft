@@ -105,8 +105,13 @@ async function kwqq(cfg, path, timeoutMs) {
   if (resp.status === 401) throw new Error('kwqq 401：API key 缺失或错误（设置页填 key，或让 kwqq-api 信任当前网段）')
   if (!resp.ok) throw new Error('kwqq http ' + resp.status)
   const j = await resp.json()
-  if (j.code !== 200) throw new Error('kwqq ' + j.code + ': ' + (j.msg || ''))
-  return j.data
+  // 透传端点（/kugou/api/*、/netease/api/*）是上游原样 JSON，没有 {code,msg,data} 信封：
+  // 只有带数字 code 的精装响应才做信封校验与拆包，否则原样交给调用方按上游形状取字段。
+  if (j && typeof j.code === 'number') {
+    if (j.code !== 200) throw new Error('kwqq ' + j.code + ': ' + (j.msg || ''))
+    return j.data
+  }
+  return j
 }
 
 // ===== 结果映射 =====
@@ -572,9 +577,11 @@ async function neteaseMultiSearch(cfg, keywords, type, page, limit) {
 // kugou 透传类型搜索（type 字符串枚举：album/author/special；形状 2026-11-03 实测）
 const KUGOU_MULTI_TYPE = { album: 'album', artist: 'author', sheet: 'special' }
 async function kugouMultiSearch(cfg, keywords, type, page, limit) {
-  const data = await kwqq(cfg, '/kugou/api/search?keywords=' + encodeURIComponent(keywords) +
+  const raw = await kwqq(cfg, '/kugou/api/search?keywords=' + encodeURIComponent(keywords) +
     '&type=' + KUGOU_MULTI_TYPE[type] + '&page=' + page + '&pagesize=' + limit, 10000)
-  const rows = (data && data.lists) || []
+  // 透传原样 JSON：{status, error_code, data:{total, lists:[...]}}
+  const data = (raw && raw.data) || raw || {}
+  const rows = data.lists || []
   let items
   if (type === 'album') {
     items = rows.filter(r => r.albumid).map(r => ({
@@ -736,7 +743,8 @@ async function artistInfo(body) {
         avatar_url: (ar.sizable_avatar || '').replace('{size}', '240') || undefined,
         description: description || undefined,
         album_count: ar.album_count || 0,
-        music_count: ar.audio_count || 0,
+        // 现网容器实测字段是 song_count（audio_count 作旧形兼容）
+        music_count: ar.song_count || ar.audio_count || 0,
         source: 'kugou',
       },
     }

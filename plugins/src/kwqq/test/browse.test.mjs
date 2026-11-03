@@ -33,6 +33,8 @@ globalThis.fetch = async (url) => {
     if (path.startsWith('/' + key)) {
       const v = premiumResponses[key];
       if (v === 501) return { ok: false, status: 501, json: async () => ({ code: 501, msg: 'not implemented' }) };
+      // kugou 透传 = 上游原样 JSON（现网容器实读形状，无 {code,msg,data} 信封）；其余精装带信封
+      if (key.startsWith('kugou/api/')) return { ok: true, status: 200, json: async () => v };
       return { ok: true, status: 200, json: async () => ({ code: 200, msg: 'ok', data: v }) };
     }
   }
@@ -394,9 +396,12 @@ test('browse/search：类型搜索多源 fan-out（netease+kugou 透传，server
     },
     premium: {
       'kugou/api/search?': {
-        // 透传 = 上游原样 JSON（无信封）
-        lists: [{ albumid: 958706, albumname: 'K专辑', singer: '周杰伦', img: 'https://p/k.jpg' }],
-        total: 1,
+        // 现网实读形状：透传原样 JSON，lists/total 嵌在 data 里
+        status: 1, error_code: 0, error_msg: '',
+        data: {
+          page: 1, pagesize: 20, total: 1,
+          lists: [{ albumid: 958706, albumname: 'K专辑', singer: '周杰伦', img: 'https://p/k.jpg' }],
+        },
       },
       'qq/search/multi?': { items: [{ id: '8217', name: 'Q专辑', artist: '周杰伦', cover: 'https://p/q.jpg' }], total: 1 },
     },
@@ -418,7 +423,7 @@ test('artist/info + works：kugou 透传通道（detail/audios/albums）', async
       'kugou/api/artist/detail?': {
         status: 1, error_code: 0,
         data: { author_id: 3520, author_name: '周杰伦', sizable_avatar: 'http://img/{size}/a.jpg',
-                album_count: 49, audio_count: 1859, long_intro: [{ content: '简介' }] },
+                album_count: 49, song_count: 1859, long_intro: [{ content: '简介' }] },
       },
       'kugou/api/artist/audios?': {
         total: 1,
@@ -436,6 +441,7 @@ test('artist/info + works：kugou 透传通道（detail/audios/albums）', async
   assert.equal(a1.artist.name, '周杰伦');
   assert.equal(a1.artist.avatar_url, 'http://img/240/a.jpg');
   assert.equal(a1.artist.source, 'kugou');
+  assert.equal(a1.artist.music_count, 1859);   // 现网字段是 song_count
 
   const r2 = await post('/artist/works', { id: '3520', type: 'music', source: 'kugou' });
   const a2 = JSON.parse(r2.body);
