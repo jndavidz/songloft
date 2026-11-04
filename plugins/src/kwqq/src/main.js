@@ -410,29 +410,37 @@ router.post('/import', async (req) => {
 const BROWSE_SOURCES_WITH_ALBUM = ['netease', 'kugou', 'migu', 'qianqian', 'kuwo', 'qq']
 const NETEASE_SEARCH_TYPE = { album: 10, artist: 100, sheet: 1000 }
 
-// 透传返回的 netease song 对象（al/ar/dt 形状）→ 播放条目（对齐 itemToResult 输出形状）
-function neteaseSongToResult(song) {
-  const albumName = (song.al && song.al.name) || (song.album && song.album.name) || ''
-  const artist = (song.ar || song.artists || []).map(a => a.name).filter(Boolean).join(' / ')
-  const cover = (song.al && song.al.picUrl) || (song.album && song.album.picUrl) || ''
-  const sd = { s: 'netease', i: String(song.id), n: song.name || '', a: artist, al: albumName, d: Math.round((song.dt || 0) / 1000) }
+// —— P9 门面契约映射：server 归一形状（SearchItem/PlaylistEntry/AlbumEntry）→ browse 契约 ——
+// SearchItem → browse track（source_data 由 itemToResult 拼，dedup_key 统一 kwqq_<source>_<id>）
+function itemToTrack(it) {
+  const r = itemToResult(it)
+  r.source = it.source
+  r.dedup_key = 'kwqq_' + it.source + '_' + it.id
+  return r
+}
+// PlaylistEntry → browse sheet（meta.extra 携带平台专有字段）
+function entryToSheet(it) {
   return {
-    title: song.name || 'Unknown',
-    artist: artist || 'Unknown',
-    album: albumName || undefined,
-    duration: sd.d,
-    cover_url: cover || undefined,
-    source: 'netease',
-    source_data: sd,
-    dedup_key: 'kwqq_netease_' + song.id,
+    id: String(it.id), name: it.name || '', creator: it.creator || '',
+    cover_url: it.cover || undefined,
+    track_count: it.track_count || 0, play_count: it.play_count || 0,
+    description: (it.extra && it.extra.description) || undefined,
+    source: it.source,
+  }
+}
+// AlbumEntry → browse album
+function entryToAlbum(it) {
+  return {
+    id: String(it.id), name: it.name || '', artist: it.artist || '',
+    cover_url: it.cover || undefined,
+    track_count: it.size || it.track_count || 0,
+    publish_time: (it.extra && it.extra.publish_time) || undefined,
+    company: (it.extra && it.extra.company) || undefined,
+    description: (it.extra && it.extra.description) || undefined,
+    source: it.source,
   }
 }
 
-// netease 透传封面加尺寸参数（MusicFree 同款 ?param=WxH）
-function neteaseCover(url, size) {
-  if (!url) return undefined
-  return url + '?param=' + (size || 300) + 'y' + (size || 300)
-}
 
 // 通用 POST body 解析（对齐 /api/music/url 风格）
 function parseBody(req) {
@@ -469,21 +477,12 @@ async function browseHandler(cacheKey, fn) {
   }
 }
 
-// netease 透传调用：透传返回的是上游原样 JSON（无 {code,msg,data} 信封），
-// 不能走 kwqq()（它会拆信封返回 j.data → undefined），必须自持裸 fetch。
-async function neteaseApi(cfg, path, timeoutMs) {
-  const url = cfg.base.replace(/\/+$/, '') + '/netease/api/' + path
-  const headers = {}
-  if (cfg.key) headers['X-API-Key'] = cfg.key
-  const resp = await withTimeout(fetch(url, { headers }), timeoutMs || 10000, 'netease')
-  if (resp.status === 401) throw new Error('kwqq 401：API key 缺失或错误')
-  if (!resp.ok) throw new Error('kwqq http ' + resp.status)
-  const j = await resp.json()
-  if (j && typeof j.code === 'number' && j.code !== 200) throw new Error('netease code ' + j.code)
-  return j
-}
 
 // 多类型搜索：music 走多源聚合（复用 /api/search 逻辑），album/artist/sheet 走 netease cloudsearch
+// P9 统一门面 /{source}/search/multi（netease/kugou P9 收编 + qq/kuwo/migu/qianqian P7 精装）；
+// 501 由调用方 catch 跳过。顺序 = 结果交错顺序（netease/kugou 在前维持既有曝光排序）
+const SERVER_MULTI_SOURCES = ['netease', 'kugou', 'qq', 'kuwo', 'migu', 'qianqian']
+
 async function browseSearch(body) {
   const cfg = await getConfig()
   const keywords = String(body.keywords || '').trim()
@@ -497,17 +496,11 @@ async function browseSearch(body) {
     return { type, page, limit, isEnd: merged.length < limit ? true : undefined, items: merged }
   }
 
-  // 类型搜索逐源 fan-out（musicfree-plugins 七插件现役实现对齐，2026-11-03）：
-  //   netease 透传 cloudsearch type=10/100/1000；kugou 透传 /kugou/api/search（字符串枚举
-  //   album/author/special，数字 type 不分流——实测确认）；qq/kuwo/migu/qianqian 经 server
-  //   精装 /{source}/search/multi（P7，API-REFERENCE §4.5b）；bilibili 无类型通道跳过；
+  // 类型搜索逐源 fan-out（P9 后全部走统一门面 /{source}/search/multi，P7+P9 归一）：
+  //   netease/kugou（P9 收编）+ qq/kuwo/migu/qianqian（P7 精装）；bilibili 无类型通道跳过；
   //   migu/qianqian 的 sheet 上游 501 → 该源静默跳过（其余源仍有结果）。轮询交错合并。
-  const order = ['netease']
-  const tasks = [neteaseMultiSearch(cfg, keywords, type, page, limit).catch(() => ({ items: [], total: null }))]
-  if (cfg.sources.indexOf('kugou') >= 0) {
-    order.push('kugou')
-    tasks.push(kugouMultiSearch(cfg, keywords, type, page, limit).catch(() => ({ items: [], total: null })))
-  }
+  const order = []
+  const tasks = []
   for (const src of SERVER_MULTI_SOURCES) {
     if (cfg.sources.indexOf(src) < 0) continue
     order.push(src)
@@ -528,92 +521,7 @@ async function browseSearch(body) {
   }
 }
 
-// netease 透传类型搜索（cloudsearch；形状经 NAS 实测）
-async function neteaseMultiSearch(cfg, keywords, type, page, limit) {
-  const offset = (page - 1) * limit
-  const data = await neteaseApi(cfg, 'cloudsearch?keywords=' + encodeURIComponent(keywords) +
-    '&type=' + NETEASE_SEARCH_TYPE[type] + '&limit=' + limit + '&offset=' + offset, 10000)
-  const res = (data && data.result) || {}
-  let items, total
-  if (type === 'album') {
-    total = res.albumCount || 0
-    items = (res.albums || []).map(al => ({
-      id: String(al.id),
-      name: al.name || '',
-      artist: (al.artist && al.artist.name) || ((al.artists || []).map(a => a.name).filter(Boolean).join(' / ')) || '',
-      cover_url: neteaseCover(al.picUrl),
-      track_count: al.size || 0,
-      publish_time: al.publishTime || undefined,
-      company: al.company || undefined,
-      source: 'netease',
-    }))
-  } else if (type === 'artist') {
-    total = res.artistCount || 0
-    items = (res.artists || []).map(ar => ({
-      id: String(ar.id),
-      name: ar.name || '',
-      avatar_url: neteaseCover(ar.picUrl || ar.img1v1Url, 200),
-      alias: (ar.alias && ar.alias[0]) || undefined,
-      album_count: ar.albumSize || 0,
-      music_count: ar.musicSize || 0,
-      source: 'netease',
-    }))
-  } else {
-    total = res.playlistCount || 0
-    items = (res.playlists || []).map(pl => ({
-      id: String(pl.id),
-      name: pl.name || '',
-      creator: (pl.creator && pl.creator.nickname) || '',
-      cover_url: neteaseCover(pl.coverImgUrl || pl.picUrl),
-      track_count: pl.trackCount || 0,
-      play_count: pl.playCount || 0,
-      description: pl.description || undefined,
-      source: 'netease',
-    }))
-  }
-  return { items, total }
-}
 
-// kugou 透传类型搜索（type 字符串枚举：album/author/special；形状 2026-11-03 实测）
-const KUGOU_MULTI_TYPE = { album: 'album', artist: 'author', sheet: 'special' }
-async function kugouMultiSearch(cfg, keywords, type, page, limit) {
-  const raw = await kwqq(cfg, '/kugou/api/search?keywords=' + encodeURIComponent(keywords) +
-    '&type=' + KUGOU_MULTI_TYPE[type] + '&page=' + page + '&pagesize=' + limit, 10000)
-  // 透传原样 JSON：{status, error_code, data:{total, lists:[...]}}
-  const data = (raw && raw.data) || raw || {}
-  const rows = data.lists || []
-  let items
-  if (type === 'album') {
-    items = rows.filter(r => r.albumid).map(r => ({
-      id: String(r.albumid),
-      name: r.albumname || '',
-      artist: Array.isArray(r.singers) ? r.singers.map(x => x.name).filter(Boolean).join(' / ') : (r.singer || ''),
-      cover_url: r.img || undefined,
-      source: 'kugou',
-    }))
-  } else if (type === 'artist') {
-    items = rows.filter(r => r.AuthorId || r.singerid).map(r => ({
-      id: String(r.AuthorId || r.singerid),
-      name: r.AuthorName || r.singername || '',
-      avatar_url: r.Avatar || r.avatar || undefined,
-      source: 'kugou',
-    }))
-  } else {
-    items = rows.filter(r => r.specialid || r.gid).map(r => ({
-      // 歌单详情 playlist/track/all 只认 gid（global_collection_id），specialid 实测 20010
-      id: String(r.gid || r.specialid),
-      name: r.specialname || '',
-      creator: r.nickname || '',
-      cover_url: r.img || undefined,
-      track_count: r.song_count || 0,
-      source: 'kugou',
-    }))
-  }
-  return { items, total: (data && data.total) || rows.length }
-}
-
-// qq/kuwo/migu/qianqian：server 精装 /{source}/search/multi（P7）；501 由调用方 catch 跳过
-const SERVER_MULTI_SOURCES = ['qq', 'kuwo', 'migu', 'qianqian']
 async function serverMultiSearch(cfg, source, keywords, type, page, limit) {
   const data = await kwqq(cfg, '/' + source + '/search/multi?keywords=' + encodeURIComponent(keywords) +
     '&type=' + type + '&page=' + page + '&limit=' + limit, 10000)
@@ -661,27 +569,25 @@ async function albumInfo(body) {
   const name = String(body.name || '').trim()
   const artist = String(body.artist || '').trim()
 
-  if (source === 'netease' && id) {
-    const data = await neteaseApi(cfg, 'album?id=' + encodeURIComponent(id), 12000)
-    const al = (data && data.album) || {}
-    const songs = (data && data.songs) || []
+  if (id && (source === 'netease' || source === 'kugou')) {
+    // P9b by-id 精确通道：官方曲序（track_no），元数据在 extra
+    const data = await kwqq(cfg, '/' + source + '/album/detail?id=' + encodeURIComponent(id), 12000)
+    const al0 = ((data && data.albums) || [])[0] || {}
+    const tracks = ((data && data.items) || []).map(itemToTrack)
+    for (let i = 0; i < tracks.length; i++) tracks[i].track_no = tracks[i].track_no || (i + 1)
     return {
       album: {
-        id: String(al.id || id),
-        name: al.name || name,
-        artist: (al.artist && al.artist.name) || '',
-        cover_url: neteaseCover(al.picUrl, 500),
-        publish_time: al.publishTime || undefined,
-        company: al.company || undefined,
-        description: al.description || undefined,
-        track_count: al.size || songs.length,
-        source: 'netease',
+        id: String(al0.id || id),
+        name: al0.name || name,
+        artist: al0.artist || '',
+        cover_url: al0.cover || undefined,
+        publish_time: (al0.extra && al0.extra.publish_time) || undefined,
+        company: (al0.extra && al0.extra.company) || undefined,
+        description: (al0.extra && al0.extra.description) || undefined,
+        track_count: (data && data.total) || tracks.length,
+        source,
       },
-      tracks: songs.map(s => {
-        const r = neteaseSongToResult(s)
-        r.track_no = s.no || undefined
-        return r
-      }),
+      tracks,
     }
   }
 
@@ -694,13 +600,7 @@ async function albumInfo(body) {
   const data = await kwqq(cfg, '/' + source + '/album?name=' + encodeURIComponent(name) +
     (artist ? '&artist=' + encodeURIComponent(artist) : ''), 12000)
   const candidates = (data && data.albums) || []
-  const tracks = ((data && data.items) || []).map(it => {
-    const r = itemToResult(it)
-    r.source = it.source
-    r.dedup_key = 'kwqq_' + it.source + '_' + it.id
-    r.track_no = it.track_no || undefined
-    return r
-  })
+  const tracks = ((data && data.items) || []).map(itemToTrack)
   const al0 = candidates[0] || {}
   return {
     album: {
@@ -718,7 +618,8 @@ async function albumInfo(body) {
   }
 }
 
-// 歌手详情 + 作品：netease / kugou（透传 artist/detail，2026-11-03 实测形状）；其余源 501
+
+// 歌手详情 + 作品：P9 统一门面 /{source}/artist|artist/works（netease/kugou）；其余源 501
 function unsupportedArtist(source) {
   const err = new Error('source "' + source + '" 不支持歌手详情（仅 netease/kugou 有通道）')
   err.unsupported = true
@@ -730,39 +631,19 @@ async function artistInfo(body) {
   const source = String(body.source || 'netease')
   if (!id) return { error: 'id required' }
   const cfg = await getConfig()
-  if (source === 'kugou') {
-    const data = await kwqq(cfg, '/kugou/api/artist/detail?id=' + encodeURIComponent(id), 10000)
-    const ar = (data && data.data) || {}
-    let description = ''
-    if (Array.isArray(ar.long_intro) && ar.long_intro.length && ar.long_intro[0]) {
-      description = ar.long_intro[0].content || ''
-    }
-    return {
-      artist: {
-        id: String(ar.author_id || id),
-        name: ar.author_name || '',
-        avatar_url: (ar.sizable_avatar || '').replace('{size}', '240') || undefined,
-        description: description || undefined,
-        album_count: ar.album_count || 0,
-        // 现网容器实测字段是 song_count（audio_count 作旧形兼容）
-        music_count: ar.song_count || ar.audio_count || 0,
-        source: 'kugou',
-      },
-    }
-  }
-  if (source !== 'netease') throw unsupportedArtist(source)
-  const data = await neteaseApi(cfg, 'artists?id=' + encodeURIComponent(id), 10000)
+  if (source !== 'netease' && source !== 'kugou') throw unsupportedArtist(source)
+  const data = await kwqq(cfg, '/' + source + '/artist?id=' + encodeURIComponent(id), 10000)
   const ar = (data && data.artist) || {}
   return {
     artist: {
       id: String(ar.id || id),
       name: ar.name || '',
-      avatar_url: neteaseCover(ar.picUrl || ar.img1v1Url, 300),
-      alias: (ar.alias && ar.alias[0]) || undefined,
-      description: ar.briefDesc || ar.description || undefined,
-      album_count: ar.albumSize || 0,
-      music_count: ar.musicSize || 0,
-      source: 'netease',
+      avatar_url: ar.avatar || undefined,
+      alias: ar.alias || undefined,
+      description: ar.description || undefined,
+      album_count: ar.album_count || 0,
+      music_count: ar.music_count || 0,
+      source,
     },
   }
 }
@@ -775,151 +656,24 @@ async function artistWorks(body) {
   if (!id) return { error: 'id required' }
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
-  const offset = (page - 1) * limit
-  if (source === 'kugou') {
-    if (type === 'music') {
-      // audios 行 id 取 hash_128||hash——kwqq-api /kugou/song/url 以 FileHash 取链
-      const data = await kwqq(cfg, '/kugou/api/artist/audios?id=' + encodeURIComponent(id) +
-        '&page=' + page + '&pagesize=' + limit, 10000)
-      const rows = (data && data.data) || []
-      const total = (data && data.total) || rows.length
-      const items = rows.map(r => {
-        const hash = r.hash_128 || r.hash || ''
-        const duration = r.timelength_128 || r.timelength
-        return {
-          title: r.audio_name || 'Unknown',
-          artist: r.author_name || 'Unknown',
-          album: r.album_name || undefined,
-          duration: duration ? Math.round(Number(duration) / 1000) : 0,
-          cover_url: (r.trans_param && r.trans_param.union_cover) || undefined,
-          source: 'kugou',
-          source_data: { s: 'kugou', i: String(hash), n: r.audio_name || '', a: r.author_name || '', al: r.album_name || '' },
-          dedup_key: 'kwqq_kugou_' + hash,
-        }
-      }).filter(x => x.source_data.i)
-      return { type, page, isEnd: page * limit >= total, items }
-    }
-    const data = await kwqq(cfg, '/kugou/api/artist/albums?id=' + encodeURIComponent(id) +
-      '&page=' + page + '&pagesize=' + limit, 10000)
-    const rows = (data && data.data) || []
-    const total = (data && data.total) || rows.length
-    const items = rows.filter(r => r.album_id).map(r => ({
-      id: String(r.album_id),
-      name: r.album_name || '',
-      artist: r.author_name || '',
-      cover_url: (r.sizable_cover || '').replace('{size}', '240') || undefined,
-      description: r.intro || undefined,
-      source: 'kugou',
-    }))
-    return { type, page, isEnd: page * limit >= total, items }
-  }
-  if (source !== 'netease') throw unsupportedArtist(source)
+  if (source !== 'netease' && source !== 'kugou') throw unsupportedArtist(source)
+  const data = await kwqq(cfg, '/' + source + '/artist/works?id=' + encodeURIComponent(id) +
+    '&type=' + type + '&page=' + page + '&limit=' + limit, 10000)
   if (type === 'music') {
-    const data = await neteaseApi(cfg, 'artist/songs?id=' + encodeURIComponent(id) +
-      '&limit=' + limit + '&offset=' + offset + '&order=hot', 10000)
-    const songs = (data && data.songs) || []
-    const total = (data && data.total) || songs.length
-    return { type, page, isEnd: offset + songs.length >= total, items: songs.map(neteaseSongToResult) }
+    return { type, page, isEnd: !!(data && data.is_end), items: ((data && data.items) || []).map(itemToTrack) }
   }
-  const data = await neteaseApi(cfg, 'artist/album?id=' + encodeURIComponent(id) +
-    '&limit=' + limit + '&offset=' + offset, 10000)
-  const albums = (data && data.hotAlbums) || []
-  const total = ((data && data.artist && data.artist.albumSize) || albums.length)
-  return {
-    type, page,
-    isEnd: offset + albums.length >= total,
-    items: albums.map(al => ({
-      id: String(al.id),
-      name: al.name || '',
-      artist: (al.artist && al.artist.name) || '',
-      cover_url: neteaseCover(al.picUrl),
-      track_count: al.size || 0,
-      publish_time: al.publishTime || undefined,
-      company: al.company || undefined,
-      source: 'netease',
-    })),
-  }
+  const items = ((data && data.items) || []).map(it => ({
+    id: String(it.id), name: it.name || '', artist: it.artist || '',
+    cover_url: it.cover || undefined,
+    track_count: it.track_count || 0,
+    publish_time: (it.extra && it.extra.publish_time) || undefined,
+    company: (it.extra && it.extra.company) || undefined,
+    description: (it.extra && it.extra.description) || undefined,
+    source: it.source,
+  }))
+  return { type, page, isEnd: !!(data && data.is_end), items }
 }
 
-// —— kugou 浏览归一（形状 2026-11-03 现网实测：rank/audio 用 audio_info，歌单 track/all
-// 用顶层 hash/relate_goods/singerinfo；播放 id 口径 320k hash 优先、无则降档）——
-function kugouRankSongToResult(s) {
-  const ai = (s && s.audio_info) || {}
-  const authors = Array.isArray(s.authors) ? s.authors.map(a => a.author_name).filter(Boolean) : []
-  const artist = authors.join(' / ') || s.author_name || ''
-  const albumName = (s.album_info && s.album_info.album_name) || ''
-  const cover = ((s.album_info && s.album_info.sizable_cover) ||
-    (s.trans_param && s.trans_param.union_cover) || '').replace('{size}', '240')
-  const hash = ai.hash_320 || ai.hash_128 || ai.hash || ''
-  const d = Math.round((ai.duration_128 || 0) / 1000)
-  return {
-    title: s.songname || 'Unknown',
-    artist: artist || 'Unknown',
-    album: albumName || undefined,
-    duration: d,
-    cover_url: cover || undefined,
-    source: 'kugou',
-    source_data: { s: 'kugou', i: hash, n: s.songname || '', a: artist, al: albumName, d },
-    dedup_key: 'kwqq_kugou_' + (s.album_audio_id || hash),
-  }
-}
-
-function kugouPlaylistSongToResult(it) {
-  // 老接口形状：name 是「歌手 - 歌名」，singerinfo 才可靠
-  let title = (it && it.name) || ''
-  let artist = ''
-  const dash = title.indexOf(' - ')
-  if (dash >= 0) { artist = title.substring(0, dash); title = title.substring(dash + 3) }
-  if (!artist && Array.isArray(it.singerinfo)) {
-    artist = it.singerinfo.map(s => s.name).filter(Boolean).join(' / ')
-  }
-  let hash320 = ''
-  if (Array.isArray(it.relate_goods)) {
-    for (const g of it.relate_goods) { if (g && g.level === 4) { hash320 = g.hash; break } }
-  }
-  const hash = hash320 || it.hash || ''
-  const albumName = (it.albuminfo && it.albuminfo.name) || ''
-  const cover = (it.cover || (it.trans_param && it.trans_param.union_cover) || '').replace('{size}', '240')
-  const d = Math.round((it.timelen || 0) / 1000)
-  return {
-    title: title || 'Unknown',
-    artist: artist || 'Unknown',
-    album: albumName || undefined,
-    duration: d,
-    cover_url: cover || undefined,
-    source: 'kugou',
-    source_data: { s: 'kugou', i: hash, n: title, a: artist, al: albumName, d },
-    dedup_key: 'kwqq_kugou_' + (it.mixsongid || it.add_mixsongid || hash),
-  }
-}
-
-// kugou 歌单详情：曲目分页 playlist/track/all（**必须 global_collection_id**，
-// specialid 实测 20010）；page=1 并用响应自带 list_info 元数据（免额外请求）
-async function kugouSheetInfo(cfg, id, page, limit) {
-  const data = await kwqq(cfg, '/kugou/api/playlist/track/all?id=' + encodeURIComponent(id) +
-    '&page=' + page + '&pagesize=' + limit, 15000)
-  const d = (data && data.data) || {}
-  const songs = d.songs || []
-  const total = d.count || songs.length
-  const out = {
-    page, isEnd: page * limit >= total, total,
-    tracks: songs.map(kugouPlaylistSongToResult),
-  }
-  if (page === 1 && d.list_info) {
-    const li = d.list_info
-    out.sheet = {
-      id: String(li.global_collection_id || li.specialid || id),
-      name: li.name || '',
-      creator: li.list_create_username || '',
-      cover_url: (li.pic || '').replace('{size}', '480') || undefined,
-      track_count: li.count || total,
-      play_count: li.collect_total || 0,
-      description: li.intro || undefined,
-      source: 'kugou',
-    }
-  }
-  return out
-}
 
 // —— kuwo 浏览归一（P8：走 kwqq-api 统一门面 /kuwo/*，归一在 adapter 内完成；
 // 形状 2026-11-04 现网实测。曲目 id=rid 与播放链口径一致）——
@@ -990,7 +744,8 @@ async function kuwoRecommendSheets(cfg, cat, page, limit) {
     })),
   }
 }
-// playlist/detail 元数据；kugou 见 kugouSheetInfo；kuwo 见 kuwoSheetInfo）
+// 歌单详情：P8 门面 /{source}/playlist/songs（netease/kugou/kuwo；meta 仅 page=1 附元数据）
+const SHEET_SOURCES = ['netease', 'kugou', 'kuwo']
 async function sheetInfo(body) {
   const id = String(body.id || '').trim()
   const page = Math.max(1, Number(body.page) || 1)
@@ -998,69 +753,36 @@ async function sheetInfo(body) {
   if (!id) return { error: 'id required' }
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
-  if (source === 'kugou') return kugouSheetInfo(cfg, id, page, limit)
-  if (source === 'kuwo') return kuwoSheetInfo(cfg, id, page, limit)
-  const offset = (page - 1) * limit
-  const data = await neteaseApi(cfg, 'playlist/track/all?id=' + encodeURIComponent(id) +
-    '&limit=' + limit + '&offset=' + offset, 15000)
-  const songs = (data && data.songs) || []
-  const total = (data && data.total) || songs.length
+  if (SHEET_SOURCES.indexOf(source) < 0) {
+    const err = new Error('source "' + source + '" 不支持歌单详情（仅 netease/kugou/kuwo）')
+    err.unsupported = true
+    throw err
+  }
+  const data = await kwqq(cfg, '/' + source + '/playlist/songs?id=' + encodeURIComponent(id) +
+    '&page=' + page + '&limit=' + limit, 15000)
   const out = {
-    page, isEnd: offset + songs.length >= total, total,
-    tracks: songs.map(neteaseSongToResult),
+    page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined,
+    tracks: ((data && data.items) || []).map(itemToTrack),
   }
-  if (page === 1) {
-    try {
-      const det = await neteaseApi(cfg, 'playlist/detail?id=' + encodeURIComponent(id), 10000)
-      const pl = (det && det.playlist) || {}
-      out.sheet = {
-        id: String(pl.id || id),
-        name: pl.name || '',
-        creator: (pl.creator && pl.creator.nickname) || '',
-        cover_url: neteaseCover(pl.coverImgUrl, 500),
-        track_count: pl.trackCount || total,
-        play_count: pl.playCount || 0,
-        description: pl.description || undefined,
-        source: 'netease',
-      }
-    } catch (e) { /* 元数据缺失不阻塞曲目 */ }
-  }
+  if (page === 1 && data && data.meta) out.sheet = entryToSheet(data.meta)
   return out
 }
 
-// 榜单列表：多源聚合（netease toplist + kugou rank/list），items 各带 source，
-// 单源失败静默跳过（其余源仍有结果）。netease 在前（现有排序不变）。
+
+// 榜单列表：P8 门面多源聚合（netease/kugou/kuwo），items 各带 source，单源失败静默跳过
 async function toplists() {
   const cfg = await getConfig()
-  const tasks = [
-    neteaseApi(cfg, 'toplist', 10000).then(data => {
-      const lists = (data && data.list) || []
-      return lists.map(it => ({
-        id: String(it.id),
-        name: it.name || '',
-        cover_url: neteaseCover(it.coverImgUrl || it.picUrl),
+  const tasks = []
+  for (const s of ['netease', 'kugou', 'kuwo']) {
+    if (cfg.sources.indexOf(s) < 0) continue
+    tasks.push(kwqq(cfg, '/' + s + '/toplists', 10000).then(data =>
+      ((data && data.items) || []).map(it => ({
+        id: it.id, name: it.name || '',
+        cover_url: it.cover || undefined,
         description: it.description || undefined,
-        update_frequency: it.updateFrequency || undefined,
-        track_count: it.trackCount || undefined,
-        source: 'netease',
-      }))
-    }),
-  ]
-  if (cfg.sources.indexOf('kugou') >= 0) {
-    tasks.push(kwqq(cfg, '/kugou/api/rank/list', 10000).then(data => {
-      const info = ((data && data.data) && data.data.info) || (data && data.info) || []
-      return info.map(it => ({
-        id: String(it.rankid || it.rank_cid || it.id),
-        name: it.rankname || '',
-        cover_url: (it.album_img_9 || it.img_9 || it.imgurl || '').replace('{size}', '240') || undefined,
-        description: it.intro || undefined,
         update_frequency: it.update_frequency || undefined,
-        source: 'kugou',
-      }))
-    }))
-  }
-  if (cfg.sources.indexOf('kuwo') >= 0) {
-    tasks.push(kuwoToplists(cfg))
+        source: s,
+      }))))
   }
   const per = await Promise.allSettled(tasks)
   const items = []
@@ -1076,16 +798,6 @@ async function toplists() {
   return { source: 'multi', items }
 }
 
-// kugou 榜单详情：rank/audio 分页（rankid 口径，非 playlist id）
-async function kugouToplistDetail(cfg, id, page, limit) {
-  const data = await kwqq(cfg, '/kugou/api/rank/audio?rankid=' + encodeURIComponent(id) +
-    '&page=' + page + '&pagesize=' + limit, 15000)
-  const d = (data && data.data) || {}
-  const songs = d.songlist || []
-  const total = d.total || songs.length
-  return { page, isEnd: page * limit >= total, total, tracks: songs.map(kugouRankSongToResult) }
-}
-
 async function toplistDetail(body) {
   const id = String(body.id || '').trim()
   const page = Math.max(1, Number(body.page) || 1)
@@ -1093,120 +805,60 @@ async function toplistDetail(body) {
   if (!id) return { error: 'id required' }
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
-  if (source === 'kugou') return kugouToplistDetail(cfg, id, page, limit)
-  if (source === 'kuwo') return kuwoToplistDetail(cfg, id, page, limit)
-  const offset = (page - 1) * limit
-  const data = await neteaseApi(cfg, 'playlist/track/all?id=' + encodeURIComponent(id) +
-    '&limit=' + limit + '&offset=' + offset, 15000)
-  const songs = (data && data.songs) || []
-  const total = (data && data.total) || songs.length
-  return { page, isEnd: offset + songs.length >= total, total, tracks: songs.map(neteaseSongToResult) }
+  if (SHEET_SOURCES.indexOf(source) < 0) {
+    const err = new Error('source "' + source + '" 不支持榜单详情（仅 netease/kugou/kuwo）')
+    err.unsupported = true
+    throw err
+  }
+  const data = await kwqq(cfg, '/' + source + '/toplist/songs?id=' + encodeURIComponent(id) +
+    '&page=' + page + '&limit=' + limit, 15000)
+  return { page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined,
+           tracks: ((data && data.items) || []).map(itemToTrack) }
 }
 
-// 推荐歌单：热门标签（pinned）+ 全量分类（grouped），来自平台接口。
-// 多源：顶层 pinned/categories 保持 netease（旧客户端兼容），新增 platforms
-// 数组（netease/kugou 各自的 pinned+categories）供新客户端按平台展示。
+
+// 推荐歌单：P8 门面 /{source}/playlist/tags 三平台（netease/kugou/kuwo）。
+// 顶层 pinned/categories 保持第一平台（netease 优先，旧客户端兼容）；
+// platforms 数组供新客户端按平台展示。
 async function recommendTags() {
   const cfg = await getConfig()
-  const hot = await neteaseApi(cfg, 'playlist/hot', 8000)
-  const pinned = (((hot && hot.tags) || [])).slice(0, 8).map(t => ({ id: t.name, title: t.name }))
-  let categories = []
-  try {
-    const cat = await neteaseApi(cfg, 'playlist/catlist', 8000)
-    const subs = (cat && cat.sub) || []
-    const names = (cat && cat.categories) || {}
-    const grouped = {}
-    for (const s of subs) {
-      const catName = names[String(s.category)] || '其他'
-      if (!grouped[catName]) grouped[catName] = []
-      grouped[catName].push({ id: s.name, title: s.name })
-    }
-    categories = Object.keys(grouped).map(title => ({ title, data: grouped[title] }))
-  } catch (e) { /* catlist 失败时只给 pinned */ }
-  const out = { pinned, categories, platforms: [{ source: 'netease', pinned, categories }] }
-  if (cfg.sources.indexOf('kugou') >= 0) {
+  const platforms = []
+  for (const s of ['netease', 'kugou', 'kuwo']) {
+    if (cfg.sources.indexOf(s) < 0) continue
     try {
-      const raw = await kwqq(cfg, '/kugou/api/playlist/tags', 8000)
-      const tags = (raw && raw.data) || []
-      const groups = tags.map(cat => ({
-        title: cat.tag_name || '',
-        data: (cat.son || []).map(s => ({ id: String(s.tag_id), title: s.tag_name || '' })),
-      })).filter(g => g.data.length)
-      const kPinned = (tags[0] && tags[0].son || []).slice(0, 8)
-        .map(s => ({ id: String(s.tag_id), title: s.tag_name || '' }))
-      out.platforms.push({ source: 'kugou', pinned: kPinned, categories: groups })
+      const data = await kwqq(cfg, '/' + s + '/playlist/tags', 10000)
+      const groups = (data && data.groups) || []
+      if (groups.length) platforms.push({ source: s, pinned: (data && data.pinned) || [], categories: groups })
     } catch (e) {
-      console.log('[kwqq] kugou recommend tags error: ' + String((e && e.message) || e))
+      console.log('[kwqq] ' + s + ' recommend tags error: ' + String((e && e.message) || e))
     }
   }
-  if (cfg.sources.indexOf('kuwo') >= 0) {
-    try {
-      const kw = await kuwoRecommendTags(cfg)
-      if (kw.groups.length) {
-        out.platforms.push({ source: 'kuwo', pinned: kw.pinned, categories: kw.groups })
-      }
-    } catch (e) {
-      console.log('[kwqq] kuwo recommend tags error: ' + String((e && e.message) || e))
-    }
-  }
-  return out
+  const first = platforms.find(p => p.source === 'netease') || platforms[0] || { pinned: [], categories: [] }
+  return { pinned: first.pinned, categories: first.categories, platforms }
 }
 
+// 推荐歌单：P8 门面 /{source}/playlist/sheets（tag 空 = 全部热门；kuwo 专区 <id>@<digest> 透传）
 async function recommendSheets(body) {
   const cat = String(body.cat || '').trim()
   const page = Math.max(1, Number(body.page) || 1)
   const limit = Math.min(50, Math.max(1, Number(body.limit) || 30))
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
-  if (source === 'kugou') return kugouRecommendSheets(cfg, cat, page, limit)
-  if (source === 'kuwo') return kuwoRecommendSheets(cfg, cat, page, limit)
-  const offset = (page - 1) * limit
-  const data = await neteaseApi(cfg, 'top/playlist?cat=' + encodeURIComponent(cat) +
-    '&limit=' + limit + '&offset=' + offset + '&order=hot', 10000)
-  const playlists = (data && data.playlists) || []
-  const total = (data && data.total) || playlists.length
+  if (SHEET_SOURCES.indexOf(source) < 0) {
+    const err = new Error('source "' + source + '" 不支持推荐歌单（仅 netease/kugou/kuwo）')
+    err.unsupported = true
+    throw err
+  }
+  const data = await kwqq(cfg, '/' + source + '/playlist/sheets?tag=' + encodeURIComponent(cat) +
+    '&page=' + page + '&limit=' + limit, 10000)
   return {
     cat, page,
-    isEnd: offset + playlists.length >= total,
-    items: playlists.map(pl => ({
-      id: String(pl.id),
-      name: pl.name || '',
-      creator: (pl.creator && pl.creator.nickname) || '',
-      cover_url: neteaseCover(pl.coverImgUrl || pl.picUrl),
-      track_count: pl.trackCount || 0,
-      play_count: pl.playCount || 0,
-      description: pl.description || undefined,
-      source: 'netease',
-    })),
+    isEnd: !!(data && data.is_end),
+    items: ((data && data.items) || []).map(entryToSheet),
   }
 }
 
-// kugou 推荐歌单：top/playlist 分页（category_id=0 为全部），has_next 驱动 isEnd；
-// 该标签无结果时降级为全部推荐（musicfree kugou 现役实现对齐）
-async function kugouRecommendSheets(cfg, cat, page, limit) {
-  let data = await kwqq(cfg, '/kugou/api/top/playlist?category_id=' + encodeURIComponent(cat) +
-    '&page=' + page + '&pagesize=' + limit, 10000)
-  let specials = ((data && data.data) && data.data.special_list) || []
-  if (!specials.length && cat && cat !== '0') {
-    data = await kwqq(cfg, '/kugou/api/top/playlist?category_id=0&page=' + page +
-      '&pagesize=' + limit, 10000)
-    specials = ((data && data.data) && data.data.special_list) || []
-  }
-  const d = (data && data.data) || {}
-  return {
-    cat, page,
-    isEnd: !d.has_next,
-    items: specials.map(sp => ({
-      id: String(sp.global_collection_id || sp.specialid),
-      name: sp.specialname || '',
-      creator: sp.nickname || '',
-      cover_url: (sp.flexible_cover || sp.imgurl || '').replace('{size}', '240') || undefined,
-      track_count: sp.songcount || sp.song_count || 0,
-      play_count: sp.play_count || 0,
-      source: 'kugou',
-    })),
-  }
-}
+
 // 评论（只读，MusicFree IComment 形状；热评首页随 hotComments 一次返回）。
 // id 可省：给 title+artist 时回搜 netease id（播放页对任意来源的已入库歌开评论用）。
 async function musicComments(body) {
@@ -1217,43 +869,31 @@ async function musicComments(body) {
   const limit = Math.min(50, Math.max(1, Number(body.limit) || 20))
   if (!id && !title) return { error: 'id 或 title 至少提供一个' }
   const cfg = await getConfig()
-  if (!id) {
-    const found = await neteaseApi(cfg, 'cloudsearch?keywords=' +
-      encodeURIComponent((title + ' ' + artist).trim()) + '&type=1&limit=1&offset=0', 8000)
-    const songs = (found && found.result && found.result.songs) || []
-    if (!songs.length) return { total: 0, has_more: false, hot: [], comments: [] }
-    id = String(songs[0].id)
-  }
+  // P9 门面：/netease/comments 支持 id 或 title+artist 回搜（回搜在 server 侧完成）
   const cacheKey = 'comments|' + id + '|' + page + '|' + limit
   const cached = commentCache.get(cacheKey)
   if (cached) return cached
-  const offset = (page - 1) * limit
-  const data = await neteaseApi(cfg, 'comment/music?id=' + encodeURIComponent(id) +
-    '&limit=' + limit + '&offset=' + offset, 10000)
+  const data = await kwqq(cfg, '/netease/comments?' + (id ? 'id=' + encodeURIComponent(id) : 'title=' + encodeURIComponent(title) + '&artist=' + encodeURIComponent(artist)) +
+    '&page=' + page + '&limit=' + limit, 10000)
   const toComment = (c) => {
     if (!c) return null
-    const replies = (c.beReplied || []).map(r => ({
-      id: String(r.beRepliedCommentId || ''),
-      nickName: (r.user && r.user.nickname) || '已注销',
-      avatar: (r.user && r.user.avatarUrl) || undefined,
-      comment: r.content || '',
-    }))
+    // P9 门面 CommentEntry 形状（snake_case）→ MusicFree IComment（camelCase）
     return {
-      id: String(c.commentId || ''),
-      nickName: (c.user && c.user.nickname) || '匿名用户',
-      avatar: (c.user && c.user.avatarUrl) || undefined,
+      id: c.id || '',
+      nickName: c.nick_name || '匿名用户',
+      avatar: c.avatar || undefined,
       comment: c.content || '',
-      like: c.likedCount || 0,
-      createAt: c.time || undefined,
-      replies: replies.length ? replies : undefined,
+      like: c.like || 0,
+      createAt: c.created_at || undefined,
+      replies: undefined,
     }
   }
   const out = {
     page,
     total: (data && data.total) || 0,
-    has_more: !!(data && data.more),
-    hot: (((data && data.hotComments) || []).map(toComment).filter(Boolean)),
-    comments: (((data && data.comments) || []).map(toComment).filter(Boolean)),
+    has_more: !!(data && data.has_more),
+    hot: (((data && data.hot) || []).map(toComment).filter(Boolean)),
+    comments: (((data && data.items) || []).map(toComment).filter(Boolean)),
   }
   commentCache.set(cacheKey, out)
   return out
