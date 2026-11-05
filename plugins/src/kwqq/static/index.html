@@ -39,6 +39,9 @@
   #msg { margin-top: 12px; font-size: 14px; min-height: 20px; }
   .ok { color: #2e9e5b; } .err { color: #d64545; }
   .hint { color: #888; font-size: 13px; line-height: 1.6; margin: 8px 0 16px; }
+  .qrow { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid #8883; }
+  .qrow span { flex: 1; font-size: 14px; }
+  .qrow select { padding: 7px 10px; border: 1px solid var(--bd); border-radius: 8px; font-size: 14px; background: transparent; color: inherit; }
   .page { display: none; } .page.on { display: block; }
 </style>
 </head>
@@ -70,8 +73,11 @@
   <input type="password" id="key" placeholder="留空 = 不带 key">
   <label>启用音源</label>
   <div class="srcs" id="srcs"></div>
-  <label>音质封顶</label>
+  <label>音质封顶（默认档位）</label>
   <input type="text" id="quality" placeholder="320k">
+  <label>按源音质覆盖（可选）</label>
+  <div class="hint" style="margin: 0 0 4px">留「跟随全局」即用 App 音质设置；指定档位后该源始终按此档取链（旧配置不受影响）。</div>
+  <div id="qsrcs"></div>
   <button class="savebtn" id="save">保存</button>
   <div id="msg"></div>
 </div>
@@ -258,16 +264,54 @@ async function loadCfg() {
     $('key').placeholder = cfg.has_key ? '已设置（留空保持不变）' : '留空 = 不带 key';
     $('quality').value = cfg.quality || '320k';
     renderSrcs(cfg.sources || ALL);
+    renderQualityBySource(cfg.sources || ALL, cfg.quality_by_source || {});
   } catch (e) {
     $('msg').textContent = '读取配置失败：' + e; $('msg').className = 'err';
     renderSrcs(ALL);
+    renderQualityBySource(ALL, {});
   }
 }
+// 按源音质覆盖：下拉项留空 = 跟随全局（App 音质设置）> 插件默认档位
+const QUALITY_OPTIONS = [['', '跟随全局'], ['128k', '128k'], ['192k', '192k'], ['320k', '320k']];
+function collectSources() {
+  return Array.from($('srcs').querySelectorAll('input:checked')).map(i => i.value);
+}
+function collectQualityBySource() {
+  const out = {};
+  $('qsrcs').querySelectorAll('select').forEach(sel => {
+    if (sel.value) out[sel.dataset.src] = sel.value;
+  });
+  return out;
+}
+function renderQualityBySource(active, current) {
+  const wrap = $('qsrcs');
+  wrap.innerHTML = '';
+  for (const s of ALL) {
+    if (active.indexOf(s) < 0) continue;
+    const row = document.createElement('div'); row.className = 'qrow';
+    const name = document.createElement('span'); name.textContent = NAMES[s];
+    const sel = document.createElement('select'); sel.dataset.src = s;
+    for (const [v, label] of QUALITY_OPTIONS) {
+      const opt = document.createElement('option'); opt.value = v; opt.textContent = label;
+      if ((current[s] || '') === v) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    row.appendChild(name); row.appendChild(sel); wrap.appendChild(row);
+  }
+}
+$('srcs').addEventListener('change', () => {
+  renderQualityBySource(collectSources(), collectQualityBySource());
+});
 $('save').onclick = async () => {
   try {
-    const sources = Array.from($('srcs').querySelectorAll('input:checked')).map(i => i.value);
+    const sources = collectSources();
     if (!sources.length) throw new Error('至少启用一个音源');
-    const body = { base: $('base').value.trim(), sources, quality: $('quality').value.trim() || '320k' };
+    const body = {
+      base: $('base').value.trim(),
+      sources,
+      quality: $('quality').value.trim() || '320k',
+      quality_by_source: collectQualityBySource(),
+    };
     const key = $('key').value.trim();
     if (key) body.key = key;
     await pluginApi('/config', { method: 'POST', body: JSON.stringify(body) });
