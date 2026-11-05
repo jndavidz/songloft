@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Songloft 曲库搜索整合 + 底部导航 · 静态设计预览</title>
+<style>
+  :root{
+    /* ColorScheme 近似值（seed = BuiltInPalette.blue #415F91）。实现时一律走 Theme.of(context).colorScheme，不硬编码 */
+    --primary:#415F91;
+    --on-primary:#FFFFFF;
+    --primary-container:#D9E2FF;
+    --on-primary-container:#001A41;
+    --secondary-container:#DCE2F9;
+    --on-secondary-container:#141B2C;
+    --surface:#FAF9FF;
+    --surface-container-low:#F4F3FA;
+    --surface-container:#EEEDF4;
+    --surface-container-high:#E8E7EF;
+    --on-surface:#1A1B20;
+    --on-surface-variant:#44474F;
+    --outline:#74777F;
+    --outline-variant:#C4C6D0;
+    --error:#BA1A1A;
+    /* 间距 4/8/16/24/32/48；圆角 8/12/16/24 */
+    --sp-xs:4px; --sp-sm:8px; --sp-md:16px; --sp-lg:24px; --sp-xl:32px;
+    --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:24px;
+    --shadow-phone:0 24px 60px rgba(16,24,40,.18), 0 2px 8px rgba(16,24,40,.08);
+    --safe-top:47px; --safe-bottom:34px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    background:#EEF1F6;color:var(--on-surface);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;padding:32px 24px 80px;
+  }
+  a{color:var(--primary);text-decoration:none;border-bottom:1px solid rgba(65,95,145,.3);}
+  a:hover{border-bottom-color:var(--primary);}
+  .doc-head,.stage,.legend,.states,.basis,.navsec{max-width:1180px;margin-left:auto;margin-right:auto;}
+  .doc-head{margin-bottom:28px;}
+  .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--primary);font-weight:700;margin-bottom:10px;}
+  h1{font-size:28px;line-height:1.3;font-weight:700;letter-spacing:-.01em;}
+  .sub{margin-top:10px;font-size:14px;line-height:1.75;color:var(--on-surface-variant);max-width:850px;}
+  .meta-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;}
+  .meta{font-size:12px;padding:6px 10px;border-radius:999px;background:#fff;border:1px solid #DDE1E8;color:var(--on-surface-variant);}
+  .meta strong{color:var(--on-surface);font-weight:600;}
+
+  .stage{display:flex;gap:48px;flex-wrap:wrap;align-items:flex-start;justify-content:center;}
+  .col{display:flex;flex-direction:column;gap:14px;}
+  .col-title{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:700;}
+  .tag{font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;}
+  .tag.before{background:#FFF1D6;color:#7A4E00;border:1px solid #F2D49B;}
+  .tag.after{background:var(--primary-container);color:var(--on-primary-container);border:1px solid #BCCBF1;}
+  .col-desc{font-size:12px;color:var(--on-surface-variant);line-height:1.65;max-width:390px;}
+
+  /* ============ 手机框（390 × 844，iPhone 14 安全区 47 / 34） ============ */
+  .phone{
+    width:390px;height:844px;background:var(--surface);
+    border-radius:44px;border:1px solid #D6D9E0;
+    box-shadow:var(--shadow-phone);overflow:hidden;position:relative;
+    display:flex;flex-direction:column;
+  }
+  .statusbar{height:var(--safe-top);flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:0 22px 0 32px;font-size:12px;font-weight:600;}
+  .statusbar .right{display:flex;gap:5px;align-items:center;}
+  .sig{display:flex;gap:2px;align-items:flex-end;height:9px;}
+  .sig i{display:block;width:3px;background:var(--on-surface);border-radius:1px;}
+  .sig i:nth-child(1){height:4px}.sig i:nth-child(2){height:6px}.sig i:nth-child(3){height:8px}.sig i:nth-child(4){height:9px}
+  .bat{width:20px;height:10px;border:1px solid var(--on-surface);border-radius:3px;position:relative;}
+  .bat::after{content:"";position:absolute;inset:2px;background:var(--on-surface);border-radius:1px;}
+  .island{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:118px;height:34px;border-radius:20px;background:#111;z-index:3;}
+
+  .appbar{height:56px;flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:0 6px 0 16px;}
+  .appbar h2{font-size:22px;font-weight:600;letter-spacing:.01em;flex:1;}
+  .icbtn{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;}
+  .icbtn svg{width:22px;height:22px;}
+
+  .searchwrap{padding:8px 16px;flex:0 0 auto;position:relative;}
+  .search{
+    height:48px;border-radius:var(--r-xl);background:var(--surface-container-low);
+    border:1px solid var(--outline-variant);display:flex;align-items:center;gap:10px;padding:0 10px 0 14px;
+  }
+  .search .sicon{width:20px;height:20px;flex:0 0 auto;color:var(--on-surface-variant);}
+  .search .hint{flex:1;font-size:14px;color:var(--on-surface-variant);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .search .kw{flex:1;font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .clearx{width:24px;height:24px;display:grid;place-items:center;color:var(--on-surface-variant);flex:0 0 auto;}
+  .clearx svg{width:16px;height:16px;}
+  .kbadge{font-size:10px;font-weight:700;padding:3px 6px;border-radius:4px;background:var(--primary-container);color:var(--on-primary-container);}
+  .scope{
+    display:flex;align-items:center;gap:4px;flex:0 0 auto;height:32px;padding:0 10px;border-radius:999px;
+    background:var(--secondary-container);color:var(--on-secondary-container);font-size:12px;font-weight:600;
+    border:1px solid rgba(65,95,145,.18);
+  }
+  .scope svg{width:14px;height:14px;}
+  .scope.alt{background:var(--primary-container);border-color:#BCCBF1;}
+
+  /* 改前：伪装成输入框的跳转入口 */
+  .fakesearch{height:48px;border-radius:32px;border:1px solid var(--outline-variant);display:flex;align-items:center;gap:10px;padding:0 14px;background:rgba(255,255,255,.6);}
+  .fakesearch .hint{flex:1;font-size:14px;color:var(--on-surface-variant);}
+
+  .entries{display:flex;justify-content:space-between;align-items:center;padding:10px 16px 6px;}
+  .entry{display:flex;flex-direction:column;align-items:center;gap:5px;width:76px;color:var(--primary);}
+  .entry svg{width:22px;height:22px;}
+  .entry span{font-size:11px;color:var(--on-surface-variant);white-space:nowrap;}
+
+  .quickchips{display:flex;gap:8px;padding:10px 16px 6px;overflow:hidden;}
+  .qchip{
+    height:32px;padding:0 10px;border-radius:999px;border:1px solid var(--outline-variant);
+    display:flex;align-items:center;gap:5px;font-size:12px;color:var(--on-surface-variant);flex:0 0 auto;
+    background:var(--surface-container-low);
+  }
+  .qchip svg{width:14px;height:14px;color:var(--primary);}
+
+  .pills{display:flex;gap:8px;align-items:center;padding:8px 16px;overflow:hidden;flex:0 0 auto;}
+  .pill{height:28px;padding:0 12px;border-radius:999px;border:1px solid var(--outline);font-size:13px;color:var(--on-surface-variant);display:flex;align-items:center;gap:4px;flex:0 0 auto;}
+  .pill.selected{background:var(--secondary-container);border-color:transparent;color:var(--on-secondary-container);font-weight:500;}
+  .pill.selected svg{width:14px;height:14px;}
+  .gsep{width:1px;height:24px;background:var(--outline-variant);flex:0 0 auto;}
+  .divider{height:1px;background:var(--outline-variant);flex:0 0 auto;}
+
+  .summary{display:flex;align-items:center;justify-content:space-between;padding:6px 16px;font-size:12px;color:var(--on-surface-variant);flex:0 0 auto;}
+  .summary .sortmini{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--on-surface-variant);}
+  .summary .sortmini svg{width:14px;height:14px;}
+
+  .list{flex:1 1 auto;overflow:hidden;}
+  .song{height:64px;display:flex;align-items:center;gap:12px;padding:0 16px;}
+  .cover{width:44px;height:44px;border-radius:8px;flex:0 0 auto;display:grid;place-items:center;color:#fff;box-shadow:0 1px 3px rgba(0,0,0,.12);}
+  .cover svg{width:18px;height:18px;opacity:.9;}
+  .song .txt{flex:1;min-width:0;}
+  .song .t{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .song .s{font-size:12px;color:var(--on-surface-variant);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .song .tail{width:24px;height:24px;color:var(--on-surface-variant);flex:0 0 auto;display:grid;place-items:center;}
+  .song .tail svg{width:18px;height:18px;}
+  .song .dur{font-size:11px;color:var(--on-surface-variant);margin-right:4px;}
+
+  /* 底栏：mini 64 + nav 64 + safe 34 */
+  .bottomstack{flex:0 0 auto;position:relative;}
+  .mini{height:64px;background:var(--surface-container);border-top:1px solid var(--outline-variant);display:flex;align-items:center;gap:10px;padding:0 16px;}
+  .mini .cover{width:40px;height:40px;}
+  .mini .txt{flex:1;min-width:0;}
+  .mini .t{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .mini .s{font-size:11px;color:var(--on-surface-variant);}
+  .mini .ctrl{display:flex;gap:4px;}
+  .mini .ctrl .b{width:32px;height:32px;display:grid;place-items:center;}
+  .mini .ctrl svg{width:20px;height:20px;}
+  .nav{height:64px;background:var(--surface);border-top:1px solid var(--outline-variant);display:flex;align-items:center;justify-content:space-around;padding:0 12px;}
+  .nav .item{display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--on-surface-variant);font-size:11px;width:96px;}
+  .nav .item svg{width:22px;height:22px;}
+  .nav .item.on{color:var(--primary);font-weight:600;}
+  .nav .ind{height:30px;width:56px;border-radius:999px;background:var(--secondary-container);display:grid;place-items:center;margin-bottom:2px;}
+  .nav .ind svg{width:20px;height:20px}
+  .safearea{height:var(--safe-bottom);background:var(--surface);position:relative;display:grid;place-items:end center;}
+  .homeind{width:134px;height:5px;border-radius:3px;background:#1A1B20;margin-bottom:8px;opacity:.9;}
+
+  /* 标注 */
+  .marker{position:absolute;top:-9px;right:-9px;width:22px;height:22px;border-radius:50%;background:#F5A524;color:#3F2A00;font-size:12px;font-weight:800;display:grid;place-items:center;box-shadow:0 2px 6px rgba(0,0,0,.2);z-index:5;}
+  .marker.ok{background:#2E7D32;color:#fff;}
+  .rel{position:relative;}
+  .ruler>div{position:relative;}
+  .ruler .hlabel{position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:9px;font-weight:700;color:var(--on-surface);background:rgba(255,255,255,.9);padding:2px 5px;border-radius:4px;border:1px solid var(--outline-variant);z-index:6;}
+  .ruler .hlabel.safe{top:auto;bottom:5px;transform:none;}
+  .ruler::before{content:"";position:absolute;right:52px;top:0;bottom:0;border-left:1px dashed rgba(0,0,0,.22);z-index:5;}
+
+  /* 图例 */
+  .legend{margin-top:40px;display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;}
+  .lg{background:#fff;border:1px solid #DDE1E8;border-radius:14px;padding:14px 16px;}
+  .lg h3{font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+  .lg p{font-size:12px;line-height:1.7;color:var(--on-surface-variant);}
+  .lg code{font-size:11px;background:#F1F3F7;padding:1px 4px;border-radius:3px;}
+  .dot{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;flex:0 0 auto;}
+  .dot.amber{background:#F5A524;color:#3F2A00;}
+  .dot.green{background:#2E7D32;color:#fff;}
+
+  .states,.navsec,.basis{margin-top:56px;}
+  .section-title{font-size:18px;font-weight:700;margin-bottom:8px;}
+  .section-sub{font-size:13px;color:var(--on-surface-variant);line-height:1.75;margin-bottom:20px;max-width:880px;}
+  .cards{display:flex;gap:24px;flex-wrap:wrap;}
+  .scard{width:390px;background:var(--surface);border-radius:24px;border:1px solid #D6D9E0;box-shadow:0 8px 24px rgba(16,24,40,.10);overflow:hidden;}
+  .scard .cap{padding:12px 16px;font-size:12px;color:var(--on-surface-variant);background:#fff;border-bottom:1px solid #E4E7EE;line-height:1.55;}
+  .scard .cap strong{color:var(--on-surface);font-weight:700;}
+  .scard .body{padding:0 0 8px;}
+  .chiprow{display:flex;gap:8px;padding:8px 16px;flex-wrap:wrap;}
+  .chip{height:28px;padding:0 10px;border-radius:999px;border:1px solid var(--outline);font-size:12px;color:var(--on-surface-variant);display:flex;align-items:center;}
+  .chip.on{background:var(--secondary-container);border-color:transparent;color:var(--on-secondary-container);font-weight:600;}
+  .progress{height:2px;background:var(--primary);margin-top:2px;}
+  .empty{padding:28px 24px;text-align:center;}
+  .empty .circle{width:96px;height:96px;border-radius:50%;margin:0 auto 16px;background:radial-gradient(circle at 30% 25%, rgba(65,95,145,.16), rgba(65,95,145,.04));display:grid;place-items:center;color:rgba(65,95,145,.55);}
+  .empty .circle svg{width:44px;height:44px;}
+  .empty h3{font-size:16px;font-weight:600;}
+  .empty p{font-size:13px;color:var(--on-surface-variant);margin-top:6px;line-height:1.6;}
+  .empty .cta{margin-top:16px;display:inline-flex;align-items:center;gap:6px;height:40px;padding:0 16px;border-radius:999px;border:1px solid var(--primary);color:var(--primary);font-size:13px;font-weight:600;}
+  .empty .cta svg{width:16px;height:16px;}
+
+  /* 底栏拆解卡 */
+  .dimcard{width:390px;background:#fff;border-radius:24px;border:1px solid #D6D9E0;box-shadow:0 8px 24px rgba(16,24,40,.10);overflow:hidden;}
+  .dimcard .cap{padding:12px 16px;font-size:12px;color:var(--on-surface-variant);background:#fff;border-bottom:1px solid #E4E7EE;}
+  .dim{display:flex;flex-direction:column;position:relative;padding-left:56px;background:var(--surface);}
+  .dim .seg{position:relative;border-top:1px dashed #B9BEC9;display:flex;align-items:center;padding:0 16px;background:var(--surface);}
+  .dim .seg:first-child{border-top:none;}
+  .dim .seg.mini-seg{height:64px;background:var(--surface-container);}
+  .dim .seg.nav-seg{height:64px;}
+  .dim .seg.safe-seg{height:34px;background:repeating-linear-gradient(45deg,#F0F2F6,#F0F2F6 6px,#E4E7EE 6px,#E4E7EE 12px);}
+  .dim .seg .name{font-size:12px;color:var(--on-surface);font-weight:600;}
+  .dim .seg .desc{font-size:11px;color:var(--on-surface-variant);margin-left:8px;}
+  .dim .bracket{position:absolute;left:14px;top:0;bottom:0;width:26px;border-left:2px solid var(--primary);border-top:2px solid var(--primary);border-bottom:2px solid var(--primary);border-radius:4px 0 0 4px;}
+  .dim .bracket span{position:absolute;top:50%;left:-6px;transform:translate(-50%,-50%) rotate(-90deg);font-size:10px;font-weight:700;color:var(--primary);white-space:nowrap;background:#fff;padding:2px 4px;}
+  .dim .seg .val{position:absolute;right:12px;font-size:11px;font-weight:700;color:var(--primary);}
+  .dimnote{padding:10px 16px 14px;font-size:11px;color:var(--on-surface-variant);line-height:1.65;border-top:1px dashed #CFD3DC;}
+
+  /* 备选 B 线框 */
+  .wire{width:390px;padding:16px;background:#fff;border-radius:24px;border:1px solid #D6D9E0;box-shadow:0 8px 24px rgba(16,24,40,.10);}
+  .wire .row{display:flex;gap:10px;align-items:center;margin-bottom:12px;}
+  .wire .label{font-size:11px;color:var(--on-surface-variant);margin-bottom:6px;letter-spacing:.04em;}
+  .wire .srch{flex:1;height:44px;border-radius:var(--r-xl);background:var(--surface-container-low);border:1px solid var(--outline-variant);display:flex;align-items:center;gap:8px;padding:0 12px;font-size:13px;color:var(--on-surface-variant);}
+  .wire .online{height:44px;padding:0 14px;border-radius:999px;display:flex;align-items:center;gap:6px;background:var(--primary-container);color:var(--on-primary-container);font-size:12px;font-weight:600;}
+  .wire .note{font-size:11px;color:var(--on-surface-variant);line-height:1.65;}
+
+  /* 设计依据 */
+  .basis-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;}
+  .bcard{background:#fff;border:1px solid #DDE1E8;border-radius:16px;padding:16px 18px;}
+  .bcard h3{font-size:14px;font-weight:700;line-height:1.5;margin:8px 0 8px;}
+  .bcard p{font-size:12px;line-height:1.75;color:var(--on-surface-variant);}
+  .bcard .src{display:block;margin-top:10px;font-size:11px;word-break:break-all;}
+  .badge{display:inline-block;font-size:10px;font-weight:700;padding:3px 8px;border-radius:999px;letter-spacing:.02em;}
+  .badge.official{background:#E3F0E5;color:#1E5B2A;}
+  .badge.observed{background:#FFF1D6;color:#7A4E00;}
+  .badge.research{background:#E8EAFB;color:#2A3670;}
+  .bcard .mini-diagram{margin-top:12px;border:1px dashed #CFD3DC;border-radius:10px;padding:10px;background:#FAFBFD;}
+  .mdrow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;}
+  .mdrow:last-child{margin-bottom:0;}
+  .mdpill{font-size:10px;padding:3px 8px;border-radius:999px;background:#EEF0F5;color:var(--on-surface-variant);}
+  .mdpill.on{background:var(--secondary-container);color:var(--on-secondary-container);font-weight:700;}
+  .mdbox{height:30px;border-radius:15px;background:var(--surface-container-low);border:1px solid var(--outline-variant);display:flex;align-items:center;padding:0 10px;font-size:10px;color:var(--on-surface-variant);flex:1;}
+  .mdlabel{font-size:10px;color:#7A7D87;}
+
+  /* 表格 */
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #DDE1E8;border-radius:16px;overflow:hidden;font-size:12px;}
+  .tablewrap{margin-top:20px;overflow-x:auto;border-radius:16px;}
+  th,td{padding:11px 14px;text-align:left;vertical-align:top;border-bottom:1px solid #E8EBF1;line-height:1.6;}
+  th{background:#F4F6FA;font-weight:700;color:var(--on-surface);white-space:nowrap;}
+  tr:last-child td{border-bottom:none;}
+  td .verdict{font-weight:700;white-space:nowrap;}
+  .verdict.take{color:#1E5B2A;}
+  .verdict.no{color:#A33A10;}
+  .verdict.cond{color:#6B5300;}
+
+  .foot{max-width:1180px;margin:56px auto 0;font-size:12px;color:#7A7D87;line-height:1.8;border-top:1px solid #DDE1E8;padding-top:16px;}
+</style>
+</head>
+<body>
+
+<div class="doc-head">
+  <div class="kicker">Songloft · Player UI Proposal · 2026-11</div>
+  <h1>曲库搜索整合 + 底部导航：一个入口，三种作用域</h1>
+  <p class="sub">
+    本文件是<strong>静态设计预览</strong>，不代表 App 已修改。目标是在不改在线搜索（kwqq 插件）与本地曲库查询契约的前提下，
+    把曲库页上「看起来重复」的两个输入框收敛为一个真正的搜索入口，并把底部导航的层级、mini-player 与安全区按真实尺寸画清楚。
+  </p>
+  <div class="meta-row">
+    <span class="meta">画布 <strong>390 × 844</strong>（iPhone 14 逻辑尺寸）</span>
+    <span class="meta">安全区 <strong>47 / 34</strong></span>
+    <span class="meta">主题 <strong>Material 3 · seed #415F91</strong></span>
+    <span class="meta">底栏 <strong>mini 64 + nav 64 + 34</strong></span>
+    <span class="meta">圆角 <strong>8 / 12 / 16 / 24</strong></span>
+  </div>
+</div>
+
+<div class="stage">
+  <!-- ================= 改前 ================= -->
+  <div class="col">
+    <div class="col-title"><span class="tag before">改前</span> 两个输入框 + 在线发现挤在曲库页</div>
+    <div class="col-desc">AppBar 下方先是「在线搜索」（外形是输入框，实际是跳转链接），再是四个在线发现入口与视图 pills，最后才是当前视图自己的搜索框。两条输入外形几乎一致，中间被 pills 隔开。</div>
+    <div class="phone">
+      <div class="island"></div>
+      <div class="statusbar"><span>9:41</span><span class="right"><span class="sig"><i></i><i></i><i></i><i></i></span><span class="bat"></span></span></div>
+
+      <div class="appbar">
+        <h2>曲库</h2>
+        <span class="icbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h10M4 12h13M4 17h8"/><path d="M18 14l3 3-3 3" stroke-width="1.6"/></svg></span>
+        <span class="icbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M7.5 9l1.5 2 1.5-2M7.5 14l1.5 2 1.5-2M13 11h4M13 15h4"/></svg></span>
+        <span class="icbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></span>
+      </div>
+
+      <div class="searchwrap rel">
+        <span class="marker">1</span>
+        <div class="fakesearch">
+          <svg class="sicon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+          <span class="hint">搜索在线音乐</span>
+          <span class="kbadge">kwqq</span>
+        </div>
+      </div>
+
+      <div class="entries">
+        <div class="entry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><path d="M12 8l3 5-3 3-3-3 3-5z"/></svg><span>推荐歌单</span></div>
+        <div class="entry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 21h8M9 21v-4h6v4"/><path d="M7 4h10v6a5 5 0 01-10 0V4z"/><path d="M17 6h2v3a2 2 0 01-2 2M7 6H5v3a2 2 0 002 2"/></svg><span>榜单</span></div>
+        <div class="entry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg><span>播放历史</span></div>
+        <div class="entry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 8h5l2 2h9v9H4V8z"/><path d="M4 8V6h6"/></svg><span>本地音乐</span></div>
+      </div>
+
+      <div class="pills">
+        <span class="pill selected"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12l5 5 9-10"/></svg>全部</span>
+        <span class="pill">本地</span><span class="pill">网络</span><span class="pill">电台</span>
+        <span class="gsep"></span><span class="pill">歌手</span><span class="pill">专辑</span>
+      </div>
+      <div class="divider"></div>
+
+      <div class="searchwrap rel">
+        <span class="marker">2</span>
+        <div class="search">
+          <svg class="sicon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+          <span class="hint">搜索歌曲...</span>
+        </div>
+      </div>
+
+      <div class="list">
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#6C8CD5,#A9C0F0)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">晴天</div><div class="s">周杰伦 · 叶惠美</div></div><span class="dur">4:29</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#8FA9DE,#C9D6F2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">七里香</div><div class="s">周杰伦 · 七里香</div></div><span class="dur">4:59</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#7C93C9,#B5C6E8)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">稻香</div><div class="s">周杰伦 · 魔杰座</div></div><span class="dur">3:43</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#5E7FBF,#9FB6E4)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">夜曲</div><div class="s">周杰伦 · 十一月的萧邦</div></div><span class="dur">3:48</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#9BB0E2,#CBD8F3)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">告白气球</div><div class="s">周杰伦 · 周杰伦的床边故事</div></div><span class="dur">3:35</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#6F8CD1,#AFC3EE)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">一路向北</div><div class="s">周杰伦 · 头文字D</div></div><span class="dur">4:52</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+      </div>
+
+      <div class="bottomstack">
+        <div class="mini">
+          <div class="cover" style="background:linear-gradient(135deg,#7C93C9,#B5C6E8)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div>
+          <div class="txt"><div class="t">晴天</div><div class="s">周杰伦</div></div>
+          <div class="ctrl">
+            <span class="b"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h3v14H6zM17 5l-7 7 7 7z"/></svg></span>
+            <span class="b"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l12 7-12 7z"/></svg></span>
+            <span class="b"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 5h3v14h-3zM7 5l7 7-7 7z"/></svg></span>
+          </div>
+        </div>
+        <div class="nav">
+          <div class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 11l8-7 8 7v9h-6v-6h-4v6H4z"/></svg><span>首页</span></div>
+          <div class="item on"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 9h8M8 13h8M8 17h4"/></svg></span><span>曲库</span></div>
+          <div class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3.2"/><path d="M12 4v3M12 17v3M4 12h3M17 12h3"/></svg><span>设置</span></div>
+        </div>
+        <div class="safearea"><span class="homeind"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 改后 ================= -->
+  <div class="col">
+    <div class="col-title"><span class="tag after">改后 · 主推</span> 一个搜索入口，作用域写在框内</div>
+    <div class="col-desc">在线搜索不再是「第二个输入框」，而是同一条搜索栏的另一个作用域。发现入口降级为一行紧凑 chips；当前视图的搜索由页面统一提供。底栏按真实安全区绘制。</div>
+    <div class="phone">
+      <div class="island"></div>
+      <div class="statusbar"><span>9:41</span><span class="right"><span class="sig"><i></i><i></i><i></i><i></i></span><span class="bat"></span></span></div>
+
+      <div class="appbar">
+        <h2>曲库</h2>
+        <span class="icbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h10M4 12h13M4 17h8"/><path d="M18 14l3 3-3 3" stroke-width="1.6"/></svg></span>
+        <span class="icbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M7.5 9l1.5 2 1.5-2M7.5 14l1.5 2 1.5-2M13 11h4M13 15h4"/></svg></span>
+        <span class="icbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></span>
+      </div>
+
+      <div class="searchwrap rel">
+        <span class="marker ok">✓</span>
+        <div class="search">
+          <svg class="sicon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+          <span class="hint">搜索歌曲、专辑、歌手</span>
+          <span class="scope">曲库内 · 全部<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 10l4 4 4-4"/></svg></span>
+        </div>
+      </div>
+
+      <div class="quickchips">
+        <span class="qchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><path d="M12 8l3 5-3 3-3-3 3-5z"/></svg>推荐歌单</span>
+        <span class="qchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 21h8M9 21v-4h6v4"/><path d="M7 4h10v6a5 5 0 01-10 0V4z"/></svg>榜单</span>
+        <span class="qchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>播放历史</span>
+        <span class="qchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 8h5l2 2h9v9H4V8z"/></svg>本地音乐</span>
+      </div>
+
+      <div class="pills">
+        <span class="pill selected"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12l5 5 9-10"/></svg>全部</span>
+        <span class="pill">本地</span><span class="pill">网络</span><span class="pill">电台</span>
+        <span class="gsep"></span><span class="pill">歌手</span><span class="pill">专辑</span>
+      </div>
+      <div class="divider"></div>
+
+      <div class="summary">
+        <span>全部歌曲 · 共 1,284 首</span>
+        <span class="sortmini">按加入时间<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 10l4 4 4-4"/></svg></span>
+      </div>
+
+      <div class="list">
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#6C8CD5,#A9C0F0)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">晴天</div><div class="s">周杰伦 · 叶惠美</div></div><span class="dur">4:29</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#8FA9DE,#C9D6F2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">七里香</div><div class="s">周杰伦 · 七里香</div></div><span class="dur">4:59</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#7C93C9,#B5C6E8)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">稻香</div><div class="s">周杰伦 · 魔杰座</div></div><span class="dur">3:43</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#5E7FBF,#9FB6E4)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">夜曲</div><div class="s">周杰伦 · 十一月的萧邦</div></div><span class="dur">3:48</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#9BB0E2,#CBD8F3)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">告白气球</div><div class="s">周杰伦 · 周杰伦的床边故事</div></div><span class="dur">3:35</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#6F8CD1,#AFC3EE)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">一路向北</div><div class="s">周杰伦 · 头文字D</div></div><span class="dur">4:52</span><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+      </div>
+
+      <div class="bottomstack ruler">
+        <div class="mini"><span class="hlabel">mini 64</span>
+          <div class="cover" style="background:linear-gradient(135deg,#7C93C9,#B5C6E8)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div>
+          <div class="txt"><div class="t">晴天</div><div class="s">周杰伦</div></div>
+          <div class="ctrl">
+            <span class="b"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h3v14H6zM17 5l-7 7 7 7z"/></svg></span>
+            <span class="b"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l12 7-12 7z"/></svg></span>
+            <span class="b"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 5h3v14h-3zM7 5l7 7-7 7z"/></svg></span>
+          </div>
+        </div>
+        <div class="nav"><span class="hlabel">nav 64</span>
+          <div class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 11l8-7 8 7v9h-6v-6h-4v6H4z"/></svg><span>首页</span></div>
+          <div class="item on"><span class="ind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 9h8M8 13h8M8 17h4"/></svg></span><span>曲库</span></div>
+          <div class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3.2"/><path d="M12 4v3M12 17v3M4 12h3M17 12h3"/></svg><span>设置</span></div>
+        </div>
+        <div class="safearea"><span class="hlabel safe">安全区 34</span><span class="homeind"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  <div class="lg">
+    <h3><span class="dot amber">1</span>改前的第一条框其实是「跳转链接」</h3>
+    <p>它由 <code>InputDecorator</code> 伪装成输入框（带 kwqq 徽标），不可聚焦、不可输入，点击后 <code>Navigator.push</code> 到独立的在线搜索页。NN/g 的原始研究结论是「搜索应当是一个能打字的框，而不是一个链接」——这正是不协调的根源。</p>
+  </div>
+  <div class="lg">
+    <h3><span class="dot amber">2</span>改前的第二条框才是真输入，但作用域被藏起来了</h3>
+    <p>它是当前视图自己的关键词过滤：扁平歌曲视图请求 <code>GET /songs?keyword=</code>，分类视图请求该维度的 facet 列表，歌单视图过滤歌单名。三种作用域不同、不能合并成一个查询；但 placeholder 只写「搜索歌曲…」，用户看不出自己只在当前视图里搜。</p>
+  </div>
+  <div class="lg">
+    <h3><span class="dot green">✓</span>改后只保留一条输入，作用域显式</h3>
+    <p>作用域成为框内右侧的胶囊：<strong>曲库内 · 全部</strong>（按当前视图过滤，行为与现状一致）／<strong>在线 · 4 平台</strong>（回车带着关键词进入现有在线搜索页，历史与类型 tab 全部保留）。</p>
+  </div>
+</div>
+
+<!-- ================= 底栏方案 ================= -->
+<section class="navsec">
+  <div class="section-title">底部导航：3 个 tab 保留，搜索不进底栏</div>
+  <div class="section-sub">
+    现状是 <strong>首页 / 曲库 / 设置</strong> 三个 tab；mini-player 与导航栏在同一个 <code>bottomNavigationBar</code> 的 <code>Column</code> 里向上堆叠。
+    Material 3 与 iOS HIG 都把底栏的可容纳范围写成 3–5 个目标；我们的代码里手机端实际可见槽位是 4 个（第 5 个起收进「更多」溢出菜单），默认 3 个正好给插件 tab 留出第 4 槽。
+    <strong>结论：搜索留在曲库页内，不独立成 tab。</strong>
+  </div>
+
+  <div class="cards">
+    <div class="dimcard">
+      <div class="cap"><strong>底栏拆解（真实尺寸）</strong>　390×844 / 安全区 bottom 34</div>
+      <div class="dim">
+        <div class="bracket"><span>162 total</span></div>
+        <div class="seg mini-seg"><span class="name">MiniPlayer</span><span class="desc">仅在播放时出现</span><span class="val">64</span></div>
+        <div class="seg nav-seg"><span class="name">NavigationBar</span><span class="desc">3 个目的地 + 选中指示器</span><span class="val">64</span></div>
+        <div class="seg safe-seg"><span class="name">安全区</span><span class="desc">Home Indicator</span><span class="val">34</span></div>
+      </div>
+      <div class="dimnote">
+        内容区在 <code>Column</code> 之上，Scaffold 已为 <code>bottomNavigationBar</code> 让位，列表无需再手加 162。<br>
+        注意：现有 <code>navScrollInset</code> 在 standard 模式返回 <code>bottom + 80</code>，而真实底栏是 <code>64 + 64 + bottom</code> —— 实施前需实测是否出现双重留白，这属于核对项，不在本稿中改。
+      </div>
+    </div>
+
+    <div class="dimcard">
+      <div class="cap"><strong>三个 tab 的分工与命名</strong>　与现有路由一一对应</div>
+      <div style="padding:12px 16px 16px;">
+        <div class="mdrow"><span class="mdpill on">首页</span><span class="mdlabel">问候栏 + 我的歌单 + 我的电台（个人面板）</span></div>
+        <div class="mdrow"><span class="mdpill on">曲库</span><span class="mdlabel">全部/本地/网络/电台 + 歌手/专辑 + 歌单 + 文件夹/标签</span></div>
+        <div class="mdrow"><span class="mdpill on">设置</span><span class="mdlabel">服务器、扫描、音质、导航风格、插件管理</span></div>
+        <div class="mdrow"><span class="mdpill">第 4 槽</span><span class="mdlabel">留给插件 tab（现有 kwqq 等），超出 5 个才进「更多」</span></div>
+        <div class="mdnote" style="font-size:11px;color:var(--on-surface-variant);line-height:1.65;margin-top:10px;border-top:1px dashed #CFD3DC;padding-top:10px;">
+          图标语义：<code>home_outlined</code> / <code>library_music_outlined</code> / <code>settings_outlined</code>；选中态换实心 + <code>secondaryContainer</code> 30×56 指示器；标签常显，单标签 ≤ 4 字；每个目标触达 ≥ 48×48dp（现有 96dp 宽 slot 已满足）。
+        </div>
+      </div>
+    </div>
+
+    <div class="wire">
+      <div class="label">备选 1 · 设置下沉到「我的」</div>
+      <div class="row">
+        <span class="mdpill on" style="font-size:11px;padding:6px 10px;">首页</span>
+        <span class="mdpill on" style="font-size:11px;padding:6px 10px;">曲库</span>
+        <span class="mdpill on" style="font-size:11px;padding:6px 10px;">我的</span>
+        <span class="mdlabel">（= 账号 + 设置）</span>
+      </div>
+      <div class="note">收益：设置不再和内容域并列，符合「底栏只放内容域」的直觉。代价：项目没有账号体系，「我的」会是空壳；需要新页面 + 路由 + 迁移用户习惯。建议等出现账号/多服务器/家庭共享等真实内容后再做，不作为本轮方案。</div>
+      <div class="label" style="margin-top:14px;">备选 2 · 曲库并入首页（2 tab）</div>
+      <div class="row">
+        <span class="mdpill on" style="font-size:11px;padding:6px 10px;">首页</span>
+        <span class="mdpill on" style="font-size:11px;padding:6px 10px;">设置</span>
+        <span class="mdlabel">（不推荐）</span>
+      </div>
+      <div class="note">低于 Material 3 的 3 个下限（少于 3 个应考虑改用 tabs），且会让「我自己的库」和「推荐的在线内容」失去边界——正是当前两个搜索框混在一起的同一个病根。</div>
+    </div>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>问题</th><th>裁决</th><th>依据</th></tr></thead>
+      <tbody>
+        <tr><td>搜索要不要独立成第 4 个 tab？</td><td><span class="verdict no">不做</span></td><td>搜索不是与首页/曲库/设置并列的一级域；独立 tab 会与曲库内过滤重复，并占掉留给插件 tab 的第 4 槽，超过 5 个即触发「更多」溢出（HIG 明确要求避免）。</td></tr>
+        <tr><td>3 个 tab 是否过少？</td><td><span class="verdict take">够用</span></td><td>M3 Navigation bar 与 iOS HIG Tab bars 都是 3–5 个；少于 3 才不合适。插件 tab 可自然扩到 4。</td></tr>
+        <tr><td>要不要做 5 个（对标 Apple Music）？</td><td><span class="verdict no">不做</span></td><td>Apple Music 的 5 个（Home/New/Radio/Library/Search）对应 5 个真实内容域；我们没有 Radio、账号、商店等域，硬凑会让每个 tab 变薄。</td></tr>
+        <tr><td>mini-player 放哪？</td><td><span class="verdict take">叠在 nav 之上</span></td><td>HIG 把 Music 的 MiniPlayer 描述为 tab bar 的附属（accessory），并可随滚动最小化；现有实现已是同构做法，成本最低且不遮挡列表。</td></tr>
+        <tr><td>在线发现（推荐/榜单/在线搜索）该不该搬去首页？</td><td><span class="verdict cond">中期做</span></td><td>它是「两个搜索框」的 IA 病根：在线发现被塞进曲库页。搬到首页后曲库只剩本地搜索，作用域胶囊可退化为单一「曲库内」。但会改变首页性格与用户习惯，应在 bug 修完、版本稳定后单独排期。</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ================= 关键状态 ================= -->
+<section class="states">
+  <div class="section-title">关键状态：作用域切换、搜索中、空态</div>
+  <div class="section-sub">
+    三种状态都围绕同一条搜索栏展开，不额外增加第二输入区。搜索中保留已有结果（只加一条 2px 进度线），避免整页闪成加载圈；空态提供「在全网搜索」——这是把本地搜索自然接到在线能力上的最短路径。
+  </div>
+  <div class="cards">
+    <div class="scard">
+      <div class="cap"><strong>状态 1 · 作用域 = 在线</strong>　框内胶囊变为「在线」，下方出现类型与平台 chips</div>
+      <div class="body">
+        <div class="searchwrap">
+          <div class="search">
+            <svg class="sicon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+            <span class="hint">搜索在线音乐 · 回车查看结果</span>
+            <span class="scope alt">在线 · 4 平台<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 10l4 4 4-4"/></svg></span>
+          </div>
+        </div>
+        <div class="chiprow"><span class="chip on">单曲</span><span class="chip">专辑</span><span class="chip">歌手</span><span class="chip">歌单</span></div>
+        <div class="chiprow" style="padding-top:0"><span class="chip">网易云</span><span class="chip">QQ</span><span class="chip">酷狗</span><span class="chip">酷我</span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#6C8CD5,#A9C0F0)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">晴天</div><div class="s">周杰伦 · 网易云</div></div><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l12 7-12 7z"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#8FA9DE,#C9D6F2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">晴天 (Live)</div><div class="s">周杰伦 · QQ音乐</div></div><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l12 7-12 7z"/></svg></span></div>
+      </div>
+    </div>
+
+    <div class="scard">
+      <div class="cap"><strong>状态 2 · 曲库内搜索中</strong>　保留旧列表 + 2px 进度线 + 结果摘要</div>
+      <div class="body">
+        <div class="searchwrap">
+          <div class="search">
+            <svg class="sicon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+            <span class="kw">周杰伦</span>
+            <span class="clearx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 6l12 12M18 6l-12 12"/></svg></span>
+            <span class="scope">曲库内 · 全部<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 10l4 4 4-4"/></svg></span>
+          </div>
+        </div>
+        <div class="progress"></div>
+        <div class="summary"><span>「周杰伦」· 128 首 · 全部视图</span><span class="sortmini">排序<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 10l4 4 4-4"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#6C8CD5,#A9C0F0)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">晴天</div><div class="s">周杰伦 · 叶惠美</div></div><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#8FA9DE,#C9D6F2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">七里香</div><div class="s">周杰伦 · 七里香</div></div><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+        <div class="song"><div class="cover" style="background:linear-gradient(135deg,#7C93C9,#B5C6E8)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="8" cy="17" r="3"/><path d="M11 17V6l8-2v11"/><circle cx="16" cy="15" r="3"/></svg></div><div class="txt"><div class="t">稻香</div><div class="s">周杰伦 · 魔杰座</div></div><span class="tail"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></div>
+      </div>
+    </div>
+
+    <div class="scard">
+      <div class="cap"><strong>状态 3 · 曲库内无结果</strong>　空态直接把关键词接到在线搜索</div>
+      <div class="body">
+        <div class="searchwrap">
+          <div class="search">
+            <svg class="sicon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+            <span class="kw">蓝莲花</span>
+            <span class="clearx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 6l12 12M18 6l-12 12"/></svg></span>
+            <span class="scope">曲库内 · 全部<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 10l4 4 4-4"/></svg></span>
+          </div>
+        </div>
+        <div class="divider"></div>
+        <div class="empty">
+          <div class="circle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/><path d="M8 8l6 6M14 8l-6 6" stroke-width="1.5"/></svg></div>
+          <h3>曲库里没有「蓝莲花」</h3>
+          <p>换个关键词，或去在线音乐里找找看。<br>在线结果播放入库后才进入曲库。</p>
+          <span class="cta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c3 3 3 13 0 16M12 4c-3 3-3 13 0 16"/></svg>全网搜索「蓝莲花」</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="wire">
+      <div class="label">备选 B · 只做「去输入框化」，不动 provider</div>
+      <div class="row">
+        <div class="srch"><svg class="sicon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>搜索歌曲...</div>
+        <div class="online"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c3 3 3 13 0 16M12 4c-3 3-3 13 0 16"/></svg>在线搜索</div>
+      </div>
+      <div class="note">
+        保留两个功能，但只让一个长得像输入框：在线搜索改成 <code>primaryContainer</code> 的按钮胶囊，与发现 chips 同排；当前视图的搜索框保持原样。<br>
+        优点：改 <code>DiscoverHeader</code> 一个文件即可，零 provider 改动、零契约影响，可当天上线。<br>
+        缺点：在线入口仍常驻在曲库页，作用域没有被写清；长期仍建议走主推方案。
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 设计依据 ================= -->
+<section class="basis">
+  <div class="section-title">设计依据：官方规范、产品观察与取舍</div>
+  <div class="section-sub">
+    每条结论标注来源类型：<span class="badge official">官方规范</span> 可直接作为验收依据；<span class="badge observed">产品观察</span> 只描述「某产品现在怎么做」，不具约束力；
+    <span class="badge research">研究观点</span> 作为经验证据，不能替代规范。
+  </div>
+
+  <div class="basis-grid">
+    <div class="bcard">
+      <span class="badge official">官方规范</span>
+      <h3>底栏 3–5 个目的地，少于 3 个才不合适</h3>
+      <p>M3 Navigation bar 明确「提供访问三到五个目的地的入口」「仅用于手机/平板」，且同一时刻只有一个目的地处于激活态。我们保留 3 个，符合下界。</p>
+      <a class="src" href="https://m3.material.io/components/navigation-bar/guidelines" target="_blank" rel="noopener">m3.material.io/components/navigation-bar/guidelines</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge official">官方规范</span>
+      <h3>虚拟键盘式「搜索栏 → 搜索视图」而非第二个框</h3>
+      <p>M3 把 SearchBar 与 SearchView 统一命名为 search：点击搜索栏应打开全屏/停靠的搜索视图，结果与建议以列表呈现，并可用 filter chips 收窄结果。这正是「一个入口、页内分作用域」的规范依据。</p>
+      <a class="src" href="https://m3.material.io/components/search/guidelines" target="_blank" rel="noopener">m3.material.io/components/search/guidelines</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge official">官方规范</span>
+      <h3>chips 行内排列、间距 ≥ 8dp、触达 ≥ 48dp</h3>
+      <p>多 chip 必须同行排列（溢出换行或横向滚动），chip 之间至少 8dp，交互目标不小于 48×48dp。本稿的在线类型/平台 chips 与发现 chips 都按此排布。</p>
+      <a class="src" href="https://m3.material.io/components/chips/guidelines" target="_blank" rel="noopener">m3.material.io/components/chips/guidelines</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge official">官方规范</span>
+      <h3>8dp 间距体系与 48dp 触达</h3>
+      <p>M3 的 spacing token 以 8dp 为基数（space100 = 8dp）；常用触达目标 48×48dp。本稿的 4/8/16/24 全部落在该体系内。</p>
+      <a class="src" href="https://m3.material.io/styles/spacing" target="_blank" rel="noopener">m3.material.io/styles/spacing</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge official">官方规范（含弃用提示）</span>
+      <h3>分段按钮适合 2–5 个单选项，但 M3 Expressive 已不推荐</h3>
+      <p>单选用 segmented button 切换视图是标准做法，但 M3 Expressive 更新已用 connected button group 取代 segmented button。因此作用域切换不引入 <code>SegmentedButton</code>，用胶囊 + 菜单（现有 FilterPill 同款视觉）更稳。</p>
+      <a class="src" href="https://m3.material.io/components/segmented-buttons/guidelines" target="_blank" rel="noopener">m3.material.io/components/segmented-buttons/guidelines</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge official">官方规范</span>
+      <h3>iOS：搜索入口只能选一种放置方式，scope bar 用来收窄</h3>
+      <p>HIG 给出三种入口位置（tab / 工具栏 / 内容内联），并说「哪种更合适取决于布局与导航」；scope bar 用于在明确分类间收窄，且建议「默认给更广的范围，再让人细化」。这条直接对应我们的「曲库内/在线」胶囊。</p>
+      <a class="src" href="https://developer.apple.com/design/human-interface-guidelines/search-fields/" target="_blank" rel="noopener">developer.apple.com/.../search-fields</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge official">官方规范</span>
+      <h3>iOS：3–5 个 tab，避免溢出；mini-player 是 tab bar 的 accessory</h3>
+      <p>HIG 建议一般 3–5 个 tab、尽量少、避免 More 溢出；并明确「带附件的 tab bar（例如 Music 的 MiniPlayer）可以随滚动最小化」，以及 tab bar 可在末尾加一个专用 Search tab。我们采纳「mini 作为附属条」，不采纳「再加 Search tab」。</p>
+      <a class="src" href="https://developer.apple.com/design/human-interface-guidelines/tab-bars" target="_blank" rel="noopener">developer.apple.com/.../tab-bars</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge official">官方产品文档</span>
+      <h3>Apple Music：搜索里可切换「自己的库 / Apple Music 目录」</h3>
+      <p>Apple 支持文档写明：用底部 tab 导航；Search 可「快速在自己的资料库与 Apple Music 目录之间切换」；资料库页面则「向下轻扫并在搜索栏输入以过滤结果」。两种能力分处两个上下文，而不是同屏叠两个框。</p>
+      <a class="src" href="https://support.apple.com/en-afri/HT204951" target="_blank" rel="noopener">support.apple.com/en-afri/HT204951</a>
+      <div class="mini-diagram">
+        <div class="mdrow"><span class="mdlabel">示意：作用域切换</span><span class="mdpill on">资料库</span><span class="mdpill">Apple Music</span></div>
+        <div class="mdbox">搜索歌曲、专辑、艺人…</div>
+      </div>
+    </div>
+
+    <div class="bcard">
+      <span class="badge official">官方产品文档</span>
+      <h3>Apple Music：资料库里的过滤是「下拉才出现」的</h3>
+      <p>在资料库中，搜索栏通过下拉手势出现，用于过滤当前列表。这支持我们把「当前视图的关键词过滤」设计成按需出现，而不是常驻的第二个输入框。</p>
+      <a class="src" href="https://support.apple.com/zh-cn/guide/iphone/iphbddea0e5e/16.0/ios/16.0" target="_blank" rel="noopener">support.apple.com/zh-cn/guide/iphone/iphbddea0e5e</a>
+      <div class="mini-diagram">
+        <div class="mdrow"><span class="mdlabel">示意：下拉出现过滤栏</span></div>
+        <div class="mdbox">↓ 轻扫　⌕ 过滤资料库</div>
+      </div>
+    </div>
+
+    <div class="bcard">
+      <span class="badge observed">产品观察</span>
+      <h3>Spotify：专门有「只搜我的库」的开关</h3>
+      <p>Spotify 官方博文称新的 Your Library 提供「Universal search」，可检索整个收藏；后续更新在资料库展开时允许「只搜 Your Library」。它是把「全局/库内」做成同一入口内的模式，而不是两个常驻搜索框。</p>
+      <a class="src" href="https://newsroom.spotify.com/2021-04-29/listeners-can-explore-their-spotify-collections-faster-and-easier-with-a-new-your-library-2/" target="_blank" rel="noopener">newsroom.spotify.com/2021-04-29/…</a>
+      <div class="mini-diagram">
+        <div class="mdrow"><span class="mdlabel">示意：库内搜索</span><span class="mdpill on">Your Library</span><span class="mdpill">全站</span></div>
+        <div class="mdbox">Search in Your Library</div>
+      </div>
+    </div>
+
+    <div class="bcard">
+      <span class="badge observed">产品观察</span>
+      <h3>YouTube Music：搜索不是底栏 tab</h3>
+      <p>当前版本底栏是 Home / Samples / Library，搜索由搜索控件进入，而不是第 4 个 tab。这说明「音乐 App 必须把搜索做成 tab」并不成立。</p>
+      <a class="src" href="https://macmyths.com/how-to-use-youtube-music-complete-beginners-guide/" target="_blank" rel="noopener">macmyths.com（第三方操作指南）</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge observed">产品观察</span>
+      <h3>QQ 音乐：搜索在页面左上角，不占底栏</h3>
+      <p>QQ 音乐 5.0 官方介绍写明「【搜索】移到了每个界面的左上角」。搜索是常态入口，但不与内容域争抢底栏槽位。</p>
+      <a class="src" href="http://y.qq.com/m/act/v5intro/" target="_blank" rel="noopener">y.qq.com/m/act/v5intro</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge observed">产品观察</span>
+      <h3>网易云音乐：5 个可自定义底栏（版本相关）</h3>
+      <p>2021 年版本报道称底栏为「发现 / 关注 / 播客 / 云村 / 我的」五个且可自定义关闭；这与 Apple Music 5 个同属「内容域足够多」的情况。我们域不够，不照搬。</p>
+      <a class="src" href="http://m.ikanchai.com/pcarticle/439066" target="_blank" rel="noopener">m.ikanchai.com（第三方报道，2021）</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge research">研究观点</span>
+      <h3>搜索应当是一个能打字的框，而不是链接</h3>
+      <p>NN/g 的搜索可见性研究结论是：用户寻找「能输入的小框」，首页上的搜索应当是 type-in field，而不是链接。用 InputDecorator 伪装成搜索框、点击却跳页，恰好违反这一条。</p>
+      <a class="src" href="https://www.nngroup.com/articles/search-visible-and-simple/" target="_blank" rel="noopener">nngroup.com/articles/search-visible-and-simple</a>
+    </div>
+
+    <div class="bcard">
+      <span class="badge research">研究观点</span>
+      <h3>收窄搜索时必须显式告诉用户范围</h3>
+      <p>NN/g 的另一条准则：如果你用任何方式缩小了搜索范围，绝不要对用户隐藏它；用户会默认自己搜了全部内容，搜不到就以为「这里没有」。这直接支撑把「曲库内 · 全部 / 在线 · 4 平台」写进框内，而不是只写「搜索歌曲…」。</p>
+      <a class="src" href="https://www.nngroup.com/articles/113-design-guidelines-homepage-usability/" target="_blank" rel="noopener">nngroup.com/articles/113-design-guidelines-homepage-usability</a>
+    </div>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>候选做法</th><th>裁决</th><th>落到本项目的理由</th></tr></thead>
+      <tbody>
+        <tr><td>单一搜索栏 + 显式作用域（曲库内/在线）</td><td><span class="verdict take">采纳</span></td><td>同时满足 M3「搜索栏打开搜索视图」、HIG scope bar、NN/g 显式范围；且不需要改任何后端契约。</td></tr>
+        <tr><td>类型/平台用 filter chips</td><td><span class="verdict take">采纳</span></td><td>现有在线搜索页已有单曲/专辑/歌手/歌单 tab，迁到 chips 视觉即可，数据不变。</td></tr>
+        <tr><td>发现入口降级为紧凑 chips</td><td><span class="verdict take">采纳</span></td><td>四个入口是导航而非搜索，紧凑 chips 比四个大图标更像「入口」而非「第二个底栏」。</td></tr>
+        <tr><td>搜索独立成第 4 个底栏 tab</td><td><span class="verdict no">不采纳</span></td><td>与曲库内过滤重复；占掉插件 tab 的第 4 槽，5 个以上触发「更多」溢出（HIG 要求避免）。</td></tr>
+        <tr><td>照搬 Apple Music 的 5 个 tab</td><td><span class="verdict no">不采纳</span></td><td>我们没有 Radio/商店/账号等独立域；硬凑会让 tab 变薄，且直接溢出。</td></tr>
+        <tr><td>把在线搜索默认设为「全部平台」</td><td><span class="verdict no">不采纳</span></td><td>入口在曲库页，默认在线会与页面语义冲突；NN/g 的要求是「范围显式」而非「范围最大」，胶囊已满足。</td></tr>
+        <tr><td>用 Flutter <code>SegmentedButton</code> 做作用域</td><td><span class="verdict cond">有条件</span></td><td>M3 Expressive 已弃用 segmented button；改用胶囊 + 菜单（复用 FilterPill 视觉）避免引入已弃用组件。</td></tr>
+        <tr><td>推荐/榜单搬到首页（IA 级）</td><td><span class="verdict cond">中期</span></td><td>这是「两个搜索框」的病根；但会改变首页性格与习惯，建议 bug 修完后单独立项。</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="cards" style="margin-top:24px;">
+    <div class="bcard" style="width:390px;">
+      <span class="badge observed">既有约束</span>
+      <h3>取舍 1：一行 4 个卡片 vs 390 宽屏</h3>
+      <p>390 − 32（页边距）= 358；4 列 + 3×8 间距 = 334，单卡 ≈ 83.5dp。封面 1:1 ≈ 83.5dp，标题固定 2 行（12px / 行高 16 = 32dp）。触达宽度 83.5dp 远超 48dp，但标题会明显截断。<strong>保留「一行 4 个」不变</strong>，只统一间距为 8、封面 1:1、卡片圆角 16；不擅自改列数。可选附加规则（需产品确认）：宽度 &lt; 360 时降为 3 列。</p>
+    </div>
+    <div class="bcard" style="width:390px;">
+      <span class="badge observed">既有约束</span>
+      <h3>取舍 2：标题 2 行固定高度</h3>
+      <p>固定 2 行 = 32dp 高，单行标题保留第二行空白，避免卡片高度随标题跳动；超出 2 行用 <code>maxLines: 2 + ellipsis</code>。这一条与「一行 4 个」一起决定卡片总高，搜索页/榜单/推荐必须复用同一规格，不能各写一套。</p>
+    </div>
+    <div class="bcard" style="width:390px;">
+      <span class="badge observed">既有约束</span>
+      <h3>取舍 3：默认作用域选「曲库内」</h3>
+      <p>HIG 建议默认更广，但本入口在曲库页且现有行为就是库内过滤，默认在线会改变语义、也让空库用户困惑。折中：默认曲库内，但胶囊始终显示范围；空态提供一键切在线。若未来搬到首页，应改为默认在线。</p>
+    </div>
+    <div class="bcard" style="width:390px;">
+      <span class="badge official">规范冲突</span>
+      <h3>取舍 4：M3 分段按钮 vs 胶囊</h3>
+      <p>作用域只有两项，分段按钮本是最贴切的组件，但 M3 Expressive 已将其标记为不推荐并由 connected button group 取代。为避免在 M3 组件上踩弃用线，采用「胶囊 + 下拉菜单」；代价是多一次点击才能切换，收益是视觉与现有 FilterPill 一致。</p>
+    </div>
+  </div>
+</section>
+
+<div class="foot">
+  本页为静态设计预览：示意数据、示意封面（CSS 渐变，非真实图片），行为描述以仓库当前代码为准。所有外部链接均为公开资料，用于标注依据；其中「产品观察」条目只描述观察到的事实，不构成规范。落地实施前请复核 <code>clients/player</code> 未提交现场，避免与并发会话冲突。
+</div>
+
+</body>
+</html>
