@@ -272,7 +272,7 @@ Songloft App 作为 DLNA 控制点，把 NAS 流 URL 发给 LX06。实测事实�
 |---|---|
 | bridge 可见性 | LX06 `mediaplayer player_get_context.status` = 1 播放 / 2 暂停 / 0 空闲；`ubus listen` 有 `play_status_broadcast_event 0/1` |
 | bridge 控制 | `mphelper pause` → status 2 且位置冻结；`mphelper play` 恢复 PLAYING |
-| DLNA 控制点 | SetAVTransportURI/Play/Pause/Seek/Stop 全可用；Seek 触发 Range 请求 |
+| DLNA 控制点 | SetAVTransportURI/Play/Pause/Seek/Stop 会被接受，但 **LX06 大量回 HTTP 200 + `code:0` 的「假成功」**：从 `STOPPED`/`NO_MEDIA_PRESENT` 发 `Play` 常不改变状态、暂停过渡期第一条 `Play` 会被丢弃；`Seek` 在 recast 后可能被忽略（位置仍从 0 走），SOAP Fault（701/710/714 一类）也会以 200 正文返回。**恢复播放的可靠序列 = `SetAVTransportURI`（重投同一 URL）→ `Play` → `GetTransportInfo` 回读确认 PLAYING → `GetPositionInfo` 回读校验 Seek**（2026-11-05 真机反馈 + 单测覆盖，实现见 `lib/features/dlna/data/dlna_service.dart` 的 `togglePlayback`/`_resumeByRecast`） |
 | 音量 | RenderingControl 与 bridge 的 `player_set_continuous_volume` 都作用于同一设备音量，暂未发现重播（#516 类问题未复现） |
 
 结论：**bridge 可以把 Songloft 投送当作普通 DLNA 播放来观察和暂停/恢复**；`casting_pause {from:"tts"}` / `casting_resume` 的 TTS 协调语义对该路径同样适用（尚未在 Songloft 投送进行中做 TTS 打断实测）。
@@ -424,6 +424,16 @@ LX06 语音 ─→ bridge:9092 ──URL──────┴→ Songloft:58091 
 - 容器：`docker inspect songloft`（网络/卷/环境）、`docker logs --tail 100 songloft`
 - 插件：`/volume2/docker/songloft/data/jsplugins/kwqq.jsplugin.zip`、`jsplugins_data/kwqq`
 - 相关文档：`docs/plan/dlna-lyrics-follow.md`、`plugins/src/kwqq/README.md`、musicdl `docs/API-REFERENCE.md` / `docs/plan/OPEN-ITEMS.md`、open-xiaoai `bridge/docs/openxiaoai-voice-api.md` / `docs/plan/music-ecosystem-voice-plan.md`
+
+### 9.1 插件/门面部署记录
+
+| 时间 | 内容 | 证据 |
+|---|---|---|
+| 2026-11-04 22:12 | kwqq `2026.11.6`（entryHash `ad94d6…`、zip SHA256 `23c011d…`、33,608 B）替换 NAS `data/jsplugins/kwqq.jsplugin.zip`，旧包备份为 `kwqq-backup-20261104-2150.zip`；重启容器后日志 `ZIP/entry hash changed (legitimate update)` → `mounted` → `js plugin loaded entryPath=kwqq` | `docker logs songloft` |
+| 2026-11-04 22:10 / 22:20 | musicdl-api 经 `deploy/deploy.sh`（WSL 构建 → 传镜像 → compose up → 健康检查）重建两次：① 门面专辑 `track_count` 归一（`adapter.album_track_count`）；② QQ 专辑按名检索改「名字优先、artist 择优」 | 服务端验证：artist 四源 501/`unsupportedArtist`；QQ 榜单/推荐有数据；专辑 track_count 分源（kuwo/netease/kugou/qq=11，migu/qianqian 无字段） |
+| 2026-11-04 23:45 | musicdl-api 第三次 `deploy/deploy.sh`：qq/kuwo 补齐 `artist` + `artist/works`（qq id=singerMID、kuwo id=artistid），QQ `playlist/tags` 分组标题改 `categoryGroupName`、pinned 取各组前 6 标签 | 门面直连：qq music total=1013/album total=43，kuwo music total=1709/album total=45；QQ 分组标题=语种/流派/主题/心情/场景（无「分类」占位）；migu/qianqian 仍 501 |
+| 2026-11-04 23:50 | kwqq `2026.11.7`（zip SHA256 `1172b59…`、33,633 B）替换 NAS 插件包并重启 songloft；插件 `artist/works` 专辑曲目数改读 `it.size`（门面 album works 用 `size`，搜索项用 `track_count`） | 插件全链路实测：qq/kuwo 的 `artist/works` music 与 album 各 5 条非空；插件 `recommend/tags` 出现 语种/流派/主题/心情/场景 分组标题 |
+| 2026-11-05 00:04 | musicdl-api 第四次 `deploy/deploy.sh`：qianqian 补 `artist/works?type=music`（官方签名 `/v1/artist/song`，id=artistCode；album 返回空集合非 501）、migu 维持 501；smoke 新增 qianqian/migu 断言 | 门面+插件全链路 50/50 PASS（`test_smoke.py http://10.10.10.2:3003`）：qq music total=1013/album=43、kuwo music total=1709/album=45、qianqian music total=7/album=0(空)、migu 501；插件 `artist/works` qq/kuwo 各 5 条、album `track_count=13`；`recommend/tags` 的 `platforms` 四源分组标题齐全（qq=语种9/流派16/主题17/心情9/场景13） |
 
 ---
 
