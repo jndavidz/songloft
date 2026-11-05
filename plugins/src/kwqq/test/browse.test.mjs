@@ -157,7 +157,9 @@ test('artist/info + artist/works：P9 门面双源（music→itemToTrack，album
         items: [{ id: '186145', name: '可爱女人', singer: '周杰伦', album: 'Jay', duration_s: 239, source: 'netease' }] },
       'kugou/artist?': { artist: { id: '3520', name: '周杰伦', avatar: 'http://a2.jpg', album_count: 49, music_count: 1859, source: 'kugou' } },
       'kugou/artist/works?': { type: 'album', page: 1, is_end: true, total: 1,
-        items: [{ id: '958706', name: '专辑B', artist: '周杰伦', cover: 'http://b.jpg', track_count: 10, extra: {}, source: 'kugou' }] },
+        items: [{ id: '958706', name: '专辑B', artist: '周杰伦', cover: 'http://b.jpg', track_count: 10,
+                  extra: { publish_time: '2020-03-01' }, source: 'kugou' }] },
+      'qq/artist?': { artist: { id: '4558', name: '周杰伦', avatar: 'http://q.jpg', album_count: 43, music_count: 1013, source: 'qq' } },
     },
   });
   const r1 = await post('/artist/info', { id: '6452', source: 'netease' });
@@ -176,9 +178,12 @@ test('artist/info + artist/works：P9 门面双源（music→itemToTrack，album
   const a4 = JSON.parse(r4.body);
   assert.equal(a4.items[0].id, '958706');
   assert.equal(a4.items[0].cover_url, 'http://b.jpg');
+  // 上游 publish_time 是 'YYYY-MM-DD' 字符串，必须归一成毫秒数：客户端 `as num?` 才不抛。
+  assert.equal(a4.items[0].publish_time, Date.parse('2020-03-01'));
 
   const r5 = await post('/artist/info', { id: '4558', source: 'qq' });
-  assert.equal(r5.statusCode, 501);
+  assert.equal(r5.statusCode, 200);
+  assert.equal(JSON.parse(r5.body).artist.name, '周杰伦');
 });
 
 test('sheet/info：netease/kugou/kuwo 三源门面（meta→sheet，extra.play_count 提取）', async () => {

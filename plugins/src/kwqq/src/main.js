@@ -24,6 +24,16 @@ function resolveQualityHint(raw, fallback) {
   return QUALITY_TIERS.includes(v) ? v : DEFAULT_QUALITY_TIER
 }
 
+// 音质解析优先级：按源覆盖 > App 下发 hint > 插件「音质封顶」(cfg.quality，兼容旧配置)。
+// 按源覆盖放在插件侧，是因为只有在 source_data.s 到手时才知道真实音源（App 侧歌曲
+// 没有 source 字段，无法在播放时按源选档）；旧配置没有 quality_by_source 时行为不变。
+function resolveSourceQuality(cfg, source, hint) {
+  const overrides = (cfg && cfg.quality_by_source) || {}
+  const override = overrides[source]
+  if (override) return resolveQualityHint(override, DEFAULT_QUALITY_TIER)
+  return resolveQualityHint(hint, (cfg && cfg.quality) || DEFAULT_QUALITY_TIER)
+}
+
 const ALL_SOURCES = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou', 'bilibili']
 // 歌词回搜顺序：酷我歌词链路最稳（qianqian by-id 不支持歌词，跳过）
 const LYRIC_SOURCES = ['kuwo', 'qq', 'netease', 'migu', 'kugou']
@@ -37,6 +47,8 @@ const DEFAULTS = {
   key: '',
   sources: DEFAULT_SOURCES,
   quality: '320k',
+  // 按源覆盖档位：{ kuwo: '192k', netease: 'flac' } 之类；缺省/空串 = 跟随全局
+  quality_by_source: {},
 }
 
 // ===== 简易 TTL 缓存（Map + 时间戳，QuickJS 兼容） =====
@@ -75,8 +87,25 @@ async function getConfig() {
   } catch (e) { /* storage 不可用时用默认值 */ }
   cfgCache = Object.assign({}, DEFAULTS, saved)
   if (!Array.isArray(cfgCache.sources) || !cfgCache.sources.length) cfgCache.sources = ALL_SOURCES
+  if (!cfgCache.quality_by_source || typeof cfgCache.quality_by_source !== 'object') {
+    cfgCache.quality_by_source = {}
+  }
   return cfgCache
 }
+
+/// 按源覆盖档位只保留合法音源与合法档位；空串/非法值 = 清掉该源覆盖（跟随全局）。
+function normalizeQualityBySource(raw) {
+  const out = {}
+  if (!raw || typeof raw !== 'object') return out
+  for (const s of ALL_SOURCES) {
+    const v = raw[s]
+    if (typeof v !== 'string' || !v.trim()) continue
+    const tier = v.trim().toLowerCase()
+    if (QUALITY_TIERS.includes(tier)) out[s] = tier
+  }
+  return out
+}
+
 async function saveConfig(patch) {
   const cfg = Object.assign({}, await getConfig(), patch)
   if (!Array.isArray(cfg.sources) || !cfg.sources.length) cfg.sources = ALL_SOURCES
@@ -228,9 +257,9 @@ router.post('/api/music/url', async (req) => {
     return jsonResponse({ error: 'source_data is required' }, 400)
   }
   const cfg = await getConfig()
-  const tier = resolveQualityHint(body.quality, cfg.quality || DEFAULT_QUALITY_TIER)
   const resolveOnce = async (sd2) => {
     if (!sd2 || !sd2.s || !sd2.i) throw new Error('source_data.s/i required')
+    const tier = resolveSourceQuality(cfg, sd2.s, body.quality)
     let path = '/' + sd2.s + '/song/url?id=' + encodeURIComponent(sd2.i) + '&quality=' + tier
     if (sd2.s === 'migu' && sd2.c) path += '&copyright=' + encodeURIComponent(sd2.c)
     const data = await kwqq(cfg, path, 10000)
@@ -341,6 +370,7 @@ router.get('/config', async () => {
     sources: cfg.sources,
     all_sources: ALL_SOURCES,
     quality: cfg.quality,
+    quality_by_source: cfg.quality_by_source || {},
   })
 })
 router.post('/config', async (req) => {
@@ -353,9 +383,10 @@ router.post('/config', async (req) => {
   if (typeof body.key === 'string') patch.key = body.key.trim()
   if (Array.isArray(body.sources)) patch.sources = body.sources.filter(s => ALL_SOURCES.indexOf(s) >= 0)
   if (typeof body.quality === 'string' && body.quality.trim()) patch.quality = body.quality.trim()
+  if (body.quality_by_source !== undefined) patch.quality_by_source = normalizeQualityBySource(body.quality_by_source)
   const cfg = await saveConfig(patch)
   console.log('[kwqq] config updated: base=' + cfg.base + ' sources=' + cfg.sources.join(','))
-  return jsonResponse({ success: true, config: { base: cfg.base, sources: cfg.sources, quality: cfg.quality, has_key: !!cfg.key } })
+  return jsonResponse({ success: true, config: { base: cfg.base, sources: cfg.sources, quality: cfg.quality, quality_by_source: cfg.quality_by_source, has_key: !!cfg.key } })
 })
 
 // ===== 导入宿主曲库（插件 UI 播放的前置：宿主播放器只认数字 song id） =====
@@ -428,13 +459,24 @@ function entryToSheet(it) {
     source: it.source,
   }
 }
+// 上游 publish_time 是 'YYYY-MM-DD' 字符串，客户端契约是毫秒时间戳（num）。
+// 必须在此换算：字符串会让客户端 `as num?` 抛类型错误，整个专辑列表解析失败
+// （现象：单曲正常、专辑页报错——QQ/酷我均命中）。
+function publishTimeMs(v) {
+  if (v === undefined || v === null || v === '') return undefined
+  if (typeof v === 'number') return v
+  const n = Number(v)
+  if (!isNaN(n)) return n
+  const t = Date.parse(String(v))
+  return isNaN(t) ? undefined : t
+}
 // AlbumEntry → browse album
 function entryToAlbum(it) {
   return {
     id: String(it.id), name: it.name || '', artist: it.artist || '',
     cover_url: it.cover || undefined,
     track_count: it.size || it.track_count || 0,
-    publish_time: (it.extra && it.extra.publish_time) || undefined,
+    publish_time: publishTimeMs(it.extra && it.extra.publish_time),
     company: (it.extra && it.extra.company) || undefined,
     description: (it.extra && it.extra.description) || undefined,
     source: it.source,
@@ -457,8 +499,9 @@ function bodyError() {
 
 // 浏览端点包装：cacheKey 非空时走 browseCache（自持缓存的端点传 null）；异常按
 // 501 能力缺失 / 502 上游错误归一。501 判定：e.unsupported 显式标记优先，
-// 上游原样 501（message 含 '501'）兜底——两通道都归一成 501 envelope。
-async function browseHandler(cacheKey, fn) {
+// 上游原样 501（message 含 '501'）兜底——两通道都归一成 501 envelope；
+// unsupportedCode 给该端点一个可机读的能力标识（如 artist 的 'unsupportedArtist'）。
+async function browseHandler(cacheKey, fn, unsupportedCode) {
   if (cacheKey !== null) {
     const cached = browseCache.get(cacheKey)
     if (cached) return jsonResponse(cached)
@@ -471,7 +514,7 @@ async function browseHandler(cacheKey, fn) {
     const msg = String((e && e.message) || e)
     console.log('[kwqq] browse error: ' + msg)
     if ((e && e.unsupported) || msg.indexOf('501') >= 0) {
-      return jsonResponse({ error: '该源暂不支持此能力', unsupported: true }, 501)
+      return jsonResponse({ error: '该源暂不支持此能力', unsupported: true, code: unsupportedCode || undefined }, 501)
     }
     return jsonResponse({ error: msg }, 502)
   }
@@ -581,10 +624,10 @@ async function albumInfo(body) {
         name: al0.name || name,
         artist: al0.artist || '',
         cover_url: al0.cover || undefined,
-        publish_time: (al0.extra && al0.extra.publish_time) || undefined,
+        publish_time: publishTimeMs(al0.extra && al0.extra.publish_time),
         company: (al0.extra && al0.extra.company) || undefined,
         description: (al0.extra && al0.extra.description) || undefined,
-        track_count: (data && data.total) || tracks.length,
+        track_count: (data && data.track_count) || undefined,
         source,
       },
       tracks,
@@ -608,7 +651,7 @@ async function albumInfo(body) {
       name: (data && data.name) || name,
       artist: (data && data.artist) || artist,
       cover_url: al0.cover || undefined,
-      track_count: (data && data.total) || tracks.length,
+      track_count: (data && data.track_count) || undefined,
       source: source,
       candidates: candidates.length > 1
         ? candidates.map(c => ({ id: c.id ? String(c.id) : undefined, name: c.name, artist: c.artist, cover_url: c.cover }))
@@ -619,19 +662,14 @@ async function albumInfo(body) {
 }
 
 
-// 歌手详情 + 作品：P9 统一门面 /{source}/artist|artist/works（netease/kugou）；其余源 501
-function unsupportedArtist(source) {
-  const err = new Error('source "' + source + '" 不支持歌手详情（仅 netease/kugou 有通道）')
-  err.unsupported = true
-  return err
-}
-
+// 歌手详情 + 作品：统一门面 /{source}/artist|artist/works。
+// 能力边界由门面裁决（adapters/base 缺省实现 501 → 插件归一 501 envelope），
+// 插件不再硬编码「仅 netease/kugou」——上游有通道的源自动可用。
 async function artistInfo(body) {
   const id = String(body.id || '').trim()
   const source = String(body.source || 'netease')
   if (!id) return { error: 'id required' }
   const cfg = await getConfig()
-  if (source !== 'netease' && source !== 'kugou') throw unsupportedArtist(source)
   const data = await kwqq(cfg, '/' + source + '/artist?id=' + encodeURIComponent(id), 10000)
   const ar = (data && data.artist) || {}
   return {
@@ -656,7 +694,6 @@ async function artistWorks(body) {
   if (!id) return { error: 'id required' }
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
-  if (source !== 'netease' && source !== 'kugou') throw unsupportedArtist(source)
   const data = await kwqq(cfg, '/' + source + '/artist/works?id=' + encodeURIComponent(id) +
     '&type=' + type + '&page=' + page + '&limit=' + limit, 10000)
   if (type === 'music') {
@@ -665,8 +702,8 @@ async function artistWorks(body) {
   const items = ((data && data.items) || []).map(it => ({
     id: String(it.id), name: it.name || '', artist: it.artist || '',
     cover_url: it.cover || undefined,
-    track_count: it.track_count || 0,
-    publish_time: (it.extra && it.extra.publish_time) || undefined,
+    track_count: it.track_count || it.size || 0,
+    publish_time: publishTimeMs(it.extra && it.extra.publish_time),
     company: (it.extra && it.extra.company) || undefined,
     description: (it.extra && it.extra.description) || undefined,
     source: it.source,
@@ -744,8 +781,10 @@ async function kuwoRecommendSheets(cfg, cat, page, limit) {
     })),
   }
 }
-// 歌单详情：P8 门面 /{source}/playlist/songs（netease/kugou/kuwo；meta 仅 page=1 附元数据）
-const SHEET_SOURCES = ['netease', 'kugou', 'kuwo']
+// 歌单/榜单详情：P8 门面 /{source}/playlist/songs（meta 仅 page=1 附元数据）。
+// 平台顺序统一为 网易云 / QQ / 酷狗 / 酷我（与 App 端展示一致）。
+const BROWSABLE_SOURCES = ['netease', 'qq', 'kugou', 'kuwo']
+const SHEET_SOURCES = BROWSABLE_SOURCES
 async function sheetInfo(body) {
   const id = String(body.id || '').trim()
   const page = Math.max(1, Number(body.page) || 1)
@@ -754,7 +793,7 @@ async function sheetInfo(body) {
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
   if (SHEET_SOURCES.indexOf(source) < 0) {
-    const err = new Error('source "' + source + '" 不支持歌单详情（仅 netease/kugou/kuwo）')
+    const err = new Error('source "' + source + '" 不支持歌单详情（仅 netease/qq/kugou/kuwo）')
     err.unsupported = true
     throw err
   }
@@ -769,11 +808,11 @@ async function sheetInfo(body) {
 }
 
 
-// 榜单列表：P8 门面多源聚合（netease/kugou/kuwo），items 各带 source，单源失败静默跳过
+// 榜单列表：P8 门面多源聚合（网易云/QQ/酷狗/酷我），items 各带 source，单源失败静默跳过
 async function toplists() {
   const cfg = await getConfig()
   const tasks = []
-  for (const s of ['netease', 'kugou', 'kuwo']) {
+  for (const s of BROWSABLE_SOURCES) {
     if (cfg.sources.indexOf(s) < 0) continue
     tasks.push(kwqq(cfg, '/' + s + '/toplists', 10000).then(data =>
       ((data && data.items) || []).map(it => ({
@@ -806,7 +845,7 @@ async function toplistDetail(body) {
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
   if (SHEET_SOURCES.indexOf(source) < 0) {
-    const err = new Error('source "' + source + '" 不支持榜单详情（仅 netease/kugou/kuwo）')
+    const err = new Error('source "' + source + '" 不支持榜单详情（仅 netease/qq/kugou/kuwo）')
     err.unsupported = true
     throw err
   }
@@ -817,13 +856,13 @@ async function toplistDetail(body) {
 }
 
 
-// 推荐歌单：P8 门面 /{source}/playlist/tags 三平台（netease/kugou/kuwo）。
+// 推荐歌单：P8 门面 /{source}/playlist/tags 四平台（netease/qq/kugou/kuwo）。
 // 顶层 pinned/categories 保持第一平台（netease 优先，旧客户端兼容）；
 // platforms 数组供新客户端按平台展示。
 async function recommendTags() {
   const cfg = await getConfig()
   const platforms = []
-  for (const s of ['netease', 'kugou', 'kuwo']) {
+  for (const s of BROWSABLE_SOURCES) {
     if (cfg.sources.indexOf(s) < 0) continue
     try {
       const data = await kwqq(cfg, '/' + s + '/playlist/tags', 10000)
@@ -845,7 +884,7 @@ async function recommendSheets(body) {
   const cfg = await getConfig()
   const source = String(body.source || 'netease')
   if (SHEET_SOURCES.indexOf(source) < 0) {
-    const err = new Error('source "' + source + '" 不支持推荐歌单（仅 netease/kugou/kuwo）')
+    const err = new Error('source "' + source + '" 不支持推荐歌单（仅 netease/qq/kugou/kuwo）')
     err.unsupported = true
     throw err
   }
@@ -925,14 +964,16 @@ const BROWSE_ROUTES = [
   {
     path: '/artist/info',
     validate: (b) => (String(b.id || '').trim() ? null : 'id required'),
-    cacheKey: (b) => 'ar|' + String(b.id || ''),
+    cacheKey: (b) => 'ar|' + String(b.source || 'netease') + '|' + String(b.id || ''),
+    code: 'unsupportedArtist',
     run: (b) => artistInfo(b),
   },
   {
     path: '/artist/works',
     validate: (b) => (String(b.id || '').trim() ? null : 'id required'),
-    cacheKey: (b) => 'arw|' + String(b.id || '') + '|' + (b.type || 'music') + '|' +
+    cacheKey: (b) => 'arw|' + String(b.source || 'netease') + '|' + String(b.id || '') + '|' + (b.type || 'music') + '|' +
       (Number(b.page) || 1) + '|' + (Number(b.limit) || 30),
+    code: 'unsupportedArtist',
     run: (b) => artistWorks(b),
   },
   {
@@ -988,9 +1029,9 @@ function registerBrowseRoutes(router) {
       }
       // 能力缺失类（不支持源）→ 501 envelope，不进缓存
       if (route.unsupported && route.unsupported(body)) {
-        return jsonResponse({ error: '该源暂不支持此能力', unsupported: true }, 501)
+        return jsonResponse({ error: '该源暂不支持此能力', unsupported: true, code: route.code || undefined }, 501)
       }
-      return browseHandler(route.cacheKey ? route.cacheKey(body) : null, () => route.run(body))
+      return browseHandler(route.cacheKey ? route.cacheKey(body) : null, () => route.run(body), route.code)
     })
   }
 }
