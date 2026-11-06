@@ -67,10 +67,11 @@
   .artist{font-size:12.5px;color:var(--muted);margin-bottom:14px}
 
   /* ---------- 唱片 ---------- */
+  /* 盘径缩小到 0.78×方形，给右侧唱臂留出摆放空间（填充层 = 边框层，1 单位 = 1px，262 = 方形边长） */
   .disc-wrap{position:relative;width:262px;height:262px;flex:0 0 auto}
   /* 需求1：盘体是「近透明白玻璃」——无深色盘基，背景从盘体透出 */
   .disc{
-    position:absolute;inset:0;border-radius:50%;
+    position:absolute;left:11%;top:11%;width:78%;height:78%;border-radius:50%;
     background:
       /* 沟槽环带整体是半透明白的雾面材质（不是深色底画白线） */
       radial-gradient(circle at 50% 50%, rgba(255,255,255,0) 0 50%, rgba(255,255,255,.10) 54%, rgba(255,255,255,.17) 63%, rgba(255,255,255,.10) 90%, rgba(255,255,255,.04) 100%),
@@ -82,29 +83,29 @@
   }
   [data-theme="light"] .disc{border-color:rgba(16,24,40,.10)}
   .grooves{
-    position:absolute;inset:0;border-radius:50%;pointer-events:none;
+    position:absolute;left:11%;top:11%;width:78%;height:78%;border-radius:50%;pointer-events:none;
     /* 沟槽：在白色雾面上用极细亮线/淡暗线撑层次，线本身不再高对比 */
     background:repeating-radial-gradient(circle,
       rgba(255,255,255,.085) 0 .8px,
       rgba(255,255,255,0) .8px 2.4px,
       rgba(255,255,255,.03) 2.4px 3.2px,
       rgba(255,255,255,0) 3.2px 4.8px);
-    -webkit-mask:radial-gradient(circle, transparent 0 70px, #000 72px 100%);
-            mask:radial-gradient(circle, transparent 0 70px, #000 72px 100%);
+    -webkit-mask:radial-gradient(circle, transparent 0 54.6px, #000 56.2px 100%);
+            mask:radial-gradient(circle, transparent 0 54.6px, #000 56.2px 100%);
   }
   /* 静态高光（不属于旋转层） */
-  .sheen{position:absolute;inset:0;border-radius:50%;pointer-events:none;
+  .sheen{position:absolute;left:11%;top:11%;width:78%;height:78%;border-radius:50%;pointer-events:none;
     background:linear-gradient(128deg, rgba(255,255,255,.14) 0%, rgba(255,255,255,0) 34%, rgba(255,255,255,0) 64%, rgba(255,255,255,.05) 100%);}
   /* 封面折射：技术路线 A —— 低清封面烘焙成「模糊 + 半透明」纹理，随盘同角速度旋转；
      裁剪为 label 外 → 盘缘内的圆环。视觉稿用 blur 模拟，运行时用预烘焙 ui.Image（零每帧模糊）。 */
-  .refract{position:absolute;inset:0;border-radius:50%;pointer-events:none;opacity:.24;
+  .refract{position:absolute;left:11%;top:11%;width:78%;height:78%;border-radius:50%;pointer-events:none;opacity:.24;
     background:
       radial-gradient(circle at 30% 26%, #ffd39b 0%, transparent 46%),
       radial-gradient(circle at 74% 78%, var(--cover-ink) 0%, transparent 52%),
       linear-gradient(135deg, var(--cover-soft), var(--cover) 70%);
     filter:blur(10px);
-    -webkit-mask:radial-gradient(circle, transparent 0 70px, #000 74px 118px, transparent 128px);
-            mask:radial-gradient(circle, transparent 0 70px, #000 74px 118px, transparent 128px);
+    -webkit-mask:radial-gradient(circle, transparent 0 54.6px, #000 57.7px 92px, transparent 99.8px);
+            mask:radial-gradient(circle, transparent 0 54.6px, #000 57.7px 92px, transparent 99.8px);
     animation:spin 20s linear infinite;}
   .paused .refract{animation-play-state:paused}
   /* 星光：点状高光，各自错峰明灭（静态层，不随盘转） */
@@ -112,8 +113,8 @@
     background:#fff;box-shadow:0 0 6px 1px rgba(255,255,255,.75);opacity:0;
     animation:twinkle 3.8s ease-in-out infinite;}
   @keyframes twinkle{0%,100%{opacity:0;transform:scale(.6)}38%{opacity:.92;transform:scale(1)}62%{opacity:.35;transform:scale(.85)}}
-  /* 盘心：封面（无中心孔，需求5）；比例与代码一致 = 0.54R */
-  .label{position:absolute;left:50%;top:50%;width:54%;height:54%;transform:translate(-50%,-50%);
+  /* 盘心：封面（无中心孔，需求5）；比例与代码一致 = 0.54R（= 0.54 × 78% 方形） */
+  .label{position:absolute;left:50%;top:50%;width:42.12%;height:42.12%;transform:translate(-50%,-50%);
     border-radius:50%;overflow:hidden;border:1px solid rgba(255,255,255,.18);}
   .label .art{position:absolute;inset:0;border-radius:50%;animation:spin 20s linear infinite;}
   .paused .label .art{animation-play-state:paused}
@@ -122,16 +123,18 @@
     radial-gradient(circle at 74% 78%,#8fb3e8 0%,transparent 50%),
     linear-gradient(135deg,var(--cover),#1b2432 70%);}
 
-  /* ---------- 唱臂：几何 支点→唱头 0.845d，直杆:折角 = 7:2，末端折角 30°（向盘内）；
-     支点在盘圆右上外侧的空角。两个姿态只靠绕支点旋转得到：
-     暂停 0°（直杆长端垂直，唱针落在盘缘外侧 1.18R）、播放 21°（唱针落沟槽环带中线 0.76R）。
+  /* ---------- 唱臂：盘径缩到 0.78d（R=0.39d）后，支点外移到 (0.958d, 0.105d)，离盘心 0.605d ≈ 1.55R。
+     细杆：直杆 0.380d + 末端 30° 折角 0.075d，杆宽 0.0062d（≈ 盘径的 0.008）；唱针到支点 0.486d。
+     两个姿态只靠「绕支点旋转」得到：
+       暂停 0°（长端垂直）→ 整根杆 + 折角 + 唱头 + 唱针全部落在盘圆之外（唱针贴盘缘外侧，间隙 0.018d）；
+       播放 12.8°（几何反算）→ 唱针落到环带中线 0.770R，杆身距盘心最近 1.42×封面半径，不压封面。
      颜色：低对比半透明白（视线先落在封面与盘面上），只留极轻投影。 ---------- */
   .arm{position:absolute;inset:0;pointer-events:none}
   .arm svg{width:100%;height:100%;display:block;overflow:visible}
-  /* 支点像素坐标（262px 盘径）：x=0.960d=251.5，y=0.115d=30.1 */
-  .arm .armg{transform-box:view-box;transform-origin:251.5px 30.1px;
+  /* 支点像素坐标（262px 方形）：x=0.958×262=251.0，y=0.105×262=27.5 */
+  .arm .armg{transform-box:view-box;transform-origin:251px 27.5px;
     transition:transform .36s cubic-bezier(.33,1,.68,1)}
-  .playing .arm .armg{transform:rotate(21deg)}
+  .playing .arm .armg{transform:rotate(12.8deg)}
   .paused  .arm .armg{transform:rotate(0deg)}
 
   /* ---------- 需求3：两行歌词，逐字渐变，整行上滚 ---------- */
@@ -169,6 +172,19 @@
   .extra{display:flex;justify-content:center;gap:26px;margin-top:10px;opacity:.55}
   .extra .icon{width:19px;height:19px}
 
+  /* ---------- 两姿态对照（同一几何，只看绕支点的旋转角） ---------- */
+  .pose-row{display:flex;gap:24px;flex-wrap:wrap;justify-content:center;margin:30px auto 0;max-width:1160px}
+  .pose{display:flex;flex-direction:column;align-items:center;gap:10px;
+    background:var(--surface-2);border:1px solid var(--line);border-radius:16px;padding:16px 18px 14px}
+  .pose h3{margin:0;font-size:13px;font-weight:600;letter-spacing:.02em}
+  .pose .disc-wrap{width:240px;height:240px}
+  .pose .cap{max-width:290px;font-size:12px;color:var(--muted);text-align:center;margin:0}
+  .pose .cap b{color:var(--text);font-weight:600}
+  /* 校验辅助：盘缘（1.00R）与封面边缘（0.54R）两条虚线圆 */
+  .guide{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
+  .guide circle{fill:none;stroke:rgba(255,255,255,.38);stroke-width:1;stroke-dasharray:3 4}
+  [data-theme="light"] .guide circle{stroke:rgba(16,24,40,.34)}
+
   .notes{max-width:1160px;margin:34px auto 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
   .note{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:12.5px;color:var(--muted)}
   .note b{color:var(--text);display:block;margin-bottom:3px;font-size:12.5px}
@@ -182,7 +198,7 @@
   <header>
     <div>
       <h1>酷狗概念版风格 · 黑胶播放页</h1>
-      <p class="sub">左：播放态（唱臂落在沟槽中间）；右：暂停态（唱臂退回盘缘）。盘面、背景、逐字歌词的色相全部来自当前封面主色——切换右上角封面看联动。</p>
+      <p class="sub">左：播放态（唱针落沟槽环带中线）；右：暂停态（整根唱臂退到盘圆之外）。盘径已缩小到方形的 0.78 给唱臂让位，支点外移到右上角；页面下方有<b>暂停 / 播放两姿态对照</b>（带盘缘与封面边界的虚线圆）。盘面、背景、逐字歌词的色相全部来自当前封面主色——切换右上角封面看联动。</p>
     </div>
     <div class="controls">
       <div class="row" id="coverRow">
@@ -218,21 +234,21 @@
           <div class="label"><div class="art cover-art"></div></div>
           <div class="arm">
             <svg viewBox="0 0 262 262" aria-hidden="true">
-              <!-- 轴座：竖向淡白圆角夹座 + 两道卡扣细线 + 中心圆柱 -->
-              <rect x="242.3" y="9.8" width="18.3" height="40.6" rx="4.2" fill="rgba(255,255,255,.45)"/>
-              <line x1="245.2" y1="22.2" x2="257.8" y2="22.2" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
-              <line x1="245.2" y1="36.9" x2="257.8" y2="36.9" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
-              <circle cx="251.5" cy="31.1" r="3.7" fill="rgba(255,255,255,.30)"/>
+              <!-- 轴座：竖向淡白圆角夹座 + 两道卡扣细线 + 中心圆柱（支点 251, 27.5） -->
+              <rect x="242.9" y="9.4" width="16.2" height="36.2" rx="3.8" fill="rgba(255,255,255,.45)"/>
+              <line x1="245.2" y1="19.6" x2="256.8" y2="19.6" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+              <line x1="245.2" y1="34.3" x2="256.8" y2="34.3" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+              <circle cx="251" cy="28.5" r="3.3" fill="rgba(255,255,255,.30)"/>
               <g class="armg">
-                <!-- 杆体：直杆 0.657d + 末端 30° 折角段 0.188d（与代码里的 Path 同坐标） -->
-                <path d="M251.5 26.9 L251.5 202.2 L226.9 244.9" stroke="rgba(16,24,32,.10)"
-                      stroke-width="3.7" stroke-linecap="round" transform="translate(1,1.5)"/>
-                <path d="M251.5 26.9 L251.5 202.2 L226.9 244.9" stroke="rgba(255,255,255,.52)"
-                      stroke-width="3.7" stroke-linecap="round"/>
-                <!-- 唱头 + 极短唱针 -->
-                <g transform="translate(226.9,244.9) rotate(30)">
-                  <rect x="-5.25" y="-6.8" width="10.5" height="13.6" rx="2.6" fill="rgba(255,255,255,.46)"/>
-                  <line x1="0" y1="6.8" x2="0" y2="13.6" stroke="rgba(142,149,159,.40)" stroke-width="0.65" stroke-linecap="round"/>
+                <!-- 杆体：直杆 0.380d + 末端 30° 折角 0.075d，杆宽 0.0062d（与代码里的 Path 同坐标） -->
+                <path d="M251 24.4 L251 127.1 L241.2 144.1" fill="none" stroke="rgba(16,24,32,.10)"
+                      stroke-width="1.6" stroke-linecap="round" transform="translate(1,1.5)"/>
+                <path d="M251 24.4 L251 127.1 L241.2 144.1" fill="none" stroke="rgba(255,255,255,.52)"
+                      stroke-width="1.6" stroke-linecap="round"/>
+                <!-- 唱头 0.030d×0.046d + 唱针 0.020d -->
+                <g transform="translate(241.2,144.1) rotate(30)">
+                  <rect x="-3.9" y="-6" width="7.8" height="12" rx="2" fill="rgba(255,255,255,.46)"/>
+                  <line x1="0" y1="6" x2="0" y2="11.3" stroke="rgba(142,149,159,.40)" stroke-width="0.52" stroke-linecap="round"/>
                 </g>
               </g>
             </svg>
@@ -277,21 +293,21 @@
           <div class="label"><div class="art cover-art"></div></div>
           <div class="arm">
             <svg viewBox="0 0 262 262" aria-hidden="true">
-              <!-- 轴座：竖向淡白圆角夹座 + 两道卡扣细线 + 中心圆柱 -->
-              <rect x="242.3" y="9.8" width="18.3" height="40.6" rx="4.2" fill="rgba(255,255,255,.45)"/>
-              <line x1="245.2" y1="22.2" x2="257.8" y2="22.2" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
-              <line x1="245.2" y1="36.9" x2="257.8" y2="36.9" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
-              <circle cx="251.5" cy="31.1" r="3.7" fill="rgba(255,255,255,.30)"/>
+              <!-- 轴座：竖向淡白圆角夹座 + 两道卡扣细线 + 中心圆柱（支点 251, 27.5） -->
+              <rect x="242.9" y="9.4" width="16.2" height="36.2" rx="3.8" fill="rgba(255,255,255,.45)"/>
+              <line x1="245.2" y1="19.6" x2="256.8" y2="19.6" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+              <line x1="245.2" y1="34.3" x2="256.8" y2="34.3" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+              <circle cx="251" cy="28.5" r="3.3" fill="rgba(255,255,255,.30)"/>
               <g class="armg">
-                <!-- 杆体：直杆 0.657d + 末端 30° 折角段 0.188d（与代码里的 Path 同坐标） -->
-                <path d="M251.5 26.9 L251.5 202.2 L226.9 244.9" stroke="rgba(16,24,32,.10)"
-                      stroke-width="3.7" stroke-linecap="round" transform="translate(1,1.5)"/>
-                <path d="M251.5 26.9 L251.5 202.2 L226.9 244.9" stroke="rgba(255,255,255,.52)"
-                      stroke-width="3.7" stroke-linecap="round"/>
-                <!-- 唱头 + 极短唱针 -->
-                <g transform="translate(226.9,244.9) rotate(30)">
-                  <rect x="-5.25" y="-6.8" width="10.5" height="13.6" rx="2.6" fill="rgba(255,255,255,.46)"/>
-                  <line x1="0" y1="6.8" x2="0" y2="13.6" stroke="rgba(142,149,159,.40)" stroke-width="0.65" stroke-linecap="round"/>
+                <!-- 杆体：直杆 0.380d + 末端 30° 折角 0.075d，杆宽 0.0062d（与代码里的 Path 同坐标） -->
+                <path d="M251 24.4 L251 127.1 L241.2 144.1" fill="none" stroke="rgba(16,24,32,.10)"
+                      stroke-width="1.6" stroke-linecap="round" transform="translate(1,1.5)"/>
+                <path d="M251 24.4 L251 127.1 L241.2 144.1" fill="none" stroke="rgba(255,255,255,.52)"
+                      stroke-width="1.6" stroke-linecap="round"/>
+                <!-- 唱头 0.030d×0.046d + 唱针 0.020d -->
+                <g transform="translate(241.2,144.1) rotate(30)">
+                  <rect x="-3.9" y="-6" width="7.8" height="12" rx="2" fill="rgba(255,255,255,.46)"/>
+                  <line x1="0" y1="6" x2="0" y2="11.3" stroke="rgba(142,149,159,.40)" stroke-width="0.52" stroke-linecap="round"/>
                 </g>
               </g>
             </svg>
@@ -323,16 +339,89 @@
     </div>
   </div>
 
+  <!-- 两姿态对照：同一几何（盘径 0.78×方形、支点 (0.958d, 0.105d)、细杆 0.380d + 30° 折角 0.075d），
+       只差绕支点的旋转角。虚线圆 = 盘缘（1.00R）与封面边缘（0.54R），可直接比对约束 1 / 2。 -->
+  <div class="pose-row">
+    <div class="pose paused">
+      <h3>暂停态 · 旋转 0°（长端垂直）</h3>
+      <div class="disc-wrap">
+        <div class="disc"></div>
+        <div class="grooves"></div>
+        <div class="sheen"></div>
+        <div class="refract"></div>
+        <div class="label"><div class="art cover-art"></div></div>
+        <svg class="guide" viewBox="0 0 262 262" aria-hidden="true">
+          <circle cx="131" cy="131" r="102.2"/>
+          <circle cx="131" cy="131" r="55.2"/>
+        </svg>
+        <div class="arm">
+          <svg viewBox="0 0 262 262" aria-hidden="true">
+            <rect x="242.9" y="9.4" width="16.2" height="36.2" rx="3.8" fill="rgba(255,255,255,.45)"/>
+            <line x1="245.2" y1="19.6" x2="256.8" y2="19.6" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+            <line x1="245.2" y1="34.3" x2="256.8" y2="34.3" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+            <circle cx="251" cy="28.5" r="3.3" fill="rgba(255,255,255,.30)"/>
+            <g class="armg">
+              <path d="M251 24.4 L251 127.1 L241.2 144.1" fill="none" stroke="rgba(16,24,32,.10)"
+                    stroke-width="1.6" stroke-linecap="round" transform="translate(1,1.5)"/>
+              <path d="M251 24.4 L251 127.1 L241.2 144.1" fill="none" stroke="rgba(255,255,255,.52)"
+                    stroke-width="1.6" stroke-linecap="round"/>
+              <g transform="translate(241.2,144.1) rotate(30)">
+                <rect x="-3.9" y="-6" width="7.8" height="12" rx="2" fill="rgba(255,255,255,.46)"/>
+                <line x1="0" y1="6" x2="0" y2="11.3" stroke="rgba(142,149,159,.40)" stroke-width="0.52" stroke-linecap="round"/>
+              </g>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <p class="cap"><b>整根都在盘圆之外</b>：杆身 / 折角段 / 唱头 / 唱针与盘缘最近 0.011d；唱针尖端在
+        <b>1.047R</b>（距盘缘 0.018d，262px 下约 4.8px）—— 贴边不压盘。</p>
+    </div>
+    <div class="pose playing">
+      <h3>播放态 · 旋转 12.8°（几何反算）</h3>
+      <div class="disc-wrap">
+        <div class="disc"></div>
+        <div class="grooves"></div>
+        <div class="sheen"></div>
+        <div class="refract"></div>
+        <div class="label"><div class="art cover-art"></div></div>
+        <svg class="guide" viewBox="0 0 262 262" aria-hidden="true">
+          <circle cx="131" cy="131" r="102.2"/>
+          <circle cx="131" cy="131" r="55.2"/>
+        </svg>
+        <div class="arm">
+          <svg viewBox="0 0 262 262" aria-hidden="true">
+            <rect x="242.9" y="9.4" width="16.2" height="36.2" rx="3.8" fill="rgba(255,255,255,.45)"/>
+            <line x1="245.2" y1="19.6" x2="256.8" y2="19.6" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+            <line x1="245.2" y1="34.3" x2="256.8" y2="34.3" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+            <circle cx="251" cy="28.5" r="3.3" fill="rgba(255,255,255,.30)"/>
+            <g class="armg">
+              <path d="M251 24.4 L251 127.1 L241.2 144.1" fill="none" stroke="rgba(16,24,32,.10)"
+                    stroke-width="1.6" stroke-linecap="round" transform="translate(1,1.5)"/>
+              <path d="M251 24.4 L251 127.1 L241.2 144.1" fill="none" stroke="rgba(255,255,255,.52)"
+                    stroke-width="1.6" stroke-linecap="round"/>
+              <g transform="translate(241.2,144.1) rotate(30)">
+                <rect x="-3.9" y="-6" width="7.8" height="12" rx="2" fill="rgba(255,255,255,.46)"/>
+                <line x1="0" y1="6" x2="0" y2="11.3" stroke="rgba(142,149,159,.40)" stroke-width="0.52" stroke-linecap="round"/>
+              </g>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <p class="cap"><b>只内旋 12.8°</b>：唱针落到 <b>0.770R</b>（环带 0.54R–1.00R 的正中），杆身距盘心最近
+        1.42× 封面半径 —— 杆身不进封面圆、唱针不落封面。</p>
+    </div>
+  </div>
+
   <div class="notes">
     <div class="note"><b>① 沟槽 / 星光</b>盘体是近透明白玻璃（无深色盘基），白色亮线 + 极淡暗线撑层次；沟槽上散布 24 颗点状星光，各自错峰明灭；盘体叠加封面主色折射，色相随封面变。星光层在旋转子树之外，不参与旋转。</div>
-    <div class="note"><b>② 唱臂</b>极淡半透明白杆体（alpha .32–.66）+ 极轻投影；暂停 0°（直杆长端垂直，唱针落在盘缘外侧 ≈1.18R），播放 21°（唱针落沟槽环带中线 ≈0.76R），360ms 过渡。</div>
+    <div class="note"><b>② 唱臂</b>极淡半透明白细杆（alpha .32–.66）+ 极轻投影；暂停 0°（长端垂直、整根在盘外，唱针 1.047R 贴盘缘），播放 12.8°（唱针落环带中线 0.770R），360ms 过渡。</div>
     <div class="note"><b>③ 两行歌词</b>固定两行窗口；当前行逐字从浅灰渐变为「封面背景色」；唱完一行整行上移一行（非整段滚动）。</div>
     <div class="note"><b>④ 背景</b>分两块：播放区从顶部「封面色 + 更显色」向下逐渐变浅，在约 2/3 处抵达控制区底色并保持到尾（接缝无硬边）；控制区浅色主题近白、深色主题为低明度浅灰；取色结果按 song/URL 缓存。</div>
     <div class="note"><b>⑤ 盘心</b>取消中心孔，封面直接作为盘心。</div>
     <div class="note"><b>⑥⑦⑧</b>歌名/歌手在盘上方、下方无两点；播放键无底板；进度条 2px 细线，浅灰轨道 / 深灰已播。</div>
     <div class="note"><b>⑨ 封面折射</b>技术路线 A：低清封面一次性烘焙成「模糊 + 半透明」纹理（预烘焙 ui.Image），放进旋转子树并用圆环裁剪（label 外 → 盘缘内）；运行时零模糊，每帧仅一次 drawImageRect + 矩阵变换。色彩分布随转动真实位移。无图时退化为封面主色薄纱（路线 B）。</div>
     <div class="note"><b>⑩ 沟槽区材质</b>整圈是半透明白的雾面（亚克力/白玻璃），沟槽只是雾面上的极细亮线 + 淡暗线；不是深色底画白线。</div>
-    <div class="note"><b>⑪ 唱臂形态</b>支点 (0.960d, 0.115d) 落在盘圆右上外侧的空角；支点 → 唱头合计 0.845d，其中直杆段 0.657d : 折角段 0.188d = <b>7:2</b>，末端折角 <b>30°</b>（向盘内）；杆宽 0.014d、轴座 0.070d×0.155d + 两道卡扣细线、唱头 0.040d×0.052d、唱针 0.026d。暂停角 0°（长端垂直）、播放角 21°（几何反算，不为凑落点改杆长/支点）。</div>
+    <div class="note"><b>⑪ 唱臂形态（本轮重解几何）</b>盘径缩到 <b>0.78×方形</b>（R = 0.39d，封面 = 0.54R = 0.211d，沟槽环带 0.54R–1.00R 同比不变）；支点外移到 <b>(0.958d, 0.105d)</b>，离盘心 0.605d ≈ 1.55R。细杆：直杆 0.380d + 末端 30° 折角 0.075d，唱针到支点 0.486d；<b>杆宽 0.0062d = 盘径的 0.008</b>；轴座 0.062d×0.138d + 两道卡扣细线、唱头 0.030d×0.046d、唱针 0.020d。暂停角 0°：长端垂直，杆 / 折角 / 唱头 / 唱针整根在盘圆外（最近 0.011d，唱针尖端 1.047R）；播放角 <b>12.8°</b>：唱针落 0.770R（环带正中），杆身最近点 1.42× 封面半径，不压封面。</div>
     <div class="note"><b>⑫ 歌词字号</b>设置项「播放页歌词字号」三档（小 15 / 中 17 / 大 20，默认中）；唱盘下两行与单独歌词页共用同一档位，单独歌词页当前行逐字推进、未唱字明显更淡。</div>
     <div class="note"><b>⑬ 转速</b>整圈 20s（代码 <code>VinylDisc.period</code> 默认 20s，turns 0→1 即一整圈）；角度按累计值推进——暂停是缓停不倒转，恢复播放与切歌都不回零，因此不会跳角度。</div>
   </div>
@@ -397,15 +486,19 @@
   });
 
   // 星光：固定角度 + 错峰延迟，位置在沟槽环带内（24 颗 ≈ 原 14 颗的 1.7 倍）
+  // 盘径 = 0.78 × 方形边长；环带比例与代码一致（封面 0.54R → 0.916R）
   const SPARK_COUNT = 24;
   document.querySelectorAll('.disc-wrap').forEach(wrap=>{
+    const side = wrap.clientWidth || 262;
+    const c = side / 2;
+    const discR = c * 0.78;
     for(let i=0;i<SPARK_COUNT;i++){
       const s = document.createElement('i');
       s.className='spark';
       const angle = (i / SPARK_COUNT) * Math.PI * 2 + (i%5)*0.31;
-      const r = 78 + ((i*17)%42);           // 78px ~ 119px，落在沟槽环带内
-      const x = 131 + Math.cos(angle)*r;
-      const y = 131 + Math.sin(angle)*r;
+      const r = discR * ((78 + ((i*17)%42)) / 131);
+      const x = c + Math.cos(angle)*r;
+      const y = c + Math.sin(angle)*r;
       s.style.left = (x-1)+'px';
       s.style.top  = (y-1)+'px';
       s.style.animationDelay = ((i*0.23)%3.8)+'s';
