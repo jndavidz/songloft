@@ -38,9 +38,21 @@ const ALL_SOURCES = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou', 'bili
 // 歌词回搜顺序：酷我歌词链路最稳；qianqian 的歌词 URL 只随搜索结果下发（靠门面进程内缓存），故排最后
 const LYRIC_SOURCES = ['kuwo', 'qq', 'netease', 'migu', 'kugou', 'qianqian']
 
+// 搜索结果的源曝光顺序（单曲/专辑/歌手/歌单四类统一）：酷狗 → 网易云 → QQ → 酷我 → 咪咕 → 千千。
+// 是否启用仍由 cfg.sources 决定，本常量只决定顺序（交错/轮询合并算法不变）。
+const SEARCH_SOURCE_ORDER = ['kugou', 'netease', 'qq', 'kuwo', 'migu', 'qianqian']
+
 // 默认源 = 六个 mp3 源。bilibili 在设置页手动启用（默认关）：
 //   App 内试听可用（宿主代理会带 Referer/UA 拉 fMP4/m4s），但 **DLNA 投送不可用**（音箱解不了 fMP4 分片）。
-const DEFAULT_SOURCES = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou']
+const DEFAULT_SOURCES = SEARCH_SOURCE_ORDER.slice()
+
+// 按 SEARCH_SOURCE_ORDER 排序后的「已启用源」：避免用户历史保存的 cfg.sources 顺序残留旧曝光序。
+// bilibili 无 /search/multi 类型通道，只在单曲聚合里殿后（withBilibili=true）。
+function searchSourcesInOrder(cfg, withBilibili) {
+  const list = SEARCH_SOURCE_ORDER.filter(s => cfg.sources.indexOf(s) >= 0)
+  if (withBilibili && cfg.sources.indexOf('bilibili') >= 0) list.push('bilibili')
+  return list
+}
 
 const DEFAULTS = {
   base: 'http://10.10.10.2:3003',
@@ -220,14 +232,15 @@ router.post('/api/search', createSearchHandler({
     if (!keyword || !String(keyword).trim()) return []
     const cfg = await getConfig()
     const limit = Math.min(50, Math.max(1, Number(pageSize) || 15))
-    const cacheKey = [keyword, page, limit, cfg.sources.join(','), cfg.base].join('|')
+    const order = searchSourcesInOrder(cfg, true)
+    const cacheKey = [keyword, page, limit, order.join(','), cfg.base].join('|')
     const cached = searchCache.get(cacheKey)
     if (cached) return cached
     if (failCache.get('search|' + cacheKey)) return []
 
     const { merged, ok, failed } = await searchMusicAggregated(cfg, keyword, page, limit)
     console.log('[kwqq] search "' + keyword + '" p' + page + ' -> ' + merged.length +
-      ' items (' + ok + '/' + cfg.sources.length + ' sources ok' +
+      ' items (' + ok + '/' + order.length + ' sources ok' +
       (failed ? ', ' + failed + ' failed' : '') + ')')
     if (!merged.length && failed === cfg.sources.length) failCache.set('search|' + cacheKey, true)
     searchCache.set(cacheKey, merged)
@@ -647,11 +660,9 @@ async function browseHandler(cacheKey, fn, unsupportedCode) {
 }
 
 
-// 多类型搜索：music 走多源聚合（复用 /api/search 逻辑），album/artist/sheet 走 netease cloudsearch
+// 多类型搜索：music 走多源聚合（复用 /api/search 逻辑），album/artist/sheet 走统一门面 /{source}/search/multi
 // P9 统一门面 /{source}/search/multi（netease/kugou P9 收编 + qq/kuwo/migu/qianqian P7 精装）；
-// 501 由调用方 catch 跳过。顺序 = 结果交错顺序（netease/kugou 在前维持既有曝光排序）
-const SERVER_MULTI_SOURCES = ['netease', 'kugou', 'qq', 'kuwo', 'migu', 'qianqian']
-
+// 501 由调用方 catch 跳过。顺序统一由 SEARCH_SOURCE_ORDER 决定（酷狗在前）。
 async function browseSearch(body) {
   const cfg = await getConfig()
   const keywords = String(body.keywords || '').trim()
@@ -704,8 +715,7 @@ async function browseSearch(body) {
   //   migu/qianqian 的 sheet 上游 501 → 该源静默跳过（其余源仍有结果）。轮询交错合并。
   const order = []
   const tasks = []
-  for (const src of SERVER_MULTI_SOURCES) {
-    if (cfg.sources.indexOf(src) < 0) continue
+  for (const src of searchSourcesInOrder(cfg, false)) {
     order.push(src)
     tasks.push(serverMultiSearch(cfg, src, keywords, type, page, limit).catch(() => ({ items: [], total: null })))
   }
@@ -742,7 +752,8 @@ async function serverMultiSearch(cfg, source, keywords, type, page, limit) {
 // 每源条目统一补 source/dedup_key，轮询交错合并保证多源在前排有曝光；
 // 返回 {merged, ok, failed} 供调用方做缓存/日志/失败标记。
 async function searchMusicAggregated(cfg, keyword, page, limit) {
-  const per = await Promise.allSettled(cfg.sources.map(async (s) => {
+  const order = searchSourcesInOrder(cfg, true)
+  const per = await Promise.allSettled(order.map(async (s) => {
     const data = await kwqq(cfg, '/' + s + '/search?keywords=' +
       encodeURIComponent(keyword) + '&page=' + (Number(page) || 1) + '&limit=' + limit, 4000)
     return (data.items || []).map(it => {

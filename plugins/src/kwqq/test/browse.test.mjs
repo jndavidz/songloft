@@ -54,7 +54,7 @@ function setUpstream({ premium = {}, timeout = [] } = {}) {
 // —— 常用归一形状样例（server 门面契约）——
 const NE_SEARCH_ITEM = { id: '186145', name: '可爱女人', singer: '周杰伦', album: 'Jay', duration_s: 239, cover: 'https://p/n.jpg', source: 'netease' };
 
-test('browse/search：album 类型走门面 search/multi，多源轮询交错（netease/kugou/qq/kuwo）', async () => {
+test('browse/search：album 类型走门面 search/multi，多源轮询交错（kugou/netease/qq/kuwo）', async () => {
   await post('/config', {});
   setUpstream({
     premium: {
@@ -69,9 +69,9 @@ test('browse/search：album 类型走门面 search/multi，多源轮询交错（
   const res = await post('/browse/search', { keywords: '周杰伦', type: 'album' });
   assert.equal(res.statusCode, 200);
   const out = JSON.parse(res.body);
-  // 轮询交错：netease/kugou/qq 各出一行（kuwo 空、migu/qianqian 501 跳过）
-  assert.deepEqual(out.items.map(x => x.source), ['netease', 'kugou', 'qq']);
-  assert.equal(out.items[0].cover_url, 'https://p/n.jpg');   // 门面 cover → 契约 cover_url
+  // 轮询交错：kugou/netease/qq 各出一行（kuwo 空、migu/qianqian 501 跳过）；顺序以 SEARCH_SOURCE_ORDER 为准（酷狗在前）
+  assert.deepEqual(out.items.map(x => x.source), ['kugou', 'netease', 'qq']);
+  assert.equal(out.items[0].cover_url, 'https://p/k.jpg');   // 门面 cover → 契约 cover_url
   assert.equal(out.sources.length, 3);
   assert.ok(upstreamCalls.some(u => u.includes('/netease/search/multi?') && u.includes('type=album')));
   assert.ok(upstreamCalls.some(u => u.includes('/kugou/search/multi?')));
@@ -82,7 +82,7 @@ test('browse/search：music 类型多源聚合精装 /{source}/search（不变�
   setUpstream({
     premium: {
       'netease/search?': { total: 1, items: [{ source: 'netease', id: 1, name: 'N', singer: 'A', album: 'AL', duration_s: 200 }] },
-      'kugou/search?': { total: 0, items: [] },
+      'kugou/search?': { total: 1, items: [{ source: 'kugou', id: 'K1', name: 'K', singer: 'A', album: 'AL', duration_s: 190 }] },
       'kuwo/search?': { total: 0, items: [] },
       'qq/search?': { total: 0, items: [] },
       'migu/search?': { total: 0, items: [] },
@@ -92,8 +92,9 @@ test('browse/search：music 类型多源聚合精装 /{source}/search（不变�
   const res = await post('/browse/search', { keywords: 'test', type: 'music' });
   assert.equal(res.statusCode, 200);
   const out = JSON.parse(res.body);
-  assert.equal(out.items[0].source, 'netease');
-  assert.equal(out.items[0].dedup_key, 'kwqq_netease_1');
+  // 单曲同样按 SEARCH_SOURCE_ORDER 交错：酷狗在前，其次网易云
+  assert.deepEqual(out.items.map(x => x.source), ['kugou', 'netease']);
+  assert.equal(out.items[1].dedup_key, 'kwqq_netease_1');
 });
 
 test('browse/search：缺 keywords 返回 400', async () => {
