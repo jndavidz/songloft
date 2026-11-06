@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>酷狗概念版风格 · 黑胶播放页视觉稿</title>
+<style>
+  :root{
+    --surface:#0e1014;
+    --surface-2:#171a20;
+    --text:#e9ebf0;
+    --muted:#9aa2ae;
+    --line:rgba(255,255,255,.10);
+    /* 封面取色模拟：蓝 */
+    --cover:#2f4b78;
+    --cover-soft:#3d5f95;
+    --cover-ink:#8fb3e8;
+    --bg-top:#323d51;
+    --bg-mid:#333a42;
+    --control:#343639; /* 控制区：低明度浅灰（不做近黑） */
+    --veil-a:rgba(47,75,120,.34);
+    --veil-b:rgba(61,95,149,.30);
+    --disc-glow:rgba(47,75,120,.24);
+  }
+  [data-theme="light"]{
+    --surface:#f4f6fa;
+    --surface-2:#ffffff;
+    --text:#15181e;
+    --muted:#6a7381;
+    --line:rgba(16,24,40,.12);
+    --bg-top:#bac3d3;
+    --bg-mid:#d5e2ea;
+    --control:#fbfcfe; /* 控制区：近白 */
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;padding:28px 20px 70px;background:var(--surface);color:var(--text);
+    font:14px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  .wrap{max-width:1160px;margin:0 auto}
+  header{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-bottom:18px}
+  h1{font-size:21px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0;max-width:700px}
+  .controls{margin-left:auto;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+  .row{display:flex;gap:6px}
+  .chip{
+    border:1px solid var(--line);background:var(--surface-2);color:var(--muted);
+    border-radius:999px;padding:5px 12px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:7px;
+  }
+  .chip[aria-pressed="true"]{border-color:var(--text);color:var(--text)}
+  .dot{width:12px;height:12px;border-radius:50%;display:inline-block}
+  .phones{display:flex;gap:28px;flex-wrap:wrap;justify-content:center}
+  .phone{
+    width:352px;height:720px;border-radius:36px;padding:8px;background:#000;
+    box-shadow:0 20px 60px rgba(0,0,0,.45);flex:0 0 auto;
+  }
+  .screen{
+    width:100%;height:100%;border-radius:30px;overflow:hidden;position:relative;
+    /* 背景分两块：顶部最显色（封面色系）→ 向下逐渐变浅 → 控制区底色；末段与底色同色，接缝无硬边 */
+    background:linear-gradient(180deg,var(--bg-top) 0%,var(--bg-mid) 34%,var(--control) 66%,var(--control) 100%);
+    display:flex;flex-direction:column;align-items:center;padding:26px 22px 18px;
+  }
+  .statusbar{width:100%;display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:10px}
+
+  /* 需求6：歌名/歌手在唱盘上方 */
+  .title{margin:6px 0 2px;font-size:19px;font-weight:600;letter-spacing:.01em;text-align:center}
+  .artist{font-size:12.5px;color:var(--muted);margin-bottom:14px}
+
+  /* ---------- 唱片 ---------- */
+  .disc-wrap{position:relative;width:262px;height:262px;flex:0 0 auto}
+  /* 需求1：盘体是「近透明白玻璃」——无深色盘基，背景从盘体透出 */
+  .disc{
+    position:absolute;inset:0;border-radius:50%;
+    background:
+      radial-gradient(circle at 50% 50%, rgba(255,255,255,.20) 0%, rgba(255,255,255,.12) 40%, rgba(255,255,255,.06) 74%, rgba(255,255,255,.025) 100%),
+      radial-gradient(circle at 22% 24%, var(--veil-a) 0%, transparent 56%),
+      radial-gradient(circle at 82% 78%, var(--veil-b) 0%, transparent 58%);
+    border:1px solid rgba(255,255,255,.16);
+    box-shadow:0 16px 42px var(--disc-glow);
+  }
+  [data-theme="light"] .disc{border-color:rgba(16,24,40,.10)}
+  .grooves{
+    position:absolute;inset:0;border-radius:50%;pointer-events:none;
+    /* 沟槽：白色亮线 + 极淡暗线撑出层次（不是黑色盘面） */
+    background:repeating-radial-gradient(circle,
+      rgba(255,255,255,.16) 0 .9px,
+      rgba(255,255,255,0) .9px 2.4px,
+      rgba(255,255,255,.055) 2.4px 3.2px,
+      rgba(255,255,255,0) 3.2px 4.8px);
+    -webkit-mask:radial-gradient(circle, transparent 0 66px, #000 68px 100%);
+            mask:radial-gradient(circle, transparent 0 66px, #000 68px 100%);
+  }
+  /* 静态高光（不属于旋转层） */
+  .sheen{position:absolute;inset:0;border-radius:50%;pointer-events:none;
+    background:linear-gradient(128deg, rgba(255,255,255,.14) 0%, rgba(255,255,255,0) 34%, rgba(255,255,255,0) 64%, rgba(255,255,255,.05) 100%);}
+  /* 封面折射：技术路线 A —— 低清封面烘焙成「模糊 + 半透明」纹理，随盘同角速度旋转；
+     裁剪为 label 外 → 盘缘内的圆环。视觉稿用 blur 模拟，运行时用预烘焙 ui.Image（零每帧模糊）。 */
+  .refract{position:absolute;inset:0;border-radius:50%;pointer-events:none;opacity:.24;
+    background:
+      radial-gradient(circle at 30% 26%, #ffd39b 0%, transparent 46%),
+      radial-gradient(circle at 74% 78%, var(--cover-ink) 0%, transparent 52%),
+      linear-gradient(135deg, var(--cover-soft), var(--cover) 70%);
+    filter:blur(10px);
+    -webkit-mask:radial-gradient(circle, transparent 0 70px, #000 74px 118px, transparent 128px);
+            mask:radial-gradient(circle, transparent 0 70px, #000 74px 118px, transparent 128px);
+    animation:spin 9s linear infinite;}
+  .paused .refract{animation-play-state:paused}
+  /* 星光：点状高光，各自错峰明灭（静态层，不随盘转） */
+  .spark{position:absolute;width:2px;height:2px;border-radius:50%;
+    background:#fff;box-shadow:0 0 6px 1px rgba(255,255,255,.75);opacity:0;
+    animation:twinkle 3.8s ease-in-out infinite;}
+  @keyframes twinkle{0%,100%{opacity:0;transform:scale(.6)}38%{opacity:.92;transform:scale(1)}62%{opacity:.35;transform:scale(.85)}}
+  /* 盘心：封面（无中心孔，需求5） */
+  .label{position:absolute;left:50%;top:50%;width:50%;height:50%;transform:translate(-50%,-50%);
+    border-radius:50%;overflow:hidden;border:1px solid rgba(255,255,255,.18);}
+  .label .art{position:absolute;inset:0;border-radius:50%;animation:spin 9s linear infinite;}
+  .paused .label .art{animation-play-state:paused}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .cover-art{background:radial-gradient(circle at 30% 26%,#ffd39b 0%,transparent 46%),
+    radial-gradient(circle at 74% 78%,#8fb3e8 0%,transparent 50%),
+    linear-gradient(135deg,var(--cover),#1b2432 70%);}
+
+  /* ---------- 唱臂：整体白色，边缘灰色阴影 ---------- */
+  .arm{position:absolute;inset:0;pointer-events:none}
+  .arm .pivot{position:absolute;left:250px;top:30px;width:15px;height:15px;border-radius:50%;
+    transform:translate(-50%,-50%);
+    background:linear-gradient(145deg,#ffffff,#cfd5de 60%,#9aa3ae);box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .arm .rod{position:absolute;left:250px;top:30px;width:4px;height:80px;border-radius:3px;
+    background:linear-gradient(90deg,#ffffff 0%,#f3f5f8 42%,#d3d8df 100%);
+    box-shadow:1px 0 0 rgba(255,255,255,.55), 2px 0 3px rgba(0,0,0,.38), -1px 0 1px rgba(0,0,0,.2);
+    transform-origin:50% 0;transition:transform .36s cubic-bezier(.33,1,.68,1);
+    transform:rotate(0deg);}
+  .arm .rod::after{ /* 唱头/唱针：白色小方块 + 灰色阴影 */
+    content:"";position:absolute;left:-4px;bottom:-7px;width:12px;height:9px;border-radius:3px;
+    background:linear-gradient(140deg,#ffffff,#d6dbe2);
+    box-shadow:1px 2px 4px rgba(0,0,0,.45), -1px 0 0 rgba(255,255,255,.6);}
+  .arm .rod::before{ /* 配重 */
+    content:"";position:absolute;left:-3.5px;top:-11px;width:11px;height:11px;border-radius:50%;
+    background:linear-gradient(145deg,#fff,#c9cfd7 60%,#98a1ac);box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  /* 播放：+18° → 落点半径约 0.76R（沟槽环带中线 66~131px 的中点）；
+     暂停：-4° → 落点半径约 0.98R（几乎贴住盘体边缘） */
+  .playing .arm .rod{transform:rotate(18deg)}
+  .paused  .arm .rod{transform:rotate(-4deg)}
+
+  /* ---------- 需求3：两行歌词，逐字渐变，整行上滚 ---------- */
+  .lyric-window{width:100%;height:76px;overflow:hidden;margin-top:20px;position:relative}
+  .lyric-track{display:flex;flex-direction:column;transition:transform .42s cubic-bezier(.22,1,.36,1)}
+  .lyric-row{height:38px;display:flex;align-items:center;justify-content:center;
+    font-size:15px;line-height:38px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lyric-row .w{
+    background-image:linear-gradient(90deg,
+      var(--cover-ink) 0%, var(--cover-ink) calc(var(--p,0) * 100%),
+      #a9b1bd calc(var(--p,0) * 100%), #a9b1bd 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    transition:background-image .18s linear;}
+  .lyric-row.ghost{color:#8d96a3;font-size:14px}
+  /* 演示用动画：一行唱完后整行上移 */
+  @keyframes roll{0%,72%{transform:translateY(0)}82%,100%{transform:translateY(-38px)}}
+  .demo .lyric-track{animation:roll 5.2s infinite}
+
+  /* ---------- 控制区 ---------- */
+  .controls-area{margin-top:auto;width:100%}
+  /* 需求8：细线进度条，浅灰/深灰 */
+  .progress{width:100%;height:12px;display:flex;align-items:center;margin-bottom:2px}
+  .track{position:relative;flex:1;height:2px;border-radius:2px;background:rgba(255,255,255,.16)}
+  [data-theme="light"] .track{background:rgba(16,24,40,.14)}
+  .track::before{content:"";position:absolute;left:0;top:0;height:2px;width:var(--progress,36%);
+    border-radius:2px;background:rgba(255,255,255,.62)}
+  [data-theme="light"] .track::before{background:rgba(16,24,40,.52)}
+  .times{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);margin-bottom:6px}
+  /* 需求7：播放键无底板 */
+  .transport{display:flex;align-items:center;justify-content:center;gap:38px;margin:6px 0 4px}
+  .icon{width:24px;height:24px;opacity:.62}
+  .icon.main{width:40px;height:40px;opacity:1}
+  .icon svg{width:100%;height:100%;display:block}
+  /* 需求6：下方不再有切换状态的两个点 */
+  .extra{display:flex;justify-content:center;gap:26px;margin-top:10px;opacity:.55}
+  .extra .icon{width:19px;height:19px}
+
+  .notes{max-width:1160px;margin:34px auto 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+  .note{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:12.5px;color:var(--muted)}
+  .note b{color:var(--text);display:block;margin-bottom:3px;font-size:12.5px}
+  .swatches{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 22px;color:var(--muted);font-size:12px}
+  .swatches span{display:flex;align-items:center;gap:6px}
+  footer{max-width:1160px;margin:28px auto 0;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>酷狗概念版风格 · 黑胶播放页</h1>
+      <p class="sub">左：播放态（唱臂落在沟槽中间）；右：暂停态（唱臂退回盘缘）。盘面、背景、逐字歌词的色相全部来自当前封面主色——切换右上角封面看联动。</p>
+    </div>
+    <div class="controls">
+      <div class="row" id="coverRow">
+        <button class="chip" data-cover="blue" aria-pressed="true"><i class="dot" style="background:#2f4b78"></i>蓝调封面</button>
+        <button class="chip" data-cover="amber" aria-pressed="false"><i class="dot" style="background:#c06a3c"></i>暖橙封面</button>
+        <button class="chip" data-cover="green" aria-pressed="false"><i class="dot" style="background:#2f6b52"></i>森绿封面</button>
+      </div>
+      <div class="row">
+        <button class="chip" data-mode="dark" aria-pressed="true">深色</button>
+        <button class="chip" data-mode="light" aria-pressed="false">浅色</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="swatches">
+    <span><i class="dot" style="background:var(--cover)"></i>封面主色 → 盘面折射（随盘转动）/ 星星高光</span>
+    <span><i class="dot" style="background:var(--bg-top)"></i>背景顶部：封面色 + 更显色</span>
+    <span><i class="dot" style="background:var(--control)"></i>控制区背景：浅灰近白（深色主题抬亮为低明度浅灰）</span>
+  </div>
+
+  <div class="phones">
+    <!-- 播放态 -->
+    <div class="phone">
+      <div class="screen playing">
+        <div class="statusbar"><span>9:41</span><span>◍ ⌁ ▮</span></div>
+        <div class="title">晴天</div>
+        <div class="artist">周杰伦 · 叶惠美 · 2003</div>
+        <div class="disc-wrap">
+          <div class="disc"></div>
+          <div class="grooves"></div>
+          <div class="sheen"></div>
+          <div class="refract"></div>
+          <div class="label"><div class="art cover-art"></div></div>
+          <div class="arm"><div class="pivot"></div><div class="rod"></div></div>
+        </div>
+        <div class="lyric-window demo">
+          <div class="lyric-track">
+            <div class="lyric-row"><span class="w" style="--p:.62">刮风这天 我试过握着你手</span></div>
+            <div class="lyric-row ghost">但偏偏 雨渐渐 大到我看你不见</div>
+          </div>
+        </div>
+        <div class="controls-area">
+          <div class="progress"><div class="track" style="--progress:38%"></div></div>
+          <div class="times"><span>1:42</span><span>4:29</span></div>
+          <div class="transport">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h16"/></svg></div>
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 5l14 7-14 7V5z" transform="rotate(180 13 12)"/><path d="M4 5v14"/></svg></div>
+            <div class="icon main"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 5v14M16 5v14"/></svg></div>
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 5l14 7-14 7V5z"/><path d="M20 5v14"/></svg></div>
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h16"/></svg></div>
+          </div>
+          <div class="extra">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 10v4h4l5 4V6L7 10H3z"/><path d="M16 8a5 5 0 010 8"/></svg></div>
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 5v14M5 12h14"/></svg></div>
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 10h16M4 14h10M4 18h7"/></svg></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 暂停态 -->
+    <div class="phone">
+      <div class="screen paused">
+        <div class="statusbar"><span>9:41</span><span>◍ ⌁ ▮</span></div>
+        <div class="title">晴天</div>
+        <div class="artist">周杰伦 · 叶惠美 · 2003</div>
+        <div class="disc-wrap">
+          <div class="disc"></div>
+          <div class="grooves"></div>
+          <div class="sheen"></div>
+          <div class="refract"></div>
+          <div class="label"><div class="art cover-art"></div></div>
+          <div class="arm"><div class="pivot"></div><div class="rod"></div></div>
+        </div>
+        <div class="lyric-window">
+          <div class="lyric-track">
+            <div class="lyric-row"><span class="w" style="--p:.62">刮风这天 我试过握着你手</span></div>
+            <div class="lyric-row ghost">但偏偏 雨渐渐 大到我看你不见</div>
+          </div>
+        </div>
+        <div class="controls-area">
+          <div class="progress"><div class="track" style="--progress:38%"></div></div>
+          <div class="times"><span>1:42</span><span>4:29</span></div>
+          <div class="transport">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h16"/></svg></div>
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 5l14 7-14 7V5z" transform="rotate(180 13 12)"/><path d="M4 5v14"/></svg></div>
+            <div class="icon main"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 4l13 8-13 8V4z" transform="scale(1)"/></svg></div>
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 5l14 7-14 7V5z"/><path d="M20 5v14"/></svg></div>
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h16"/></svg></div>
+          </div>
+          <div class="extra">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 10v4h4l5 4V6L7 10H3z"/><path d="M16 8a5 5 0 010 8"/></svg></div>
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 5v14M5 12h14"/></svg></div>
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 10h16M4 14h10M4 18h7"/></svg></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="note"><b>① 沟槽 / 星光</b>盘体是近透明白玻璃（无深色盘基），白色亮线 + 极淡暗线撑层次；沟槽上散布 24 颗点状星光，各自错峰明灭；盘体叠加封面主色折射，色相随封面变。星光层在旋转子树之外，不参与旋转。</div>
+    <div class="note"><b>② 唱臂</b>纯白杆体 + 灰色边缘投影；播放 18° 落在沟槽环带中线（≈0.76R），暂停 -4° 贴住盘缘（≈0.98R），360ms 过渡。</div>
+    <div class="note"><b>③ 两行歌词</b>固定两行窗口；当前行逐字从浅灰渐变为「封面背景色」；唱完一行整行上移一行（非整段滚动）。</div>
+    <div class="note"><b>④ 背景</b>分两块：播放区从顶部「封面色 + 更显色」向下逐渐变浅，在约 2/3 处抵达控制区底色并保持到尾（接缝无硬边）；控制区浅色主题近白、深色主题为低明度浅灰；取色结果按 song/URL 缓存。</div>
+    <div class="note"><b>⑤ 盘心</b>取消中心孔，封面直接作为盘心。</div>
+    <div class="note"><b>⑥⑦⑧</b>歌名/歌手在盘上方、下方无两点；播放键无底板；进度条 2px 细线，浅灰轨道 / 深灰已播。</div>
+    <div class="note"><b>⑨ 封面折射</b>技术路线 A：低清封面一次性烘焙成「模糊 + 半透明」纹理（预烘焙 ui.Image），放进旋转子树并用圆环裁剪（label 外 → 盘缘内）；运行时零模糊，每帧仅一次 drawImageRect + 矩阵变换。色彩分布随转动真实位移。无图时退化为封面主色薄纱（路线 B）。</div>
+  </div>
+
+  <footer>视觉稿：songloft/docs/design/vinyl-kugou-concept.html · 仅示意，未改代码</footer>
+</div>
+
+<script>
+  const html = document.documentElement;
+  const themes = { blue:{cover:'#2f4b78',soft:'#3d5f95',ink:'#8fb3e8'},
+                   amber:{cover:'#c06a3c',soft:'#d98b5f',ink:'#f0c2a1'},
+                   green:{cover:'#2f6b52',soft:'#4a8f72',ink:'#a9d8bd'} };
+  const controlColors = { dark:'#343639', light:'#fbfcfe' };
+
+  function hexToRgba(hex, a){
+    const h = hex.replace('#','');
+    const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
+    return `rgba(${r},${g},${b},${a})`;
+  }
+  function rgb(color){
+    if (color.startsWith('rgb(')) return color.slice(4,-1).split(',').map(Number);
+    const h = color.replace('#','');
+    return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+  }
+  function blend(front, alpha, back){
+    const f = rgb(front), b = rgb(back);
+    const m = f.map((v,i)=>Math.round(v*alpha + b[i]*(1-alpha)));
+    return 'rgb('+m.join(',')+')';
+  }
+  function setCover(key){
+    const t = themes[key];
+    html.style.setProperty('--cover', t.cover);
+    html.style.setProperty('--cover-soft', t.soft);
+    html.style.setProperty('--cover-ink', t.ink);
+    html.style.setProperty('--veil-a', hexToRgba(t.cover,.34));
+    html.style.setProperty('--veil-b', hexToRgba(t.soft,.30));
+    html.style.setProperty('--disc-glow', hexToRgba(t.cover,.24));
+    applyTop(key);
+  }
+  // 顶部 = 封面色按比例压到控制区底色上（更显色）；中段 = 顶部色向控制区底色线性走到 55%
+  function applyTop(key){
+    const light = html.dataset.theme === 'light';
+    const control = light ? controlColors.light : controlColors.dark;
+    html.style.setProperty('--control', control);
+    const top = blend(themes[key].cover, light ? .32 : .38, control);
+    html.style.setProperty('--bg-top', top);
+    html.style.setProperty('--bg-mid', blend(top, .45, control));
+  }
+  document.querySelectorAll('#coverRow .chip').forEach(b=>{
+    b.addEventListener('click',()=>{
+      document.querySelectorAll('#coverRow .chip').forEach(x=>x.setAttribute('aria-pressed', String(x===b)));
+      setCover(b.dataset.cover);
+    });
+  });
+  document.querySelectorAll('[data-mode]').forEach(b=>{
+    b.addEventListener('click',()=>{
+      html.dataset.theme = b.dataset.mode;
+      document.querySelectorAll('[data-mode]').forEach(x=>x.setAttribute('aria-pressed', String(x===b)));
+      const active = document.querySelector('#coverRow .chip[aria-pressed="true"]');
+      applyTop(active ? active.dataset.cover : 'blue');
+    });
+  });
+
+  // 星光：固定角度 + 错峰延迟，位置在沟槽环带内（24 颗 ≈ 原 14 颗的 1.7 倍）
+  const SPARK_COUNT = 24;
+  document.querySelectorAll('.disc-wrap').forEach(wrap=>{
+    for(let i=0;i<SPARK_COUNT;i++){
+      const s = document.createElement('i');
+      s.className='spark';
+      const angle = (i / SPARK_COUNT) * Math.PI * 2 + (i%5)*0.31;
+      const r = 78 + ((i*17)%42);           // 78px ~ 119px，落在沟槽环带内
+      const x = 131 + Math.cos(angle)*r;
+      const y = 131 + Math.sin(angle)*r;
+      s.style.left = (x-1)+'px';
+      s.style.top  = (y-1)+'px';
+      s.style.animationDelay = ((i*0.23)%3.8)+'s';
+      s.style.animationDuration = (3.1 + (i%4)*0.35)+'s';
+      wrap.appendChild(s);
+    }
+  });
+
+  // 逐字渐变：每字一个进度（演示用）
+  document.querySelectorAll('.lyric-row .w').forEach(el=>{
+    const total = [...el.textContent].length || 1;
+    const chars = [...el.textContent];
+    el.textContent='';
+    const progress = parseFloat(getComputedStyle(el).getPropertyValue('--p'))||0;
+    chars.forEach((ch,i)=>{
+      const sp=document.createElement('span');
+      sp.textContent=ch;
+      const p=Math.max(0,Math.min(1,(progress*total - i)) || 0);
+      sp.style.backgroundImage = `linear-gradient(90deg, var(--cover-ink) 0%, var(--cover-ink) ${p*100}%, #a9b1bd ${p*100}%, #a9b1bd 100%)`;
+      sp.style.webkitBackgroundClip='text'; sp.style.backgroundClip='text'; sp.style.color='transparent';
+      el.appendChild(sp);
+    });
+  });
+</script>
+</body>
+</html>
