@@ -19,11 +19,14 @@ const MaxPlayHistoryPerContext = 50
 var ErrInvalidPlayContext = errors.New("invalid play context")
 
 // IsValidPlayContextType 判断播放上下文类型是否受支持。
-// 合法取值 = "playlist" + "tag" + 全部歌曲分面维度，两处清单分别由 models 与 database 持有，
+// 合法取值 = "playlist" + "tag" + "browse" + 全部歌曲分面维度，两处清单分别由 models 与 database 持有，
 // 这里组合它们，避免再抄第三份枚举。
+// "browse" 是客户端曲库浏览（插件音源）点播用的上下文（key 为音源标识），
+// 客户端自 2026-11 起统一上报，缺它会导致这类播放被静默丢弃（接口仍回 204）。
 func IsValidPlayContextType(contextType string) bool {
 	return contextType == models.PlayContextPlaylist ||
 		contextType == models.PlayContextTag ||
+		contextType == models.PlayContextBrowse ||
 		database.IsSongFacetField(contextType)
 }
 

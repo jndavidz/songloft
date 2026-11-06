@@ -29,7 +29,7 @@ func parsePlayContext(w http.ResponseWriter, r *http.Request) (string, string, b
 	contextKey := r.URL.Query().Get("context_key")
 	if !services.IsValidPlayContextType(contextType) {
 		respondError(w, http.StatusBadRequest,
-			"不支持的 context_type，必须是 playlist、tag 或分面维度（artist/album/genre/year/decade/language/style）", nil)
+			"不支持的 context_type，必须是 playlist、tag、browse 或分面维度（artist/album/genre/year/decade/language/style）", nil)
 		return "", "", false
 	}
 	if contextKey == "" {
@@ -42,12 +42,12 @@ func parsePlayContext(w http.ResponseWriter, r *http.Request) (string, string, b
 // GetPlayHistory 查询某播放上下文的最近播放记录。
 // @Summary 查询播放上下文的播放历史
 // @Description 返回指定播放上下文内最近播放过的歌曲，按最后播放时间倒序，含完整歌曲详情。
-// @Description 「播放上下文」由 context_type + context_key 二元组标识：歌单为 (playlist, 歌单 ID)，自定义标签为 (tag, 标签 ID)，分面维度为 (artist, 歌手名) / (album, 专辑名) 等。
+// @Description 「播放上下文」由 context_type + context_key 二元组标识：歌单为 (playlist, 歌单 ID)，自定义标签为 (tag, 标签 ID)，曲库浏览为 (browse, 音源标识如 kwqq)，分面维度为 (artist, 歌手名) / (album, 专辑名) 等。
 // @Description 同一上下文内按歌曲去重（重复播放只刷新时间并累加 play_count），最多保留最近 50 条，因此本端点不分页。
 // @Description 记录由 POST /songs/{id}/played 在 type=play 时写入。歌曲从库中删除时其历史自动级联清理；歌曲仅被移出歌单时历史仍保留，客户端起播时自行判定失效。
 // @Tags 播放历史
 // @Produce json
-// @Param context_type query string true "播放上下文类型" Enums(playlist, tag, artist, album, genre, year, decade, language, style)
+// @Param context_type query string true "播放上下文类型" Enums(playlist, tag, browse, artist, album, genre, year, decade, language, style)
 // @Param context_key query string true "播放上下文标识：playlist 传歌单 ID，分面维度传该维度取值"
 // @Param limit query int false "返回条数，缺省 50，上限 50"
 // @Success 200 {object} models.PlayHistoryListResponse "成功返回播放历史列表"
@@ -83,7 +83,7 @@ func (h *PlayHistoryHandler) GetPlayHistory(w http.ResponseWriter, r *http.Reque
 // @Description 删除指定播放上下文内的全部播放记录，返回实际删除条数。上下文不存在或本就没有记录时返回 deleted=0，不视为错误。
 // @Tags 播放历史
 // @Produce json
-// @Param context_type query string true "播放上下文类型" Enums(playlist, tag, artist, album, genre, year, decade, language, style)
+// @Param context_type query string true "播放上下文类型" Enums(playlist, tag, browse, artist, album, genre, year, decade, language, style)
 // @Param context_key query string true "播放上下文标识：playlist 传歌单 ID，分面维度传该维度取值"
 // @Success 200 {object} map[string]int "成功返回 {deleted: 删除条数}"
 // @Failure 400 {object} models.ErrorResponse "context_type 不支持或缺少 context_key"
@@ -110,7 +110,7 @@ func (h *PlayHistoryHandler) ClearPlayHistory(w http.ResponseWriter, r *http.Req
 // @Description 从指定播放上下文中删除某首歌的播放记录。典型用途：清理已被移出歌单、在历史面板里显示为失效的条目。
 // @Tags 播放历史
 // @Produce json
-// @Param context_type query string true "播放上下文类型" Enums(playlist, tag, artist, album, genre, year, decade, language, style)
+// @Param context_type query string true "播放上下文类型" Enums(playlist, tag, browse, artist, album, genre, year, decade, language, style)
 // @Param context_key query string true "播放上下文标识：playlist 传歌单 ID，分面维度传该维度取值"
 // @Param song_id query int true "要删除的歌曲 ID"
 // @Success 204 "删除成功，无内容"

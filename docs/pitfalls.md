@@ -203,8 +203,14 @@ manager/scheduler 的内存 map 键，以及 `plugin_storage.plugin_entry_path` 
 ## 播放历史（play_history — 按播放上下文）
 
 每个「播放上下文」独立记住最近播放过的歌曲（songloft-org/songloft#333）。上下文 = `(context_type, context_key)`：
-歌单是 `("playlist", "<id>")`，分面维度是 `("artist", "周杰伦")` 这类；还支持 `tag`。合法类型以
+歌单是 `("playlist", "<id>")`，分面维度是 `("artist", "周杰伦")` 这类；还支持 `tag` 与曲库浏览 `browse`
+（key 为音源标识，如 `kwqq`）。合法类型以
 `IsValidPlayContextType` 组合的 `models` 常量与 `database.IsSongFacetField` 为准，**不另抄一份枚举**。改这块前先读完下面几条。
+
+- **新增上下文类型必须前后端同批落地**：客户端 2026-11 起把插件音源点播统一上报为 `("browse", "<音源>")`
+  （`remote_playback.dart` 的 `kBrowsePlaybackContext`）。服务端白名单当时只认 `playlist`/`tag`/分面，
+  `Record` 返回 `ErrInvalidPlayContext` 并被 `slog.Warn` 吞掉、**响应照样 204** → 历史一直空白且没有任何报错线索。
+  排查「历史为空」时先看服务端 `context_type` 白名单是否覆盖客户端实际上报的类型
 
 - **序数不可靠，所以读端点不返回「第几首」**：分面列表走 `GET /songs?artist=X`，默认排序 `added_at DESC`，
   而 `added_at` 是秒级 `DATETIME`、批量扫描在单事务里顺序 INSERT → 成百上千首歌 `added_at` **完全相同**；

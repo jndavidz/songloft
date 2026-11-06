@@ -247,9 +247,17 @@ what happens when they are missing: "scan reports completed but the CPU stays pi
 
 Each "playback context" independently remembers the songs recently played in it (songloft-org/songloft#333).
 A context is `(context_type, context_key)`: playlists are `("playlist", "<id>")`, facet dimensions are
-`("artist", "Jay Chou")` and the like; `tag` is also supported. Valid types come from `IsValidPlayContextType`,
+`("artist", "Jay Chou")` and the like; `tag` and library browsing `browse` (key = source id such as `kwqq`)
+are also supported. Valid types come from `IsValidPlayContextType`,
 combining `models` constants and `database.IsSongFacetField` — **do not duplicate that enum**.
 Read all of the following before touching this area.
+
+- **A new context type must land on client and server together**: since 2026-11 the client reports plugin-source
+  playback as `("browse", "<source>")` (`kBrowsePlaybackContext` in `remote_playback.dart`). The server allow-list
+  only accepted `playlist`/`tag`/facets at the time, so `Record` returned `ErrInvalidPlayContext`, the warning was
+  swallowed by `slog.Warn`, and the **endpoint still answered 204** → history stayed empty with no error clue.
+  When debugging "empty history", first check whether the server's `context_type` allow-list covers what the client
+  actually sends
 
 - **Ordinals are unreliable, so the read endpoint does not return "which track number"**: facet lists go through
   `GET /songs?artist=X` with a default ordering of `added_at DESC`, but `added_at` is a second-precision

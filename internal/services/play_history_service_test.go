@@ -122,9 +122,9 @@ func TestPlayHistoryServiceRejectsInvalidContext(t *testing.T) {
 	}
 }
 
-// TestIsValidPlayContextType 合法上下文类型 = playlist + tag + 全部分面维度。
+// TestIsValidPlayContextType 合法上下文类型 = playlist + tag + browse + 全部分面维度。
 func TestIsValidPlayContextType(t *testing.T) {
-	valid := []string{"playlist", "tag", "artist", "album", "genre", "year", "decade", "language", "style"}
+	valid := []string{"playlist", "tag", "browse", "artist", "album", "genre", "year", "decade", "language", "style"}
 	for _, ct := range valid {
 		if !IsValidPlayContextType(ct) {
 			t.Errorf("expected %q to be a valid play context type", ct)

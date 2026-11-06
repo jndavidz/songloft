@@ -369,12 +369,13 @@ type Playlist struct {
 	UpdatedAt   time.Time  `json:"updated_at" example:"2024-01-01T12:00:00Z"`            // 最后更新时间
 }
 
-// 播放上下文的类型标识。合法取值为「歌单」「自定义标签」或歌曲分面维度
+// 播放上下文的类型标识。合法取值为「歌单」「自定义标签」「曲库浏览」或歌曲分面维度
 // （artist/album/genre/year/decade/language/style），分面维度由
 // database.IsSongFacetField 判定 —— 校验入口见 services.IsValidPlayContextType。
 const (
 	PlayContextPlaylist = "playlist" // 歌单（key 为歌单 ID）
 	PlayContextTag      = "tag"      // 自定义标签分类（key 为 song-tag ID）
+	PlayContextBrowse   = "browse"   // 曲库浏览（插件音源点播，key 为音源标识，如 kwqq）
 )
 
 // PlayHistoryEntry 某播放上下文内的一条单曲播放历史。

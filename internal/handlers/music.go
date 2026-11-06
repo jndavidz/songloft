@@ -2998,8 +2998,8 @@ func (h *SongHandler) GetDuplicates(w http.ResponseWriter, r *http.Request) {
 // @Param id path int true "歌曲 ID"
 // @Param source query string false "调用来源标识，如 songloft-player、miot"
 // @Param type query string false "事件类型：play、finish、skip，默认 finish" Enums(play, finish, skip)
-// @Param context_type query string false "播放上下文类型，仅 type=play 时生效：playlist、tag 或分面维度（artist/album/genre/year/decade/language/style）" Enums(playlist, tag, artist, album, genre, year, decade, language, style)
-// @Param context_key query string false "播放上下文标识，仅 type=play 时生效：playlist 传歌单 ID，tag 传标签 ID，分面维度传该维度取值（如歌手名）"
+// @Param context_type query string false "播放上下文类型，仅 type=play 时生效：playlist、tag、browse 或分面维度（artist/album/genre/year/decade/language/style）" Enums(playlist, tag, browse, artist, album, genre, year, decade, language, style)
+// @Param context_key query string false "播放上下文标识，仅 type=play 时生效：playlist 传歌单 ID，tag 传标签 ID，browse 传音源标识（如 kwqq），分面维度传该维度取值（如歌手名）"
 // @Success 204 "无内容"
 // @Failure 400 {object} models.ErrorResponse "无效的歌曲 ID 或事件类型"
 // @Failure 404 {object} models.ErrorResponse "歌曲不存在"
