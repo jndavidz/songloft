@@ -352,7 +352,7 @@ router.get('/cover-search', async (req) => {
 // 契约：{ items: [{id, source, title, artist, cover, duration_s, url, quality}] }，
 // 过滤无 url 项、按可播性排序；找不到恒为 {items: []}（不 404）。MV URL 是签名短时效
 // （netease wsTime / QQ fvkey / kugou 日期路径），客户端每次点击现取——故此处不缓存。
-const MV_SOURCES = ['netease', 'qq', 'kugou']   // 2026-11-06 实测可匿名取直链的三源
+const MV_SOURCES = ['netease', 'qq', 'kugou', 'kuwo']   // 2026-11-06 实测可匿名取直链的四源（kuwo=在架 MV 目录）
 const MV_QUALITY_RANK = { fhd: 4, hd: 3, sd: 2, ld: 1 }
 
 function mvItem(source, raw) {
@@ -404,12 +404,9 @@ function mvMatch(items, title, artist) {
   return best
 }
 
-router.get('/mv', async (req) => {
-  const q = parseQuery(req.query)
-  const source = String(q.source || '')
-  const id = String(q.id || '')
-  const title = String(q.title || ''), artist = String(q.artist || '')
-  const cfg = await getConfig()
+// 解析一个「歌曲 id / MV id」→ 可播 MV 列表（/mv 路由与 MV 搜索的可播性闸门共用）。
+// 先本源直取，取不到再按 title+artist 到其它支持 MV 的源反查；返回已过滤 url、按可播性排序的列表。
+async function resolveMvItems(cfg, source, id, title, artist, timeout = 9000) {
   const items = [], seen = {}
   const add = (list) => {
     for (const it of list) {
@@ -421,15 +418,14 @@ router.get('/mv', async (req) => {
   const ask = async (s, sid) => {
     const data = await kwqq(cfg, '/' + s + '/mv?id=' + encodeURIComponent(sid) +
       (title ? '&title=' + encodeURIComponent(title) : '') +
-      (artist ? '&artist=' + encodeURIComponent(artist) : ''), 9000)
+      (artist ? '&artist=' + encodeURIComponent(artist) : ''), timeout)
     return collectMvItems(s, data)
   }
-
-  // 1) 本源按 id 直取（source_data.s/i 就是该源点播歌曲的平台 id）
+  // 1) 本源按 id 直取（source_data.s/i 就是该源点播歌曲的平台 id；MV 搜索结果给的是 MV id）
   if (source && id && ALL_SOURCES.indexOf(source) >= 0) {
     try { add(await ask(source, id)) } catch (e) { /* 该源无 MV/不可匿名 → 交给反查 */ }
   }
-  // 2) 拿不到时按 title+artist 到支持 MV 的源反查（kuwo/migu/qianqian 无匿名 MV 通道）
+  // 2) 拿不到时按 title+artist 到支持 MV 的源反查（migu/qianqian/bilibili 无匿名 MV 通道）
   if (!items.length && title) {
     for (const s of MV_SOURCES) {
       if (s === source) continue
@@ -443,7 +439,30 @@ router.get('/mv', async (req) => {
       } catch (e) { /* 换下一个源 */ }
     }
   }
+  // 3) 仍空 → 走该源 MV 搜索（QQ 联名/剪辑版等歌曲搜索行拿不到的 MV）
+  if (!items.length && title) {
+    for (const s of MV_SOURCES) {
+      try {
+        const d = await kwqq(cfg, '/' + s + '/search?type=mv&keywords=' +
+          encodeURIComponent((title + ' ' + artist).trim()) + '&limit=5', 8000)
+        const hit = mvMatch((d.items || []).map(x => Object.assign({}, x, { name: x.title, singer: x.artist })), title, artist)
+        if (!hit || !hit.id) continue
+        add(await ask(s, String(hit.id)))
+        if (items.length) break
+      } catch (e) { /* 换下一个源 */ }
+    }
+  }
   items.sort((a, b) => (MV_QUALITY_RANK[b.quality] || 0) - (MV_QUALITY_RANK[a.quality] || 0))
+  return items
+}
+
+router.get('/mv', async (req) => {
+  const q = parseQuery(req.query)
+  const source = String(q.source || '')
+  const id = String(q.id || '')
+  const title = String(q.title || ''), artist = String(q.artist || '')
+  const cfg = await getConfig()
+  const items = await resolveMvItems(cfg, source, id, title, artist)
   console.log('[kwqq] mv source=' + source + ' id=' + id + ' -> ' + items.length + ' playable')
   return jsonResponse({ items })
 })
@@ -636,7 +655,7 @@ const SERVER_MULTI_SOURCES = ['netease', 'kugou', 'qq', 'kuwo', 'migu', 'qianqia
 async function browseSearch(body) {
   const cfg = await getConfig()
   const keywords = String(body.keywords || '').trim()
-  const type = ['music', 'album', 'artist', 'sheet'].indexOf(body.type) >= 0 ? body.type : 'music'
+  const type = ['music', 'album', 'artist', 'sheet', 'mv'].indexOf(body.type) >= 0 ? body.type : 'music'
   const page = Math.max(1, Number(body.page) || 1)
   const limit = Math.min(50, Math.max(1, Number(body.limit) || 20))
   if (!keywords) return { type, page, limit, isEnd: true, items: [] }
@@ -644,6 +663,40 @@ async function browseSearch(body) {
   if (type === 'music') {
     const { merged } = await searchMusicAggregated(cfg, keywords, page, limit)
     return { type, page, limit, isEnd: merged.length < limit ? true : undefined, items: merged }
+  }
+
+  if (type === 'mv') {
+    // MV/视频搜索：走门面 /{source}/search?type=mv（每项 id 是该源 MV 端点可直接吃的 id），
+    // 再用 /mv?id= 逐条现取做**可播性闸门**——取不到直链的条目一律丢弃，
+    // 保证「搜到 MV 却点不开」不会出现在结果里（上游目录过期/下线在此被吸收）。
+    const per = await Promise.allSettled(MV_SOURCES
+      .filter(s => cfg.sources.indexOf(s) >= 0)
+      .map(async (s) => {
+        const d = await kwqq(cfg, '/' + s + '/search?type=mv&keywords=' + encodeURIComponent(keywords) +
+          '&page=' + page + '&limit=' + limit, 10000)
+        return ((d && d.items) || []).map(it => Object.assign({}, it, { source: s }))
+      }))
+    const lists = per.filter(r => r.status === 'fulfilled').map(r => r.value).filter(l => l.length)
+    const merged = []
+    for (let i = 0; i < limit; i++) for (const l of lists) if (l[i]) merged.push(l[i])
+    const candidates = merged.slice(0, Math.min(limit, 20))
+    const checked = await Promise.allSettled(candidates.map(async (it) => {
+      const mv = await resolveMvItems(cfg, it.source, it.id, it.title, it.artist, 9000)
+      const first = mv[0]
+      if (!first || !first.url) return null
+      return {
+        id: String(it.id),
+        source: it.source,
+        title: first.title || it.title || undefined,
+        artist: first.artist || it.artist || undefined,
+        cover_url: first.cover || it.cover || undefined,
+        duration_s: Number(first.duration_s) || Number(it.duration_s) || 0,
+        quality: first.quality || it.quality || undefined,
+        playable: true,
+      }
+    }))
+    const items = checked.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value)
+    return { type, page, limit, isEnd: items.length < limit ? true : undefined, items }
   }
 
   // 类型搜索逐源 fan-out（P9 后全部走统一门面 /{source}/search/multi，P7+P9 归一）：
