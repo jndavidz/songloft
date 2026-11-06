@@ -35,8 +35,8 @@ function resolveSourceQuality(cfg, source, hint) {
 }
 
 const ALL_SOURCES = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou', 'bilibili']
-// 歌词回搜顺序：酷我歌词链路最稳（qianqian by-id 不支持歌词，跳过）
-const LYRIC_SOURCES = ['kuwo', 'qq', 'netease', 'migu', 'kugou']
+// 歌词回搜顺序：酷我歌词链路最稳；qianqian 的歌词 URL 只随搜索结果下发（靠门面进程内缓存），故排最后
+const LYRIC_SOURCES = ['kuwo', 'qq', 'netease', 'migu', 'kugou', 'qianqian']
 
 // 默认源 = 六个 mp3 源。bilibili 在设置页手动启用（默认关）：
 //   App 内试听可用（宿主代理会带 Referer/UA 拉 fMP4/m4s），但 **DLNA 投送不可用**（音箱解不了 fMP4 分片）。
@@ -293,7 +293,9 @@ router.get('/lyric-search', async (req) => {
   const title = q.title || '', artist = q.artist || ''
   const empty = { lyric: '' }
   if (!title) return jsonResponse(empty)
-  const key = 'lyric|' + title + '|' + artist
+  // 缓存键带版本：旧键缓存的是「只有 lyric/tlyric」的形状，24h TTL 内会给客户端
+  // 少 lxlyric 的旧结果；换键即整体失效，比等 TTL 到期干净。
+  const key = 'lyric2|' + title + '|' + artist
   const cached = lyricCache.get(key)
   if (cached) return jsonResponse(cached)
   if (failCache.get(key)) return jsonResponse(empty)
@@ -305,7 +307,10 @@ router.get('/lyric-search', async (req) => {
     try {
       // 换源时先回搜该源的匹配（lyric by-id 只对本源 id 有效）
       let id = sd.i, extraPath = ''
-      if (s !== sd.s) {
+      // migu 的歌词按版权下发（copyrightId 取自搜索条目 extra）；同源命中时 source_data 已带 c
+      if (s === sd.s) {
+        if (s === 'migu' && sd.c) extraPath = '&copyright=' + encodeURIComponent(sd.c)
+      } else {
         const d2 = await kwqq(cfg, '/' + s + '/search?keywords=' +
           encodeURIComponent((title + ' ' + artist).trim()) + '&limit=3', 5000)
         const it2 = pickBest(d2.items || [], title, artist)
@@ -317,6 +322,8 @@ router.get('/lyric-search', async (req) => {
       if (ly && ly.lyric) {
         const payload = { lyric: ly.lyric }
         if (ly.tlyric) payload.tlyric = ly.tlyric
+        // 逐字歌词（洛雪格式，行 [mm:ss.mmm] + <偏移ms,时长ms>文本）；无逐字的源不返回该键
+        if (ly.lxlyric) payload.lxlyric = ly.lxlyric
         lyricCache.set(key, payload)
         console.log('[kwqq] lyric "' + title + '" via ' + s + ' (' + ly.lyric.length + ' chars)')
         return jsonResponse(payload)

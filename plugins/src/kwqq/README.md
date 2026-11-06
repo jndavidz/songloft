@@ -11,7 +11,7 @@ Songloft（原 MiMusic），提供**六源聚合搜索、320k 播放、歌词与
 |---|---|
 | `POST /api/search` | 六源（kuwo/qq/qianqian/migu/netease/kugou）聚合搜索，轮询交错合并，每源 4s 超时 |
 | `POST /api/music/url` | 按 `source_data {s,i,c}` 解析播放直链（`quality=320k` 封顶；migu 自动回传 `copyright`）；宿主下发 fallback 时按 标题+歌手 回搜换源 |
-| `GET /lyric-search` | 宿主歌词提供者（按源顺序回搜取 LRC，24h 缓存；qianqian 不参与——by-id 不支持歌词） |
+| `GET /lyric-search` | 宿主歌词提供者（按源顺序回搜取 LRC，24h 缓存；**酷狗另带逐字 `lxlyric`**；qianqian 尾随，靠门面「先搜后取」的进程内缓存） |
 | `GET /cover-search` | 宿主封面提供者 |
 | `POST /import` | 插件 UI 专用：把搜索结果写进宿主曲库（`/api/v1/songs/remote`，`dedup_key=kwqq_<源>_<id>` 去重） |
 | `GET/POST /config` | 设置（kwqq-api 地址 / API key / 启用源 / 音质封顶），storage 持久化 |
