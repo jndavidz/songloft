@@ -348,6 +348,106 @@ router.get('/cover-search', async (req) => {
   return jsonResponse(payload)
 })
 
+// MV（播放页「...」菜单「歌曲视频」）：GET /mv?source=&id=&title=&artist=
+// 契约：{ items: [{id, source, title, artist, cover, duration_s, url, quality}] }，
+// 过滤无 url 项、按可播性排序；找不到恒为 {items: []}（不 404）。MV URL 是签名短时效
+// （netease wsTime / QQ fvkey / kugou 日期路径），客户端每次点击现取——故此处不缓存。
+const MV_SOURCES = ['netease', 'qq', 'kugou']   // 2026-11-06 实测可匿名取直链的三源
+const MV_QUALITY_RANK = { fhd: 4, hd: 3, sd: 2, ld: 1 }
+
+function mvItem(source, raw) {
+  const it = raw || {}
+  const url = String(it.url || '')
+  if (!url) return null
+  return {
+    id: String(it.id || ''),
+    source: String(it.source || source),
+    title: it.title || undefined,
+    artist: it.artist || undefined,
+    cover: it.cover || undefined,
+    duration_s: Number(it.duration_s) || 0,
+    url,
+    quality: it.quality || undefined,
+  }
+}
+
+// 门面响应可能是「顶层单条」或「顶层 + items 多候选」：两者都收集，按 url 去重
+function collectMvItems(source, data) {
+  const out = []
+  const push = (raw) => { const it = mvItem(source, raw); if (it) out.push(it) }
+  if (!data) return out
+  push(data)
+  const list = Array.isArray(data.items) ? data.items : []
+  for (const raw of list) push(raw)
+  return out
+}
+
+// MV 反查的严格匹配：pickBest 在无命中时会退 items[0]（供封面/歌词兜底），但对 MV 会把
+// 「听起来像」的歌当成同一首（实测「不存在的歌名zzz」被 QQ 模糊搜索匹配成《世界上不存在的歌》），
+// 所以这里要求标题必须有关系（同名 4 / 包含 2），歌手命中只加分、不作为必要条件。
+function mvMatch(items, title, artist) {
+  const T = String(title || '').toLowerCase().replace(/\s+/g, '')
+  const A = String(artist || '').toLowerCase().replace(/\s+/g, '')
+  if (!T) return null
+  let best = null, bestScore = 0
+  for (const it of (items || [])) {
+    if (!it || !it.id) continue
+    const n = String(it.name || '').toLowerCase().replace(/\s+/g, '')
+    const s = String(it.singer || '').toLowerCase().replace(/\s+/g, '')
+    let score = 0
+    if (n === T) score += 4
+    else if (n.indexOf(T) >= 0 || T.indexOf(n) >= 0) score += 2
+    if (!score) continue
+    if (A && s.indexOf(A) >= 0) score += 2
+    if (score > bestScore) { bestScore = score; best = it }
+  }
+  return best
+}
+
+router.get('/mv', async (req) => {
+  const q = parseQuery(req.query)
+  const source = String(q.source || '')
+  const id = String(q.id || '')
+  const title = String(q.title || ''), artist = String(q.artist || '')
+  const cfg = await getConfig()
+  const items = [], seen = {}
+  const add = (list) => {
+    for (const it of list) {
+      if (seen[it.url]) continue
+      seen[it.url] = true
+      items.push(it)
+    }
+  }
+  const ask = async (s, sid) => {
+    const data = await kwqq(cfg, '/' + s + '/mv?id=' + encodeURIComponent(sid) +
+      (title ? '&title=' + encodeURIComponent(title) : '') +
+      (artist ? '&artist=' + encodeURIComponent(artist) : ''), 9000)
+    return collectMvItems(s, data)
+  }
+
+  // 1) 本源按 id 直取（source_data.s/i 就是该源点播歌曲的平台 id）
+  if (source && id && ALL_SOURCES.indexOf(source) >= 0) {
+    try { add(await ask(source, id)) } catch (e) { /* 该源无 MV/不可匿名 → 交给反查 */ }
+  }
+  // 2) 拿不到时按 title+artist 到支持 MV 的源反查（kuwo/migu/qianqian 无匿名 MV 通道）
+  if (!items.length && title) {
+    for (const s of MV_SOURCES) {
+      if (s === source) continue
+      try {
+        const d = await kwqq(cfg, '/' + s + '/search?keywords=' +
+          encodeURIComponent((title + ' ' + artist).trim()) + '&limit=5', 6000)
+        const hit = mvMatch(d.items || [], title, artist)
+        if (!hit || !hit.id) continue
+        add(await ask(s, String(hit.id)))
+        if (items.length) break
+      } catch (e) { /* 换下一个源 */ }
+    }
+  }
+  items.sort((a, b) => (MV_QUALITY_RANK[b.quality] || 0) - (MV_QUALITY_RANK[a.quality] || 0))
+  console.log('[kwqq] mv source=' + source + ' id=' + id + ' -> ' + items.length + ' playable')
+  return jsonResponse({ items })
+})
+
 // 专辑检索（消费 kwqq-api P6 `/{source}/album`；netease 先行，其余源 501 → UI 提示）
 router.get('/album', async (req) => {
   const q = parseQuery(req.query)
