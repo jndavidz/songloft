@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>黑胶盘沟槽配色 · 三套方案预览</title>
+<style>
+  :root{
+    --bg:#0b0c10;
+    --panel:#15171d;
+    --panel-2:#1c1f26;
+    --text:#e7e9ee;
+    --muted:#98a0ad;
+    --line:rgba(255,255,255,.10);
+    --seed:#415F91;
+    --primary:#a9c7ff;
+    --ok:#7fd0a4;
+    --warn:#f0b478;
+  }
+  [data-theme="light"]{
+    --bg:#f3f5f9;
+    --panel:#ffffff;
+    --panel-2:#eef1f7;
+    --text:#1a1c21;
+    --muted:#5a6473;
+    --line:rgba(16,24,40,.12);
+    --seed:#415F91;
+    --primary:#415f91;
+    --ok:#2f7d58;
+    --warn:#a8702a;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    padding:32px 20px 64px;
+    background:var(--bg);
+    color:var(--text);
+    font:14px/1.65 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    transition:background .25s,color .25s;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+  header{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:8px}
+  header h1{font-size:22px;margin:0 0 4px}
+  header p{margin:0;color:var(--muted);max-width:760px}
+  .toggle{margin-left:auto;display:flex;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px}
+  .toggle button{
+    border:0;background:transparent;color:var(--muted);cursor:pointer;
+    padding:6px 14px;border-radius:999px;font-size:13px;transition:.2s;
+  }
+    .toggle button[aria-pressed="true"]{background:var(--primary);color:#fff}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin:16px 0 24px}
+  .legend span::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;background:var(--primary)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}
+  .card h2{margin:0;font-size:17px;display:flex;align-items:center;gap:10px}
+  .tag{font-size:11px;font-weight:600;letter-spacing:.04em;padding:3px 8px;border-radius:6px;border:1px solid currentColor;opacity:.85}
+  .t-restrained{color:#8fb3e8}
+  .t-modern{color:var(--ok)}
+  .t-retro{color:var(--warn)}
+  .stages{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;padding:8px 0 4px}
+  .stage{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .stage small{color:var(--muted);font-size:11px}
+
+  /* ---------- 唱片 ---------- */
+  .disc{
+    position:relative;width:230px;height:230px;border-radius:50%;
+    background:
+      repeating-radial-gradient(circle,
+        var(--groove-light) 0 1px,
+        transparent 1px 2.4px,
+        var(--groove-dark) 2.4px 3.4px,
+        transparent 3.4px 4.8px),
+      radial-gradient(circle at 50% 50%,
+        var(--base0) 0%, var(--base1) 45%, var(--base2) 72%, var(--base3) 100%);
+    box-shadow:0 10px 30px rgba(0,0,0,.35);
+  }
+  /* 静态高光：不属于旋转子树，真实打光位置固定 */
+  .disc::after{
+    content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;
+    background:linear-gradient(125deg,var(--hl) 0%,transparent 38%,transparent 62%,var(--hl2) 100%);
+  }
+  .disc::before{
+    content:"";position:absolute;inset:2px;border-radius:50%;pointer-events:none;
+    border:1.5px solid var(--rim);
+  }
+  .label{
+    position:absolute;left:50%;top:50%;width:50%;height:50%;
+    transform:translate(-50%,-50%);border-radius:50%;overflow:hidden;
+    display:flex;align-items:center;justify-content:center;
+    border:1px solid rgba(255,255,255,.14);
+    background:radial-gradient(circle at 50% 50%,var(--label0),var(--label1) 55%,var(--label2) 100%);
+  }
+  .label .initial{font-size:30px;font-weight:600;color:var(--labelInk);letter-spacing:.02em}
+  .cover{
+    position:absolute;inset:0;border-radius:50%;
+    background:
+      radial-gradient(circle at 32% 28%,#ffd39b 0%,transparent 46%),
+      radial-gradient(circle at 72% 78%,#6f8bd4 0%,transparent 52%),
+      linear-gradient(135deg,#2f4b78,#8f5a5a 60%,#2a2d3a);
+  }
+  .hole{
+    position:absolute;left:50%;top:50%;width:6px;height:6px;border-radius:50%;
+    transform:translate(-50%,-50%);
+    background:#07070a;border:1px solid rgba(255,255,255,.22);
+  }
+  /* 唱臂：暂停抬起 / 播放落下由 .playing 控制 */
+  .arm{position:absolute;right:-6px;top:-22px;width:132px;height:132px;pointer-events:none}
+  .arm .bar{
+    position:absolute;left:74%;top:12%;width:3px;height:104px;border-radius:2px;
+    background:linear-gradient(90deg,var(--metal0),var(--metal1) 50%,var(--metal2));
+    transform-origin:50% 0;
+    transform:rotate(var(--armAngle));
+    transition:transform .5s cubic-bezier(.33,1,.68,1);
+  }
+  .arm .head{
+    position:absolute;left:0;top:0;width:16px;height:10px;border-radius:3px;
+    background:linear-gradient(135deg,var(--metal0),var(--metal2));
+    transform:translate(-50%,-50%);
+  }
+  .arm .pivot{position:absolute;left:74%;top:12%;width:16px;height:16px;border-radius:50%;background:radial-gradient(circle,var(--metal1),var(--metal2));transform:translate(-8px,-8px)}
+  .arm .weight{position:absolute;left:74%;top:12%;width:12px;height:12px;border-radius:50%;background:var(--metal2);transform:translate(-6px,calc(-100% - 82px))}
+  .playing{--armAngle:22deg}
+  .paused{--armAngle:6deg}
+
+  .scheme-a{
+    --base0:#2c2c37;--base1:#17171e;--base2:#2a2a34;--base3:#0b0b10;
+    --groove-light:rgba(255,255,255,.048);--groove-dark:rgba(0,0,0,.20);
+    --label0:#3a3a46;--label1:#23232c;--label2:#15151b;--labelInk:rgba(255,255,255,.72);
+    --metal0:#e6eaf2;--metal1:#b8bfc9;--metal2:#7c848f;
+    --rim:rgba(255,255,255,.10);--hl:rgba(255,255,255,.09);--hl2:rgba(255,255,255,.035);
+  }
+  .scheme-b{
+    --base0:#4a4e57;--base1:#33363e;--base2:#26292f;--base3:#14161b;
+    --groove-light:rgba(255,255,255,.065);--groove-dark:rgba(11,13,16,.22);
+    --label0:#f4f6fb;--label1:#e3e7f0;--label2:#cfd6e4;--labelInk:#39404d;
+    --metal0:#f0f3f8;--metal1:#aeb6c2;--metal2:#6f7783;
+    --rim:rgba(65,95,145,.28);--hl:rgba(255,255,255,.13);--hl2:rgba(255,255,255,.05);
+  }
+  .scheme-c{
+    --base0:#232b3a;--base1:#161c27;--base2:#1e2532;--base3:#0e131c;
+    --groove-light:rgba(143,179,232,.055);--groove-dark:rgba(5,8,13,.26);
+    --label0:#3a4b66;--label1:#2b394f;--label2:#1b2536;--labelInk:rgba(233,240,252,.78);
+    --metal0:#e9f0ff;--metal1:#a9c7ff;--metal2:#6580a8;
+    --rim:rgba(169,199,255,.16);--hl:rgba(169,199,255,.10);--hl2:rgba(255,255,255,.03);
+  }
+  /* 浅色模式：同一 token 结构，只换值（盘体提亮一档、沟槽亮线提透明） */
+  [data-theme="light"] .scheme-a{
+    --base0:#3a3d46;--base1:#23252c;--base2:#34373f;--base3:#141619;
+    --groove-light:rgba(255,255,255,.075);--groove-dark:rgba(0,0,0,.26);
+  }
+  [data-theme="light"] .scheme-b{
+    --base0:#5a5f6a;--base1:#41454e;--base2:#31343b;--base3:#1b1d22;
+    --groove-light:rgba(255,255,255,.10);--groove-dark:rgba(11,13,16,.28);
+  }
+  [data-theme="light"] .scheme-c{
+    --base0:#2b3446;--base1:#1b2231;--base2:#232b3a;--base3:#0f1520;
+    --groove-light:rgba(143,179,232,.07);--groove-dark:rgba(5,8,13,.28);
+  }
+
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{color:var(--muted);font-weight:500;width:42%}
+  .swatch{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:middle;border:1px solid rgba(255,255,255,.18)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--muted)}
+  .why{font-size:12.5px;color:var(--muted);border-left:2px solid var(--line);padding-left:10px}
+  .why strong{color:var(--text);font-weight:600}
+  .section{margin-top:36px}
+  .section h3{font-size:15px;margin:0 0 10px}
+  .bad{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .bad ul{margin:0;padding-left:18px}
+  .bad li{margin:6px 0}
+  .bad li strong{color:var(--warn)}
+  .tokens{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px}
+  .token{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12px}
+  .token b{display:block;font-family:ui-monospace,monospace;font-size:11.5px;color:var(--primary);font-weight:600}
+  footer{margin-top:36px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>黑胶盘外圈沟槽配色 · 三套方案</h1>
+      <p>盘面几何与 App 实现一致：盘体直径 230、label 占半径一半（直径 50%）、沟槽间距约 2.4px、静态高光固定不随盘转。切换浅色/深色看两套主题下的观感；每套都给「有封面」与「默认 label（无封面兜底）」两种盘心。</p>
+    </div>
+    <div class="toggle" role="group" aria-label="主题切换">
+      <button type="button" data-mode="dark" aria-pressed="true">深色</button>
+      <button type="button" data-mode="light" aria-pressed="false">浅色</button>
+    </div>
+  </header>
+
+  <div class="legend">
+    <span>主题 seed <b style="color:var(--text)">#415F91</b></span>
+    <span>primary（深色 tone80）<b style="color:var(--text)">#A9C7FF</b></span>
+    <span>沟槽只靠<b style="color:var(--text)">明度差</b>，不用彩色描边</span>
+    <span>发光/阴影在盘外，<b style="color:var(--text)">不进旋转子树</b></span>
+  </div>
+
+  <div class="grid">
+
+    <!-- A -->
+    <div class="card scheme-a">
+      <h2>方案 A · 石墨冷灰 <span class="tag t-restrained">克制</span></h2>
+      <div class="stages">
+        <div class="stage">
+          <div class="disc paused">
+            <div class="label"><div class="cover"></div></div>
+            <div class="hole"></div>
+            <div class="arm"><div class="bar"></div></div>
+          </div>
+          <small>有封面 · 暂停（臂抬起）</small>
+        </div>
+        <div class="stage">
+          <div class="disc playing">
+            <div class="label"><div class="initial">晴</div></div>
+            <div class="hole"></div>
+            <div class="arm"><div class="bar"></div></div>
+          </div>
+          <small>默认 label · 播放（臂落下）</small>
+        </div>
+      </div>
+      <table>
+        <tr><th>盘体底色</th><td><span class="swatch" style="background:#2c2c37"></span>#2C2C37 → <span class="swatch" style="background:#0b0b10"></span>#0B0B10</td></tr>
+        <tr><th>沟槽描线</th><td>亮 <span class="mono">#FFF @ 4.8%</span> / 暗 <span class="mono">#000 @ 20%</span></td></tr>
+        <tr><th>盘心 label</th><td><span class="swatch" style="background:#3a3a46"></span>#3A3A46 → <span class="swatch" style="background:#15151b"></span>#15151B</td></tr>
+        <tr><th>唱臂金属</th><td><span class="swatch" style="background:#b8bfc9"></span>#E6EAF2 / #B8BFC9 / #7C848F</td></tr>
+        <tr><th>M3 对齐</th><td>盘体取 neutral tone 12–20；高光白用时只做明度；唱臂取 neutral tone 70–80</td></tr>
+      </table>
+      <p class="why"><strong>为什么好看：</strong>近黑冷灰盘体几乎“退到背景”，中心封面成为唯一高饱和色块；沟槽仅靠 4.8% 白 / 20% 黑形成同心层次，第一眼读到的是“沟槽在反光”而不是“盘面有多彩”。<strong>不抢焦点：</strong>盘体明度低于 label 边缘 2 档以上，视线天然被 50% 直径的封面吸附。<br><strong>深色模式下</strong>更融入页面；<strong>浅色模式下</strong>取值整体提亮约 2 tone，避免在浅背景上变成一块死黑。</p>
+    </div>
+
+    <!-- B -->
+    <div class="card scheme-b">
+      <h2>方案 B · 雾银灰 <span class="tag t-modern">现代</span></h2>
+      <div class="stages">
+        <div class="stage">
+          <div class="disc paused">
+            <div class="label"><div class="cover"></div></div>
+            <div class="hole"></div>
+            <div class="arm"><div class="bar"></div></div>
+          </div>
+          <small>有封面 · 暂停</small>
+        </div>
+        <div class="stage">
+          <div class="disc playing">
+            <div class="label"><div class="initial">晴</div></div>
+            <div class="hole"></div>
+            <div class="arm"><div class="bar"></div></div>
+          </div>
+          <small>默认 label · 播放</small>
+        </div>
+      </div>
+      <table>
+        <tr><th>盘体底色</th><td><span class="swatch" style="background:#4a4e57"></span>#4A4E57 → <span class="swatch" style="background:#14161b"></span>#14161B</td></tr>
+        <tr><th>沟槽描线</th><td>亮 <span class="mono">#FFF @ 6.5%</span> / 暗 <span class="mono">#0B0D10 @ 22%</span></td></tr>
+        <tr><th>盘心 label</th><td><span class="swatch" style="background:#f4f6fb"></span>#F4F6FB → <span class="swatch" style="background:#cfd6e4"></span>#CFD6E4（浅 label，深字）</td></tr>
+        <tr><th>唱臂金属</th><td><span class="swatch" style="background:#aeb6c2"></span>#F0F3F8 / #AEB6C2 / #6F7783</td></tr>
+        <tr><th>M3 对齐</th><td>外缘导引带用 <span class="mono">primary @ 28%</span>（#415F91 的浅色版），其余全中性</td></tr>
+      </table>
+      <p class="why"><strong>为什么好看：</strong>比 A 亮两档，沟槽纹理在浅色主题里也能一眼看清，接近真实唱片在漫射光下的银灰；外缘一圈极淡的 primary 环把盘体与浅背景“切开”，不需要阴影也有边界。<strong>不抢焦点：</strong>盘体最高明度仍低于 label 白色底 2 档；有封面时 label 被封面覆盖，白底只在默认盘出现，不会和封面打架。</p>
+    </div>
+
+    <!-- C -->
+    <div class="card scheme-c">
+      <h2>方案 C · 深靛蓝 <span class="tag t-retro">复古</span></h2>
+      <div class="stages">
+        <div class="stage">
+          <div class="disc paused">
+            <div class="label"><div class="cover"></div></div>
+            <div class="hole"></div>
+            <div class="arm"><div class="bar"></div></div>
+          </div>
+          <small>有封面 · 暂停</small>
+        </div>
+        <div class="stage">
+          <div class="disc playing">
+            <div class="label"><div class="initial">晴</div></div>
+            <div class="hole"></div>
+            <div class="arm"><div class="bar"></div></div>
+          </div>
+          <small>默认 label · 播放</small>
+        </div>
+      </div>
+      <table>
+        <tr><th>盘体底色</th><td><span class="swatch" style="background:#232b3a"></span>#232B3A → <span class="swatch" style="background:#0e131c"></span>#0E131C</td></tr>
+        <tr><th>沟槽描线</th><td>亮 <span class="mono">#8FB3E8 @ 5.5%</span> / 暗 <span class="mono">#05080D @ 26%</span></td></tr>
+        <tr><th>盘心 label</th><td><span class="swatch" style="background:#3a4b66"></span>#3A4B66 → <span class="swatch" style="background:#1b2536"></span>#1B2536</td></tr>
+        <tr><th>唱臂金属</th><td><span class="swatch" style="background:#a9c7ff"></span>#E9F0FF / #A9C7FF / #6580A8</td></tr>
+        <tr><th>M3 对齐</th><td>盘体 = neutral tone 16 混 primary tone 20；亮线 = primary tone 70；label 边缘白光 14% 作为隔断</td></tr>
+      </table>
+      <p class="why"><strong>为什么好看：</strong>盘体带一点靛蓝，和主题 seed 同源又不至于变彩盘；冷蓝亮线像黑胶在冷光下的反射，复古器材味最强。<strong>风险与对策：</strong>遇到蓝调封面会与盘体融合 —— 所以亮线不超过 5.5%，并在 label 外侧保留 1px 白 14% 描边把封面与盘体切开。</p>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3>不推荐的做法</h3>
+    <div class="bad">
+      <ul>
+        <li><strong>高饱和彩色盘体</strong>（红/紫/绿）：盘面永远比封面更抢眼，默认 label 也会显得脏，且浅色模式下几乎无法做出“深色唱片”的质感。</li>
+        <li><strong>发光描边 / 外发光</strong>：一是必须放进旋转子树外才能避免每帧重算 blur，二是视觉上廉价，和真唱片的哑光质感冲突。</li>
+        <li><strong>与封面同色系</strong>（从封面取主色染盘体或沟槽）：封面大图会“溶进”盘体，物理边界消失，黑胶的实体感全丢；还要额外算色，收益为负。</li>
+        <li><strong>纯黑 #000 盘体</strong>：沟槽只能靠彩色才看得见，OLED 上盘体还会和背景融为一体，失去轮廓。</li>
+        <li><strong>浅色模式下用白/米色盘体</strong>：与背景几乎同明度，像一张“白纸圆”，必须靠重阴影救，直接违背成本红线。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3>一套 token，四种组合</h3>
+    <div class="tokens">
+      <div class="token"><b>discBase</b>盘体 4 停径向渐变（tone 12 → tone 0）</div>
+      <div class="token"><b>grooveLight / grooveDark</b>沟槽亮/暗描线 <code>alpha</code>，间距 2.4px</div>
+      <div class="token"><b>labelBase</b>3 停径向渐变；有封面时被封面层完全覆盖</div>
+      <div class="token"><b>tonearmMetal</b>3 段金属渐变（高光/中调/暗调）</div>
+      <div class="token"><b>rimGlow</b>外缘 1–2px 导引带，方案 B 用 primary</div>
+      <div class="token"><b>staticHighlight</b>固定位置弧形高光，不进旋转层</div>
+    </div>
+    <p class="why" style="margin-top:14px">深色/浅色只切换这组 token 的<b>取值</b>，绘制逻辑与几何完全不变；有封面/无封面只切换 label 层，<b>盘体完全不参与</b>——所以兜底盘与有封面盘不会出现“两种界面观感断裂”。兜底盘同样跟随 <code>isPlaying</code> 缓停/起转。</p>
+  </div>
+
+  <footer>预览文件：songloft/docs/design/vinyl-groove-palette-options.html · 仅配色提案，未改动实现代码</footer>
+</div>
+
+<script>
+  const html = document.documentElement;
+  const buttons = document.querySelectorAll('.toggle button');
+  buttons.forEach(b => b.addEventListener('click', () => {
+    html.dataset.theme = b.dataset.mode;
+    buttons.forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  }));
+
+  // 唱臂绘制：把支点/臂杆/配重按固定几何拼好，暂停 6°、播放 22°
+  document.querySelectorAll('.arm').forEach(arm => {
+    const bar = arm.querySelector('.bar');
+    bar.insertAdjacentHTML('afterbegin', '');
+    const pivot = document.createElement('div'); pivot.className = 'pivot';
+    const head = document.createElement('div'); head.className = 'head';
+    const weight = document.createElement('div'); weight.className = 'weight';
+    bar.appendChild(head);
+    arm.appendChild(pivot);
+    arm.appendChild(weight);
+  });
+</script>
+</body>
+</html>
