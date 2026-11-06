@@ -38,14 +38,19 @@ const ALL_SOURCES = ['kuwo', 'qq', 'qianqian', 'migu', 'netease', 'kugou', 'bili
 // 歌词回搜顺序：酷我歌词链路最稳；qianqian 的歌词 URL 只随搜索结果下发（靠门面进程内缓存），故排最后
 const LYRIC_SOURCES = ['kuwo', 'qq', 'netease', 'migu', 'kugou', 'qianqian']
 
-// 搜索结果的源曝光顺序（单曲/专辑/歌手/歌单四类统一）：酷狗 → 网易云 → QQ → 酷我 → 咪咕 → 千千。
-// 是否启用仍由 cfg.sources 决定，本常量只决定顺序（交错/轮询合并算法不变）。
+// 搜索结果的源曝光顺序（单曲/专辑/歌手/歌单/MV 统一）：酷狗 → 网易云 → QQ → 酷我 → 咪咕 → 千千。
+// 唯一顺序声明处；是否启用仍由 cfg.sources 决定，交错/轮询合并算法不变。
 const SEARCH_SOURCE_ORDER = ['kugou', 'netease', 'qq', 'kuwo', 'migu', 'qianqian']
 
-// 默认源 = 六个 mp3 源。bilibili 在设置页手动启用（默认关）：
-//   App 内试听可用（宿主代理会带 Referer/UA 拉 fMP4/m4s），但 **DLNA 投送不可用**（音箱解不了 fMP4 分片）。
-const DEFAULT_SOURCES = SEARCH_SOURCE_ORDER.slice()
+// 源能力表（唯一声明处）：mv=true 表示该源有匿名 MV 直链通道（migu/qianqian/bilibili 无）。
+const SOURCE_MV_CAPABLE = { kugou: true, netease: true, qq: true, kuwo: true }
 
+// MV 源顺序 = 搜索顺序 ∩ 支持 MV 的源（派生，不在第二处再写源名列表）。
+// kuwo 走「在架 MV 目录」；netease/qq/kugou 走各自官方 MV 接口（实测均可匿名取直链）。
+const MV_SOURCES = SEARCH_SOURCE_ORDER.filter(s => SOURCE_MV_CAPABLE[s])
+
+// 默认源 = 六个 mp3 源（= 搜索顺序本身）。bilibili 在设置页手动启用（默认关）：
+//   App 内试听可用（宿主代理会带 Referer/UA 拉 fMP4/m4s），但 **DLNA 投送不可用**（音箱解不了 fMP4 分片）。
 // 按 SEARCH_SOURCE_ORDER 排序后的「已启用源」：避免用户历史保存的 cfg.sources 顺序残留旧曝光序。
 // bilibili 无 /search/multi 类型通道，只在单曲聚合里殿后（withBilibili=true）。
 function searchSourcesInOrder(cfg, withBilibili) {
@@ -57,7 +62,7 @@ function searchSourcesInOrder(cfg, withBilibili) {
 const DEFAULTS = {
   base: 'http://10.10.10.2:3003',
   key: '',
-  sources: DEFAULT_SOURCES,
+  sources: SEARCH_SOURCE_ORDER.slice(),
   quality: '320k',
   // 按源覆盖档位：{ kuwo: '192k', netease: 'flac' } 之类；缺省/空串 = 跟随全局
   quality_by_source: {},
@@ -365,7 +370,6 @@ router.get('/cover-search', async (req) => {
 // 契约：{ items: [{id, source, title, artist, cover, duration_s, url, quality}] }，
 // 过滤无 url 项、按可播性排序；找不到恒为 {items: []}（不 404）。MV URL 是签名短时效
 // （netease wsTime / QQ fvkey / kugou 日期路径），客户端每次点击现取——故此处不缓存。
-const MV_SOURCES = ['netease', 'qq', 'kugou', 'kuwo']   // 2026-11-06 实测可匿名取直链的四源（kuwo=在架 MV 目录）
 const MV_QUALITY_RANK = { fhd: 4, hd: 3, sd: 2, ld: 1 }
 
 function mvItem(source, raw) {
@@ -438,7 +442,7 @@ async function resolveMvItems(cfg, source, id, title, artist, timeout = 9000) {
   if (source && id && ALL_SOURCES.indexOf(source) >= 0) {
     try { add(await ask(source, id)) } catch (e) { /* 该源无 MV/不可匿名 → 交给反查 */ }
   }
-  // 2) 拿不到时按 title+artist 到支持 MV 的源反查（migu/qianqian/bilibili 无匿名 MV 通道）
+  // 2) 拿不到时按 title+artist 到其它支持 MV 的源反查（能力集见 SOURCE_MV_CAPABLE）
   if (!items.length && title) {
     for (const s of MV_SOURCES) {
       if (s === source) continue

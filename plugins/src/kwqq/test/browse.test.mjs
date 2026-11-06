@@ -102,6 +102,49 @@ test('browse/search：缺 keywords 返回 400', async () => {
   assert.equal(res.statusCode, 400);
 });
 
+const MV_ITEM = (s, id) => ({
+  id, source: s, title: '周杰伦', artist: '周杰伦', cover: 'https://c/' + s + '.jpg',
+  duration_s: 240, url: 'https://media/' + s + '/' + id + '.mp4', quality: 'hd',
+});
+const MV_SEARCH_STUBS = {
+  'kugou/search?type=mv': { total: 2, items: [{ source: 'kugou', id: 'K1', title: '周杰伦', artist: '周杰伦' }, { source: 'kugou', id: 'K2', title: '周杰伦', artist: '周杰伦' }] },
+  'netease/search?type=mv': { total: 1, items: [{ source: 'netease', id: 'N1', title: '周杰伦', artist: '周杰伦' }] },
+  'qq/search?type=mv': { total: 1, items: [{ source: 'qq', id: 'Q1', title: '周杰伦', artist: '周杰伦' }] },
+  'kuwo/search?type=mv': { total: 1, items: [{ source: 'kuwo', id: 'W1', title: '周杰伦', artist: '周杰伦' }] },
+};
+
+test('browse/search：MV 类型按统一顺序轮转（kugou→netease→qq→kuwo）+ 逐条闸门', async () => {
+  await post('/config', {});
+  setUpstream({ premium: Object.assign({}, MV_SEARCH_STUBS, {
+    'kugou/mv?': { items: [MV_ITEM('kugou', 'K1')] },
+    'netease/mv?': { items: [MV_ITEM('netease', 'N1')] },
+    'qq/mv?': { items: [MV_ITEM('qq', 'Q1')] },
+    'kuwo/mv?': { items: [MV_ITEM('kuwo', 'W1')] },
+  }) });
+  const res = await post('/browse/search', { keywords: '周杰伦', type: 'mv', limit: 6 });
+  assert.equal(res.statusCode, 200);
+  const out = JSON.parse(res.body);
+  assert.deepEqual(out.items.slice(0, 4).map(x => x.source), ['kugou', 'netease', 'qq', 'kuwo']);
+  assert.ok(out.items.every(x => x.playable === true && x.id));
+});
+
+test('browse/search：MV 源瞬时取链失败不清空整块（闸门逐条过滤，其余源照常出结果）', async () => {
+  await post('/config', {});
+  setUpstream({ premium: Object.assign({}, MV_SEARCH_STUBS, {
+    'kugou/mv?': { items: [] },          // 酷狗瞬时取链失败
+    'netease/mv?': { items: [MV_ITEM('netease', 'N1')] },
+    'qq/mv?': { items: [MV_ITEM('qq', 'Q1')] },
+    'kuwo/mv?': { items: [MV_ITEM('kuwo', 'W1')] },
+  }) });
+  const res = await post('/browse/search', { keywords: '周杰伦', type: 'mv', limit: 6 });
+  assert.equal(res.statusCode, 200);
+  const out = JSON.parse(res.body);
+  assert.ok(out.items.length > 0, '整块不得因酷狗失败而变空');
+  const srcs = out.items.map(x => x.source);
+  for (const s of ['netease', 'qq', 'kuwo']) assert.ok(srcs.includes(s), '剩余源应照常出结果：' + s);
+  assert.ok(out.items.every(x => x.playable === true && !!x.id));
+});
+
 test('album/info：netease id 走 P9b /album/detail，extra 元数据 + track_no 补齐', async () => {
   await post('/config', {});
   setUpstream({
