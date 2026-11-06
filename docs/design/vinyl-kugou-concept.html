@@ -105,7 +105,7 @@
     filter:blur(10px);
     -webkit-mask:radial-gradient(circle, transparent 0 70px, #000 74px 118px, transparent 128px);
             mask:radial-gradient(circle, transparent 0 70px, #000 74px 118px, transparent 128px);
-    animation:spin 9s linear infinite;}
+    animation:spin 20s linear infinite;}
   .paused .refract{animation-play-state:paused}
   /* 星光：点状高光，各自错峰明灭（静态层，不随盘转） */
   .spark{position:absolute;width:2px;height:2px;border-radius:50%;
@@ -115,41 +115,24 @@
   /* 盘心：封面（无中心孔，需求5）；比例与代码一致 = 0.54R */
   .label{position:absolute;left:50%;top:50%;width:54%;height:54%;transform:translate(-50%,-50%);
     border-radius:50%;overflow:hidden;border:1px solid rgba(255,255,255,.18);}
-  .label .art{position:absolute;inset:0;border-radius:50%;animation:spin 9s linear infinite;}
+  .label .art{position:absolute;inset:0;border-radius:50%;animation:spin 20s linear infinite;}
   .paused .label .art{animation-play-state:paused}
   @keyframes spin{to{transform:rotate(360deg)}}
   .cover-art{background:radial-gradient(circle at 30% 26%,#ffd39b 0%,transparent 46%),
     radial-gradient(circle at 74% 78%,#8fb3e8 0%,transparent 50%),
     linear-gradient(135deg,var(--cover),#1b2432 70%);}
 
-  /* ---------- 唱臂：参考图形态 —— 细白杆 + 顶部竖向夹具 + 灰色边缘阴影 ---------- */
+  /* ---------- 唱臂：按参考图实拍比例 —— 杆长≈0.87×盘径（近似纵贯盘面）、
+     支点在盘圆右上外侧的空角、杆身近竖直且末端 10° 折角、末端小唱头 + 极短唱针。
+     颜色：低对比半透明白（视线先落在封面与盘面上），只留极轻投影。 ---------- */
   .arm{position:absolute;inset:0;pointer-events:none}
-  /* 支点：竖向白色圆角夹座 + 中心圆柱 */
-  .arm .pivot{position:absolute;left:250px;top:30px;width:11px;height:24px;border-radius:3px;
-    transform:translate(-50%,-50%);
-    background:linear-gradient(145deg,#ffffff,#e9edf2 55%,#b9c1cb);box-shadow:0 2px 4px rgba(0,0,0,.32)}
-  .arm .pivot::after{content:"";position:absolute;left:50%;top:34%;width:7px;height:7px;border-radius:50%;
-    transform:translate(-50%,-50%);
-    background:radial-gradient(circle,#e6eaf0 0 45%,#abb3be 100%);}
-  /* 细杆：宽 2px，右侧一条灰色边缘阴影，过渡到唱头 */
-  .arm .rod{position:absolute;left:250px;top:30px;width:2px;height:80px;
-    background:linear-gradient(90deg,#ffffff 0 60%,#e2e7ee 100%);
-    box-shadow:1px 0 0 rgba(154,161,171,.55), 2px 0 2px rgba(0,0,0,.22);
-    transform-origin:50% 0;transition:transform .36s cubic-bezier(.33,1,.68,1);
-    transform:rotate(0deg);}
-  /* 唱头：沿杆方向的细长白色圆角块 + 短唱针 */
-  .arm .rod::after{content:"";position:absolute;left:-4px;bottom:-9px;width:9px;height:18px;border-radius:3px;
-    background:linear-gradient(140deg,#ffffff,#f0f3f7 60%,#cfd5de);
-    box-shadow:1px 2px 4px rgba(0,0,0,.35);}
-  /* 顶部竖向夹具（配重块）+ 两道卡扣灰线 */
-  .arm .rod::before{content:"";position:absolute;left:-7px;top:-24px;width:14px;height:22px;border-radius:3px;
-    background:
-      repeating-linear-gradient(180deg, transparent 0 7px, rgba(180,188,198,.55) 7px 8px, transparent 8px 15px),
-      linear-gradient(145deg,#ffffff,#f2f5f9 55%,#d2d8e0);
-    box-shadow:1px 1px 3px rgba(0,0,0,.28);}
-  /* 播放：+18° → 落点半径约 0.76R（沟槽环带中线）；暂停：-4° → 约 0.98R（贴盘缘） */
-  .playing .arm .rod{transform:rotate(18deg)}
-  .paused  .arm .rod{transform:rotate(-4deg)}
+  .arm svg{width:100%;height:100%;display:block;overflow:visible}
+  /* 支点像素坐标（262px 盘径）：x=0.960d=251.5，y=0.115d=30.1 */
+  .arm .armg{transform-box:view-box;transform-origin:251.5px 30.1px;
+    transition:transform .36s cubic-bezier(.33,1,.68,1)}
+  /* 播放 27° → 落点半径约 0.78R（沟槽环带中线）；暂停 15° → 约 0.99R（贴盘缘） */
+  .playing .arm .armg{transform:rotate(27deg)}
+  .paused  .arm .armg{transform:rotate(15deg)}
 
   /* ---------- 需求3：两行歌词，逐字渐变，整行上滚 ---------- */
   .lyric-window{width:100%;height:80px;overflow:hidden;margin-top:20px;position:relative}
@@ -233,7 +216,27 @@
           <div class="sheen"></div>
           <div class="refract"></div>
           <div class="label"><div class="art cover-art"></div></div>
-          <div class="arm"><div class="pivot"></div><div class="rod"></div></div>
+          <div class="arm">
+            <svg viewBox="0 0 262 262" aria-hidden="true">
+              <!-- 轴座：竖向淡白圆角夹座 + 两道卡扣细线 + 中心圆柱 -->
+              <rect x="242.3" y="9.8" width="18.3" height="40.6" rx="4.2" fill="rgba(255,255,255,.45)"/>
+              <line x1="245.2" y1="22.2" x2="257.8" y2="22.2" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+              <line x1="245.2" y1="36.9" x2="257.8" y2="36.9" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+              <circle cx="251.5" cy="31.1" r="3.7" fill="rgba(255,255,255,.30)"/>
+              <g class="armg">
+                <!-- 杆体：直杆 + 末端 10° 折角（与代码里的 Path 同坐标） -->
+                <path d="M251.5 26.9 L251.5 191.2 L241.0 250.6" stroke="rgba(16,24,32,.10)"
+                      stroke-width="3.7" stroke-linecap="round" transform="translate(1,1.5)"/>
+                <path d="M251.5 26.9 L251.5 191.2 L241.0 250.6" stroke="rgba(255,255,255,.52)"
+                      stroke-width="3.7" stroke-linecap="round"/>
+                <!-- 唱头 + 极短唱针 -->
+                <g transform="translate(241.0,250.6) rotate(10)">
+                  <rect x="-5.25" y="-6.8" width="10.5" height="13.6" rx="2.6" fill="rgba(255,255,255,.46)"/>
+                  <line x1="0" y1="6.8" x2="0" y2="13.6" stroke="rgba(142,149,159,.40)" stroke-width="0.65" stroke-linecap="round"/>
+                </g>
+              </g>
+            </svg>
+          </div>
         </div>
         <div class="lyric-window demo">
           <div class="lyric-track">
@@ -272,7 +275,27 @@
           <div class="sheen"></div>
           <div class="refract"></div>
           <div class="label"><div class="art cover-art"></div></div>
-          <div class="arm"><div class="pivot"></div><div class="rod"></div></div>
+          <div class="arm">
+            <svg viewBox="0 0 262 262" aria-hidden="true">
+              <!-- 轴座：竖向淡白圆角夹座 + 两道卡扣细线 + 中心圆柱 -->
+              <rect x="242.3" y="9.8" width="18.3" height="40.6" rx="4.2" fill="rgba(255,255,255,.45)"/>
+              <line x1="245.2" y1="22.2" x2="257.8" y2="22.2" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+              <line x1="245.2" y1="36.9" x2="257.8" y2="36.9" stroke="rgba(152,162,174,.20)" stroke-width="0.6"/>
+              <circle cx="251.5" cy="31.1" r="3.7" fill="rgba(255,255,255,.30)"/>
+              <g class="armg">
+                <!-- 杆体：直杆 + 末端 10° 折角（与代码里的 Path 同坐标） -->
+                <path d="M251.5 26.9 L251.5 191.2 L241.0 250.6" stroke="rgba(16,24,32,.10)"
+                      stroke-width="3.7" stroke-linecap="round" transform="translate(1,1.5)"/>
+                <path d="M251.5 26.9 L251.5 191.2 L241.0 250.6" stroke="rgba(255,255,255,.52)"
+                      stroke-width="3.7" stroke-linecap="round"/>
+                <!-- 唱头 + 极短唱针 -->
+                <g transform="translate(241.0,250.6) rotate(10)">
+                  <rect x="-5.25" y="-6.8" width="10.5" height="13.6" rx="2.6" fill="rgba(255,255,255,.46)"/>
+                  <line x1="0" y1="6.8" x2="0" y2="13.6" stroke="rgba(142,149,159,.40)" stroke-width="0.65" stroke-linecap="round"/>
+                </g>
+              </g>
+            </svg>
+          </div>
         </div>
         <div class="lyric-window">
           <div class="lyric-track">
@@ -302,15 +325,16 @@
 
   <div class="notes">
     <div class="note"><b>① 沟槽 / 星光</b>盘体是近透明白玻璃（无深色盘基），白色亮线 + 极淡暗线撑层次；沟槽上散布 24 颗点状星光，各自错峰明灭；盘体叠加封面主色折射，色相随封面变。星光层在旋转子树之外，不参与旋转。</div>
-    <div class="note"><b>② 唱臂</b>纯白杆体 + 灰色边缘投影；播放 18° 落在沟槽环带中线（≈0.76R），暂停 -4° 贴住盘缘（≈0.98R），360ms 过渡。</div>
+    <div class="note"><b>② 唱臂</b>极淡半透明白杆体（alpha .32–.66）+ 极轻投影；播放 27° 落在沟槽环带中线（≈0.78R），暂停 15° 贴住盘缘（≈0.99R），360ms 过渡。</div>
     <div class="note"><b>③ 两行歌词</b>固定两行窗口；当前行逐字从浅灰渐变为「封面背景色」；唱完一行整行上移一行（非整段滚动）。</div>
     <div class="note"><b>④ 背景</b>分两块：播放区从顶部「封面色 + 更显色」向下逐渐变浅，在约 2/3 处抵达控制区底色并保持到尾（接缝无硬边）；控制区浅色主题近白、深色主题为低明度浅灰；取色结果按 song/URL 缓存。</div>
     <div class="note"><b>⑤ 盘心</b>取消中心孔，封面直接作为盘心。</div>
     <div class="note"><b>⑥⑦⑧</b>歌名/歌手在盘上方、下方无两点；播放键无底板；进度条 2px 细线，浅灰轨道 / 深灰已播。</div>
     <div class="note"><b>⑨ 封面折射</b>技术路线 A：低清封面一次性烘焙成「模糊 + 半透明」纹理（预烘焙 ui.Image），放进旋转子树并用圆环裁剪（label 外 → 盘缘内）；运行时零模糊，每帧仅一次 drawImageRect + 矩阵变换。色彩分布随转动真实位移。无图时退化为封面主色薄纱（路线 B）。</div>
     <div class="note"><b>⑩ 沟槽区材质</b>整圈是半透明白的雾面（亚克力/白玻璃），沟槽只是雾面上的极细亮线 + 淡暗线；不是深色底画白线。</div>
-    <div class="note"><b>⑪ 唱臂形态</b>按参考图：细白直杆（宽约 0.0105d）+ 右侧一条灰色边缘阴影 + 顶部竖向白色夹具（两道卡扣灰线）+ 沿杆方向的细长唱头与短唱针 + 竖向圆角轴座与中心圆柱。</div>
+    <div class="note"><b>⑪ 唱臂形态</b>按参考图实拍比例：杆长约 0.87×盘径（近似纵贯盘面）、杆宽 0.014d、近竖直且末端 10° 折角；支点 (0.960d, 0.115d) 落在盘圆右上外侧的空角，轴座 0.070d×0.155d + 两道卡扣细线 + 中心圆柱；末端唱头 0.040d×0.052d、唱针 0.026d。</div>
     <div class="note"><b>⑫ 歌词字号</b>设置项「播放页歌词字号」三档（小 15 / 中 17 / 大 20，默认中）；唱盘下两行与单独歌词页共用同一档位，单独歌词页当前行逐字推进、未唱字明显更淡。</div>
+    <div class="note"><b>⑬ 转速</b>整圈 20s（代码 <code>VinylDisc.period</code> 默认 20s，turns 0→1 即一整圈）；角度按累计值推进——暂停是缓停不倒转，恢复播放与切歌都不回零，因此不会跳角度。</div>
   </div>
 
   <footer>视觉稿：songloft/docs/design/vinyl-kugou-concept.html · 唱臂形态、沟槽区材质、歌词字号已按此稿落地到客户端代码（参数如需微调可在代码内直接改）</footer>
