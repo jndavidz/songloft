@@ -91,6 +91,7 @@ const coverCache = ttlCache(24 * 3600_000, 300)
 const failCache = ttlCache(60_000, 100)
 const browseCache = ttlCache(10 * 60_000, 300)   // 浏览态（专辑/歌手/歌单/榜单/推荐），在线浏览不落库、仅内存缓存
 const commentCache = ttlCache(60_000, 100)        // 评论短缓存（热评随点赞变动）
+const creditCache = ttlCache(6 * 3600_000, 500)   // 词曲编曲（歌词头部署名行，几乎不变）
 const cfgCacheKey = '__cfg__'
 const inflight = new Map()
 
@@ -197,6 +198,44 @@ function pickBest(items, title, artist) {
     if (score > bestScore) { bestScore = score; best = it }
   }
   return bestScore > 2 ? best : (items[0] || null)
+}
+
+// ===== 词曲编曲（credits，2026-11）=====
+// 门面 /{source}/song/info 的 credits 从歌词头部署名行解析（各源各自现网实测），
+// 这里批量补进 track.source_data —— player 入库时 source_data 原样落库，歌曲信息面板直接读。
+// best-effort：并发 6、单次 2.5s、整批最多 budgetMs（浏览 1.5s，导入 5s）；取不到就不写，绝不阻塞列表。
+async function creditsFor(cfg, sd) {
+  const key = sd.s + '|' + sd.i
+  const hit = creditCache.get(key)
+  if (hit !== null) return hit
+  let path = '/' + sd.s + '/song/info?id=' + encodeURIComponent(sd.i)
+  if (sd.s === 'migu' && sd.c) path += '&copyright=' + encodeURIComponent(sd.c)
+  const data = await kwqq(cfg, path, 2500)
+  const credits = (data && data.credits) || null
+  creditCache.set(key, credits)
+  return credits
+}
+
+async function attachCredits(cfg, tracks, budgetMs) {
+  const targets = []
+  for (const t of (tracks || [])) {
+    const sd = t && t.source_data
+    if (sd && sd.s && sd.i && !sd.credits) targets.push(t)
+  }
+  if (!targets.length) return tracks
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < targets.length) {
+      const t = targets[cursor++]
+      try {
+        const credits = await creditsFor(cfg, t.source_data)
+        if (credits) t.source_data.credits = credits
+      } catch (e) { /* 单曲失败不影响列表 */ }
+    }
+  }
+  const all = Promise.all(Array.from({ length: Math.min(8, targets.length) }, worker))
+  await Promise.race([all, new Promise(resolve => setTimeout(resolve, budgetMs || 3000))])
+  return tracks
 }
 
 // 回搜（标题+歌手 → kwqq item），带缓存与 in-flight 合并
@@ -549,7 +588,11 @@ router.post('/import', async (req) => {
   } catch (e) {
     return jsonResponse({ error: 'host bridge unavailable: ' + String(e) }, 500)
   }
-  const payload = items.slice(0, 100).map((it) => {
+  const entries = items.slice(0, 100)
+  // 入库前补词曲编曲（来自列表时通常已有；直接 /api/search 来的条目在这里补一次），
+  // 显式导入动作，给 5s 总预算；拿不到就不写，不阻塞导入。
+  try { await attachCredits(await getConfig(), entries, 5000) } catch (e) {}
+  const rows = entries.map((it) => {
     const sd = it.source_data || {}
     return {
       title: it.title || sd.n || 'Unknown',
@@ -565,7 +608,7 @@ router.post('/import', async (req) => {
   const resp = await withTimeout(fetch(host + '/api/v1/songs/remote', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(rows),
   }), 20000, 'host import')
   if (!resp.ok) return jsonResponse({ error: 'host /songs/remote http ' + resp.status }, 502)
   const j = await resp.json()
@@ -677,6 +720,7 @@ async function browseSearch(body) {
 
   if (type === 'music') {
     const { merged } = await searchMusicAggregated(cfg, keywords, page, limit)
+    await attachCredits(cfg, merged, 2000)
     return { type, page, limit, isEnd: merged.length < limit ? true : undefined, items: merged }
   }
 
@@ -793,6 +837,7 @@ async function albumInfo(body) {
     const al0 = ((data && data.albums) || [])[0] || {}
     const tracks = ((data && data.items) || []).map(itemToTrack)
     for (let i = 0; i < tracks.length; i++) tracks[i].track_no = tracks[i].track_no || (i + 1)
+    await attachCredits(cfg, tracks, 2000)
     return {
       album: {
         id: String(al0.id || id),
@@ -819,6 +864,7 @@ async function albumInfo(body) {
     (artist ? '&artist=' + encodeURIComponent(artist) : ''), 12000)
   const candidates = (data && data.albums) || []
   const tracks = ((data && data.items) || []).map(itemToTrack)
+  await attachCredits(cfg, tracks, 2000)
   const al0 = candidates[0] || {}
   return {
     album: {
@@ -872,7 +918,9 @@ async function artistWorks(body) {
   const data = await kwqq(cfg, '/' + source + '/artist/works?id=' + encodeURIComponent(id) +
     '&type=' + type + '&page=' + page + '&limit=' + limit, 10000)
   if (type === 'music') {
-    return { type, page, isEnd: !!(data && data.is_end), items: ((data && data.items) || []).map(itemToTrack) }
+    const tracks = ((data && data.items) || []).map(itemToTrack)
+    await attachCredits(cfg, tracks, 2000)
+    return { type, page, isEnd: !!(data && data.is_end), items: tracks }
   }
   const items = ((data && data.items) || []).map(it => ({
     id: String(it.id), name: it.name || '', artist: it.artist || '',
@@ -905,6 +953,7 @@ async function kuwoToplistDetail(cfg, id, page, limit) {
     '&page=' + page + '&limit=' + limit, 20000)
   const tracks = ((data && data.items) || []).map(itemToResult)
   for (const t of tracks) { t.source = 'kuwo'; t.dedup_key = 'kwqq_kuwo_' + t.source_data.i }
+  await attachCredits(cfg, tracks, 2000)
   return { page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined, tracks }
 }
 
@@ -913,6 +962,7 @@ async function kuwoSheetInfo(cfg, id, page, limit) {
     '&page=' + page + '&limit=' + limit, 20000)
   const tracks = ((data && data.items) || []).map(itemToResult)
   for (const t of tracks) { t.source = 'kuwo'; t.dedup_key = 'kwqq_kuwo_' + t.source_data.i }
+  await attachCredits(cfg, tracks, 2000)
   const out = {
     page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined,
     tracks,
@@ -974,9 +1024,11 @@ async function sheetInfo(body) {
   }
   const data = await kwqq(cfg, '/' + source + '/playlist/songs?id=' + encodeURIComponent(id) +
     '&page=' + page + '&limit=' + limit, 15000)
+  const tracks = ((data && data.items) || []).map(itemToTrack)
+  await attachCredits(cfg, tracks, 2000)
   const out = {
     page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined,
-    tracks: ((data && data.items) || []).map(itemToTrack),
+    tracks,
   }
   if (page === 1 && data && data.meta) out.sheet = entryToSheet(data.meta)
   return out
@@ -1026,8 +1078,9 @@ async function toplistDetail(body) {
   }
   const data = await kwqq(cfg, '/' + source + '/toplist/songs?id=' + encodeURIComponent(id) +
     '&page=' + page + '&limit=' + limit, 15000)
-  return { page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined,
-           tracks: ((data && data.items) || []).map(itemToTrack) }
+  const tracks = ((data && data.items) || []).map(itemToTrack)
+  await attachCredits(cfg, tracks, 2000)
+  return { page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined, tracks }
 }
 
 
@@ -1092,13 +1145,19 @@ async function musicComments(body) {
   const toComment = (c) => {
     if (!c) return null
     // P9 门面 CommentEntry 形状（snake_case）→ MusicFree IComment（camelCase）
+    // 发布时间：服务端统一给 create_time（Unix 秒）；create_time_text 只在来源只有文本时才有。
+    // createAt 保留毫秒口径（旧客户端兼容），新客户端读 create_time。
+    const ts = c.create_time ? Number(c.create_time) : undefined
+    const ms = c.created_at ? Number(c.created_at) : undefined
     return {
       id: c.id || '',
       nickName: c.nick_name || '匿名用户',
       avatar: c.avatar || undefined,
       comment: c.content || '',
       like: c.like || 0,
-      createAt: c.created_at || undefined,
+      createAt: ms || (ts ? ts * 1000 : undefined),
+      create_time: ts,
+      create_time_text: c.create_time_text || undefined,
       replies: undefined,
     }
   }
