@@ -1127,21 +1127,33 @@ async function recommendSheets(body) {
 
 
 // 评论（只读，MusicFree IComment 形状；热评首页随 hotComments 一次返回）。
-// id 可省：给 title+artist 时回搜 netease id（播放页对任意来源的已入库歌开评论用）。
+// 一处入口按 source 转发到门面 /{source}/comments（四源同名方法、同形响应）；
+// 不再静默回落到 netease：source 缺省时按启用序取第一个评论能力源，并在输出里
+// 显式给出 source + fallback，客户端可据此标注来源。
+const COMMENT_SOURCES = ['netease', 'qq', 'kugou', 'kuwo']
+
 async function musicComments(body) {
-  let id = String(body.id || '').trim()
+  const id = String(body.id || '').trim()
   const title = String(body.title || '').trim()
   const artist = String(body.artist || '').trim()
   const page = Math.max(1, Number(body.page) || 1)
   const limit = Math.min(50, Math.max(1, Number(body.limit) || 20))
   if (!id && !title) return { error: 'id 或 title 至少提供一个' }
   const cfg = await getConfig()
-  // P9 门面：/netease/comments 支持 id 或 title+artist 回搜（回搜在 server 侧完成）
-  const cacheKey = 'comments|' + id + '|' + page + '|' + limit
+  const asked = String(body.source || '').trim().toLowerCase()
+  if (asked && COMMENT_SOURCES.indexOf(asked) < 0) {
+    return { error: '源 ' + asked + ' 暂不支持评论', source: asked, unsupported: true }
+  }
+  const enabled = COMMENT_SOURCES.filter(s => cfg.sources.indexOf(s) >= 0)
+  const source = asked || enabled[0] || COMMENT_SOURCES[0]
+  const fellBack = !asked
+  const cacheKey = 'comments|' + source + '|' + (id || title + '|' + artist) + '|' + page + '|' + limit
   const cached = commentCache.get(cacheKey)
   if (cached) return cached
-  const data = await kwqq(cfg, '/netease/comments?' + (id ? 'id=' + encodeURIComponent(id) : 'title=' + encodeURIComponent(title) + '&artist=' + encodeURIComponent(artist)) +
-    '&page=' + page + '&limit=' + limit, 10000)
+  const qs = id
+    ? 'id=' + encodeURIComponent(id) + '&artist=' + encodeURIComponent(artist)
+    : 'title=' + encodeURIComponent(title) + '&artist=' + encodeURIComponent(artist)
+  const data = await kwqq(cfg, '/' + source + '/comments?' + qs + '&page=' + page + '&limit=' + limit, 10000)
   const toComment = (c) => {
     if (!c) return null
     // P9 门面 CommentEntry 形状（snake_case）→ MusicFree IComment（camelCase）
@@ -1158,10 +1170,13 @@ async function musicComments(body) {
       createAt: ms || (ts ? ts * 1000 : undefined),
       create_time: ts,
       create_time_text: c.create_time_text || undefined,
-      replies: undefined,
+      // 门面契约保证 replies 恒为数组（能力不支持时为空数组），这里不再省略
+      replies: ((c.replies || []).map(toComment).filter(Boolean)),
     }
   }
   const out = {
+    source,
+    fallback: fellBack || undefined,
     page,
     total: (data && data.total) || 0,
     has_more: !!(data && data.has_more),

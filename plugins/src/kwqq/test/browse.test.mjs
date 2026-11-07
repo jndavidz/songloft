@@ -306,28 +306,46 @@ test('recommend/tags + recommend/sheets：P8 门面三平台（顶层兼容 = ne
   assert.equal(a2.items[0].play_count, 506702);
 });
 
-test('music/comments：P9 门面 /netease/comments（id 与 title 回搜两形态）', async () => {
+test('music/comments：一处入口按 source 转发（四源同名契约，不再静默回落 netease）', async () => {
   await post('/config', {});
+  const payload = (tag) => ({
+    id: 'x-1', page: 1, total: 12, has_more: true,
+    hot: [],
+    items: [{
+      id: tag + '-c1', nick_name: tag, avatar: null, content: tag + ' 评论', like: 1,
+      created_at: 1700000000001, create_time: 1700000000, create_time_text: null,
+      replies: [{
+        id: tag + '-r1', nick_name: '回复者', content: '楼中楼', like: 0,
+        created_at: null, create_time: 1699999999, create_time_text: null, replies: [],
+      }],
+    }],
+  });
   setUpstream({
     premium: {
-      'netease/comments?': {
-        id: '186145', page: 1, total: 36808, has_more: true,
-        hot: [{ id: 'h1', nick_name: '用户A', avatar: 'http://a.jpg', content: '热评', like: 100, created_at: 1700000000000, replies: [] }],
-        items: [{ id: 'c1', nick_name: '用户B', avatar: null, content: '评论', like: 1, created_at: 1700000000001, replies: [] }],
-      },
+      'netease/comments?': payload('netease'),
+      'qq/comments?': payload('qq'),
+      'kugou/comments?': payload('kugou'),
+      'kuwo/comments?': payload('kuwo'),
     },
   });
-  const r1 = await post('/music/comments', { id: '186145' });
-  const a1 = JSON.parse(r1.body);
-  assert.equal(a1.total, 36808);
-  assert.equal(a1.hot[0].nickName, '用户A');      // IComment 字段名（nickName/comment）
-  assert.equal(a1.hot[0].comment, '热评');
-  assert.equal(a1.comments[0].createAt, 1700000000001);
-
-  const r2 = await post('/music/comments', { title: '可爱女人', artist: '周杰伦' });
-  const a2 = JSON.parse(r2.body);
-  assert.equal(a2.total, 36808);
+  for (const s of ['netease', 'qq', 'kugou', 'kuwo']) {
+    const r = JSON.parse((await post('/music/comments', { id: 'x-1', source: s })).body);
+    assert.equal(r.source, s);
+    assert.equal(r.fallback, undefined);
+    assert.equal(r.comments[0].nickName, s);          // 每源各自上游，不再同一个
+    assert.equal(r.comments[0].create_time, 1700000000);
+    assert.equal(r.comments[0].createAt, 1700000000001);
+    assert.equal(r.comments[0].replies[0].comment, '楼中楼');
+  }
+  // 缺省 source：按启用序取第一个评论能力源，并显式标注 fallback（不静默冒充）
+  const r2 = JSON.parse((await post('/music/comments', { title: '可爱女人', artist: '周杰伦' })).body);
+  assert.equal(r2.source, 'netease');
+  assert.equal(r2.fallback, true);
   assert.ok(upstreamCalls.some(u => u.includes('title=%E5%8F%AF%E7%88%B1%E5%A5%B3%E4%BA%BA')));
+  // 无评论能力的源：显式报错，且不请求该源
+  const r3 = JSON.parse((await post('/music/comments', { title: 'x', source: 'migu' })).body);
+  assert.ok(r3.error && r3.unsupported);
+  assert.ok(!upstreamCalls.some(u => u.includes('migu/comments')));
 });
 
 test('browse 端点：非法 JSON body 返回 400；上游超时 → 502', async () => {
