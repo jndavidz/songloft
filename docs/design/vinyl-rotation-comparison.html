@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>唱片转动效果对比 · Songloft</title>
+<style>
+  :root{
+    --bg:#0a0a0f;
+    --card:#14141c;
+    --card2:#181822;
+    --line:rgba(255,255,255,.09);
+    --fg:#eceaf3;
+    --muted:#8f8fa3;
+    --dim:#66667a;
+    --amber:#f5c26b;
+    --amber-soft:rgba(245,194,107,.14);
+    --red:#ff5d78;
+    --green:#63d3a6;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:radial-gradient(120% 80% at 50% 0%, #16161f 0%, var(--bg) 60%);
+    color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+    padding:20px 16px 36px;
+  }
+  .wrap{max-width:420px;margin:0 auto;}
+
+  /* ---------- header ---------- */
+  .eyebrow{
+    font-size:10px;letter-spacing:.22em;color:var(--amber);
+    text-transform:uppercase;margin-bottom:10px;
+  }
+  h1{font-size:21px;line-height:1.3;margin:0 0 8px;letter-spacing:-.01em;}
+  .sub{font-size:12.5px;line-height:1.65;color:var(--muted);margin:0 0 18px;}
+  .hint{
+    display:flex;gap:8px;align-items:flex-start;
+    font-size:11.5px;line-height:1.6;color:var(--dim);
+    border-left:2px solid rgba(245,194,107,.45);
+    padding:2px 0 2px 10px;margin:10px 0 0;
+  }
+  .hint b{color:var(--amber);font-weight:600;}
+
+  /* ---------- section ---------- */
+  section{margin-top:26px;}
+  .sec-head{display:flex;align-items:baseline;gap:8px;margin-bottom:12px;}
+  .sec-no{
+    font-size:10px;font-weight:700;letter-spacing:.08em;
+    color:var(--bg);background:var(--amber);
+    border-radius:4px;padding:1px 5px;
+  }
+  h2{font-size:15px;margin:0;font-weight:650;letter-spacing:-.01em;}
+  .sec-note{font-size:11px;color:var(--dim);margin-left:auto;}
+
+  /* ---------- cards ---------- */
+  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+  .card{
+    background:linear-gradient(180deg,var(--card2),var(--card));
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:12px 10px 10px;
+    min-width:0;
+  }
+  .card-tag{
+    display:flex;align-items:center;justify-content:space-between;
+    gap:6px;margin-bottom:2px;
+  }
+  .card-tag .t{font-size:12.5px;font-weight:650;}
+  .card-tag .badge{
+    font-size:9px;letter-spacing:.06em;color:var(--muted);
+    border:1px solid var(--line);border-radius:100px;padding:1px 6px;
+  }
+  .card-cap{font-size:10.5px;line-height:1.55;color:var(--dim);margin:8px 0 0;}
+
+  /* ---------- disc stage ---------- */
+  .stage{
+    position:relative;width:100%;aspect-ratio:1/1;
+    display:flex;align-items:center;justify-content:center;
+    margin-top:8px;
+  }
+  .stage::before{
+    content:"";position:absolute;inset:6% 6% 0;
+    background:radial-gradient(circle at 50% 60%, rgba(245,194,107,.10), transparent 62%);
+    filter:blur(10px);pointer-events:none;
+  }
+  .disc{position:relative;width:88%;aspect-ratio:1/1;}
+  .spin{
+    position:absolute;inset:0;border-radius:50%;
+    will-change:transform;
+    transform:rotate(0deg);
+    backface-visibility:hidden;
+  }
+
+  /* cover art (CSS 示意) */
+  .art{
+    background:
+      radial-gradient(circle at 70% 26%, rgba(255,255,255,.9) 0 5%, rgba(255,255,255,.35) 12%, transparent 30%),
+      conic-gradient(from 205deg at 50% 52%,
+        #ff8a3d 0 16%, #e0426b 16% 40%, #7b3fd6 40% 64%, #1f9ecf 64% 86%, #ff8a3d 86% 100%);
+    background-blend-mode:screen,normal;
+    position:relative;overflow:hidden;
+  }
+  .art::after{
+    content:"";position:absolute;inset:0;
+    background:repeating-linear-gradient(45deg,rgba(255,255,255,.055) 0 1px,transparent 1px 3px);
+    mix-blend-mode:overlay;
+  }
+  .art[data-art="2"]{
+    background:
+      radial-gradient(circle at 30% 24%, rgba(255,255,255,.85) 0 4%, transparent 26%),
+      conic-gradient(from 20deg at 50% 50%,
+        #f5c26b 0 18%, #b8478f 18% 44%, #2b6fd6 44% 68%, #38c6b0 68% 88%, #f5c26b 88% 100%);
+  }
+
+  /* A: 方形封面裁圆 + 外圈沟槽，一起转 */
+  .cover-round{
+    position:absolute;inset:0;border-radius:50%;
+    overflow:hidden;
+    box-shadow:0 10px 26px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.16);
+  }
+  .cover-round .art{width:100%;height:100%;}
+  .ring-grooves{
+    position:absolute;inset:-7%;border-radius:50%;
+    background:
+      repeating-radial-gradient(circle at 50% 50%,
+        rgba(255,255,255,.10) 0 .8px,
+        rgba(0,0,0,.14) .8px 2px);
+    -webkit-mask:radial-gradient(circle, transparent 0 86%, #000 87% 100%);
+            mask:radial-gradient(circle, transparent 0 86%, #000 87% 100%);
+  }
+
+  /* B: 黑胶盘 */
+  .vinyl{
+    position:absolute;inset:0;border-radius:50%;
+    background:
+      radial-gradient(circle at 44% 38%, #33333f 0%, #16161d 42%, #0b0b10 72%, #1b1b24 100%);
+    box-shadow:
+      0 12px 30px rgba(0,0,0,.65),
+      inset 0 0 0 1px rgba(255,255,255,.10);
+  }
+  .rim{
+    position:absolute;inset:1.5%;border-radius:50%;
+    border:1px solid rgba(255,255,255,.10);
+    box-shadow:inset 0 0 10px rgba(0,0,0,.8);
+    pointer-events:none;
+  }
+  .grooves{
+    position:absolute;inset:8%;border-radius:50%;
+    background:
+      repeating-radial-gradient(circle at 50% 50%,
+        rgba(255,255,255,.075) 0 .7px,
+        rgba(0,0,0,.10) .7px 2.2px);
+    -webkit-mask:radial-gradient(circle, transparent 0 33%, #000 36% 100%);
+            mask:radial-gradient(circle, transparent 0 33%, #000 36% 100%);
+  }
+  .labeldisc{
+    position:absolute;inset:32%;border-radius:50%;
+    overflow:hidden;
+    box-shadow:0 0 0 1px rgba(255,255,255,.20), 0 0 0 4px rgba(0,0,0,.55);
+    transition:opacity .24s ease, transform .24s ease;
+  }
+  .labeldisc .art{width:100%;height:100%;}
+  .labeldisc.fading{opacity:0;transform:scale(.92);}
+  .highlight{
+    position:absolute;inset:0;border-radius:50%;
+    background:
+      conic-gradient(from 196deg,
+        transparent 0deg,
+        rgba(255,255,255,.20) 20deg,
+        rgba(255,255,255,.06) 46deg,
+        transparent 76deg),
+      linear-gradient(118deg, rgba(255,255,255,.16) 0%, rgba(255,255,255,.05) 26%, transparent 46%);
+    mix-blend-mode:screen;
+    filter:blur(3px);
+    pointer-events:none;
+  }
+  .highlight::after{
+    content:"";position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 20deg, transparent 0deg, rgba(255,255,255,.10) 14deg, transparent 40deg);
+    filter:blur(6px);
+  }
+
+  /* ---------- controls ---------- */
+  .ctl{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;}
+  button{
+    font:inherit;font-size:10.5px;line-height:1;
+    color:var(--fg);background:rgba(255,255,255,.07);
+    border:1px solid var(--line);border-radius:9px;
+    padding:8px 4px;cursor:pointer;
+    transition:background .18s ease,border-color .18s ease,transform .12s ease;
+    white-space:nowrap;
+  }
+  button:hover{background:rgba(255,255,255,.12);}
+  button:active{transform:scale(.97);}
+  button.on{background:var(--amber-soft);border-color:rgba(245,194,107,.45);color:var(--amber);}
+  .status{
+    margin-top:8px;font-size:10px;color:var(--dim);
+    display:flex;align-items:center;gap:6px;min-height:14px;
+  }
+  .dot{width:5px;height:5px;border-radius:50%;background:var(--green);flex:0 0 auto;}
+  .dot.stopped{background:var(--red);}
+
+  /* ---------- speed row ---------- */
+  .speeds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;}
+  .speed-card{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:10px 6px 9px;text-align:center;min-width:0;
+  }
+  .speed-disc{position:relative;width:100%;aspect-ratio:1/1;margin:0 auto 8px;}
+  @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+  .speed-disc .spin{animation:spin linear infinite;}
+  .s18 .spin{animation-duration:1.8s;}
+  .s7 .spin{animation-duration:7s;}
+  .s28 .spin{animation-duration:28s;}
+  .speed-title{font-size:11.5px;font-weight:650;letter-spacing:-.01em;}
+  .speed-sub{font-size:9.5px;color:var(--dim);margin-top:3px;line-height:1.5;}
+  .speed-sub b{color:var(--muted);font-weight:600;}
+  .speed-card.dimmed{border-color:rgba(255,93,120,.28);background:rgba(255,93,120,.05);}
+  .speed-card.dimmed .speed-title{color:#ff8fa2;}
+
+  /* ---------- crop demo ---------- */
+  .cropbox{display:grid;grid-template-columns:132px minmax(0,1fr);gap:12px;align-items:center;}
+  .cropsquare{
+    position:relative;width:132px;aspect-ratio:1/1;border-radius:8px;
+    overflow:hidden;border:1px solid rgba(255,255,255,.18);
+  }
+  .cropsquare .art{position:absolute;inset:0;}
+  .cropmask{
+    position:absolute;inset:0;
+    background:radial-gradient(circle at 50% 50%, transparent 0 49.5%, rgba(6,6,10,.78) 50%);
+  }
+  .cropmask::after{
+    content:"";position:absolute;inset:0;
+    background:repeating-linear-gradient(45deg,rgba(255,93,120,.22) 0 2px,transparent 2px 7px);
+    -webkit-mask:radial-gradient(circle at 50% 50%, transparent 0 49.5%, #000 50%);
+            mask:radial-gradient(circle at 50% 50%, transparent 0 49.5%, #000 50%);
+  }
+  .cropcircle{
+    position:absolute;inset:0;border-radius:50%;
+    border:1.5px dashed rgba(245,194,107,.95);
+    box-shadow:0 0 0 1px rgba(0,0,0,.5);
+  }
+  .cropnote{font-size:10px;line-height:1.7;color:var(--muted);}
+  .cropnote strong{color:var(--amber);font-weight:650;}
+  .pills{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;}
+  .pill{
+    font-size:9.5px;letter-spacing:.02em;
+    border-radius:100px;padding:2.5px 7px;border:1px solid var(--line);
+    color:var(--muted);white-space:nowrap;
+  }
+  .pill.cut{color:#ff9db0;border-color:rgba(255,93,120,.35);background:rgba(255,93,120,.08);}
+  .pill.keep{color:#8ee4c1;border-color:rgba(99,211,166,.35);background:rgba(99,211,166,.08);}
+
+  /* ---------- table ---------- */
+  table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10.5px;}
+  col.c0{width:26%;} col.c1{width:37%;} col.c2{width:37%;}
+  th,td{
+    text-align:left;vertical-align:top;
+    padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.07);
+    word-break:break-word;line-height:1.55;
+  }
+  th{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.03em;}
+  td:first-child{color:var(--dim);font-size:10px;}
+  td:nth-child(2){color:#dfe6ff;}
+  td:nth-child(3){color:#ffdda8;}
+  .warn{color:#ff9db0;}
+
+  /* ---------- footer ---------- */
+  footer{
+    margin-top:28px;padding-top:14px;border-top:1px solid var(--line);
+    font-size:10px;line-height:1.75;color:var(--dim);
+  }
+  footer b{color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow">Songloft · 视觉对比稿</div>
+  <h1>唱片转动：两档方案 + 转速对照</h1>
+  <p class="sub">左边是把封面裁圆转起来，右边是把封面做成一张真黑胶。同一套外观再跑三种转速，最后是裁角损失与成本对照。全部为 CSS 示意，可动。</p>
+
+  <!-- ================= 1. 两档并排 ================= -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">01</span>
+      <h2>两档并排</h2>
+      <span class="sec-note">两个都在转</span>
+    </div>
+
+    <div class="grid2">
+      <!-- 档 A -->
+      <div class="card">
+        <div class="card-tag">
+          <span class="t">档 A · 最简</span>
+          <span class="badge">低开销</span>
+        </div>
+        <div class="stage">
+          <div class="disc">
+            <div class="spin" data-spin="7">
+              <div class="ring-grooves"></div>
+              <div class="cover-round"><div class="art" data-art="1"></div></div>
+            </div>
+          </div>
+        </div>
+        <p class="card-cap">方形封面直接裁成圆盘，外圈加一道细沟槽环，整层匀速旋转。没有盘体、没有高光。</p>
+      </div>
+
+      <!-- 档 B -->
+      <div class="card">
+        <div class="card-tag">
+          <span class="t">档 B · 黑胶盘</span>
+          <span class="badge">质感</span>
+        </div>
+        <div class="stage">
+          <div class="disc">
+            <!-- 旋转层：盘体 + 沟槽 + 中心 label -->
+            <div class="spin" data-spin="7" id="vinylSpin">
+              <div class="vinyl"></div>
+              <div class="grooves"></div>
+              <div class="rim"></div>
+              <div class="labeldisc" id="vinylLabel"><div class="art" data-art="1" id="vinylArt"></div></div>
+            </div>
+            <!-- 静止层：高光弧固定在盘上方，不随转 -->
+            <div class="highlight"></div>
+          </div>
+        </div>
+        <div class="ctl">
+          <button id="btnPause" type="button">暂停（缓停）</button>
+          <button id="btnFade" type="button">切歌淡入</button>
+        </div>
+        <div class="status"><span class="dot" id="spinDot"></span><span id="spinText">转动中 · 7s / 圈</span></div>
+      </div>
+    </div>
+
+    <div class="hint">观察点：<b>档 B</b> 的亮弧一直停在左上角不动，只有盘心和沟槽在走——这是真黑胶的观感来源。</div>
+  </section>
+
+  <!-- ================= 2. 转速对照 ================= -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">02</span>
+      <h2>转速对照</h2>
+      <span class="sec-note">同一外观</span>
+    </div>
+
+    <div class="speeds">
+      <div class="speed-card">
+        <div class="speed-disc s18">
+          <div class="spin">
+            <div class="vinyl"></div><div class="grooves"></div><div class="rim"></div>
+            <div class="labeldisc"><div class="art" data-art="2"></div></div>
+          </div>
+          <div class="highlight"></div>
+        </div>
+        <div class="speed-title">1.8s / 圈</div>
+        <div class="speed-sub"><b>33.3 rpm</b><br>真实黑胶</div>
+      </div>
+
+      <div class="speed-card">
+        <div class="speed-disc s7">
+          <div class="spin">
+            <div class="vinyl"></div><div class="grooves"></div><div class="rim"></div>
+            <div class="labeldisc"><div class="art" data-art="2"></div></div>
+          </div>
+          <div class="highlight"></div>
+        </div>
+        <div class="speed-title">7s / 圈</div>
+        <div class="speed-sub"><b>8.6 rpm</b><br>推荐可见档</div>
+      </div>
+
+      <div class="speed-card dimmed">
+        <div class="speed-disc s28">
+          <div class="spin">
+            <div class="vinyl"></div><div class="grooves"></div><div class="rim"></div>
+            <div class="labeldisc"><div class="art" data-art="2"></div></div>
+          </div>
+          <div class="highlight"></div>
+        </div>
+        <div class="speed-title">28s / 圈</div>
+        <div class="speed-sub"><b>2.1 rpm</b><br>当前代码</div>
+      </div>
+    </div>
+
+    <div class="hint">28 秒一圈 = 每秒只走 <b>12.8°</b>。静止截图与转动截图几乎无法区分，用户会以为动画没生效。</div>
+  </section>
+
+  <!-- ================= 3. 裁角示意 ================= -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">03</span>
+      <h2>裁角损失</h2>
+      <span class="sec-note">内切圆</span>
+    </div>
+
+    <div class="card">
+      <div class="cropbox">
+        <div class="cropsquare">
+          <div class="art" data-art="1"></div>
+          <div class="cropmask"></div>
+          <div class="cropcircle"></div>
+        </div>
+        <div class="cropnote">
+          圆形与方形<b>内切</b>时，圆的直径等于方边。<br>
+          圆面积占方形 <strong>78.5%</strong>（π/4），四个角合计被裁掉 <strong>21.5%</strong>。
+          <div class="pills">
+            <span class="pill cut">四角裁掉 ≈ 21.5%</span>
+            <span class="pill keep">圆内保留 ≈ 78.5%</span>
+            <span class="pill">每角 ≈ 5.4%</span>
+          </div>
+        </div>
+      </div>
+      <p class="card-cap">斜线区即被裁掉的部分。封面上的角部文字或边角构图会一并消失，这也是档 B 把封面缩小成中心 label 的原因之一。</p>
+    </div>
+  </section>
+
+  <!-- ================= 4. 成本对照 ================= -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-no">04</span>
+      <h2>实现对照</h2>
+      <span class="sec-note">沿用上次评估口径</span>
+    </div>
+
+    <div class="card" style="padding:4px 8px 8px;">
+      <table>
+        <colgroup><col class="c0"><col class="c1"><col class="c2"></colgroup>
+        <thead>
+          <tr><th></th><th>档 A · 最简</th><th>档 B · 黑胶盘</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>改动文件</td>
+            <td>播放页封面组件单点（presentation 层）</td>
+            <td>封面组件 + 新增图层 + 播放态联动</td>
+          </tr>
+          <tr>
+            <td>代码量</td>
+            <td>小：组件内加裁剪与旋转</td>
+            <td>中大：盘体/沟槽/静止高光 + 缓停与淡入</td>
+          </tr>
+          <tr>
+            <td>运行开销</td>
+            <td>低：单层旋转；阴影保持静态</td>
+            <td>中：多一层合成；<span class="warn">高光/阴影不得放进旋转子树</span></td>
+          </tr>
+          <tr>
+            <td>视觉差异</td>
+            <td>看得出在转，但像「会转的圆图」</td>
+            <td>盘缘 + 沟槽 + 静止高光，接近真黑胶</td>
+          </tr>
+          <tr>
+            <td>风险</td>
+            <td>裁角损失 21.5%，构图可能被切</td>
+            <td>启停须跟随 <span class="warn">isPlaying</span>，否则 DLNA 假播放会空转</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="hint">表内数值为<b>定性结论</b>（沿用上次成本评估，本次未重新测量）。性能红线的根因是发光阴影若进入旋转子树且无 RepaintBoundary，会每帧重复高斯模糊。</div>
+  </section>
+
+  <footer>
+    <b>说明：</b>封面为 CSS 渐变示意，未引用任何外链图床。NAS 内容接口本轮只读实测均需 JWT（<span style="color:#8f8fa3">/songs/stats、/songs/folders → 401</span>），故未取真实封面。<br>
+    本文件为单文件视觉稿，未提交、未改代码、未动网络配置。
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  // 统一 rAF 旋转引擎：支持速率平滑收敛，用于演示缓停/重新起转
+  var spinners = Array.prototype.map.call(document.querySelectorAll('[data-spin]'), function (el) {
+    return { el: el, period: parseFloat(el.getAttribute('data-spin')) || 7, angle: 0, rate: 1, target: 1 };
+  });
+
+  var last = null;
+  function frame(now) {
+    if (last === null) last = now;
+    var dt = Math.min(48, now - last);
+    last = now;
+    // 时间常数约 170ms 的一阶收敛，肉眼即为缓停/缓起
+    var k = 1 - Math.pow(0.0025, dt / 1000);
+    for (var i = 0; i < spinners.length; i++) {
+      var s = spinners[i];
+      s.rate += (s.target - s.rate) * k;
+      if (Math.abs(s.target - s.rate) < 0.004) s.rate = s.target;
+      s.angle = (s.angle + 360 * (dt / 1000) / s.period * s.rate) % 360;
+      s.el.style.transform = 'rotate(' + s.angle + 'deg)';
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // ---------- 档 B 控件 ----------
+  var btnPause = document.getElementById('btnPause');
+  var btnFade = document.getElementById('btnFade');
+  var label = document.getElementById('vinylLabel');
+  var art = document.getElementById('vinylArt');
+  var dot = document.getElementById('spinDot');
+  var text = document.getElementById('spinText');
+  var spinning = true;
+
+  btnPause.addEventListener('click', function () {
+    spinning = !spinning;
+    spinners.forEach(function (s) { if (s.el.id === 'vinylSpin') s.target = spinning ? 1 : 0; });
+    btnPause.textContent = spinning ? '暂停（缓停）' : '继续旋转';
+    btnPause.classList.toggle('on', !spinning);
+    dot.classList.toggle('stopped', !spinning);
+    text.textContent = spinning ? '转动中 · 7s / 圈' : '已缓停 · 观察高光仍不动';
+  });
+
+  btnFade.addEventListener('click', function () {
+    if (btnFade.dataset.busy === '1') return;
+    btnFade.dataset.busy = '1';
+    label.classList.add('fading');
+    text.textContent = '切歌 · 淡出';
+    setTimeout(function () {
+      var cur = art.getAttribute('data-art');
+      art.setAttribute('data-art', cur === '1' ? '2' : '1');
+      label.classList.remove('fading');
+      text.textContent = spinning ? '切歌 · 淡入完成 · 转动中' : '切歌 · 淡入完成 · 已缓停';
+      setTimeout(function () { btnFade.dataset.busy = '0'; text.textContent = spinning ? '转动中 · 7s / 圈' : '已缓停 · 观察高光仍不动'; }, 320);
+    }, 240);
+  });
+})();
+</script>
+</body>
+</html>
