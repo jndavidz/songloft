@@ -111,3 +111,6 @@ plugins/src/pcyear-bridge
 bin/
 dist/
 node_modules/
+
+# Local debug scratch (logs/probes/db dumps)
+.tmp-logs/
