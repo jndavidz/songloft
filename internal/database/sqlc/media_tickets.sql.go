@@ -76,19 +76,26 @@ func (q *Queries) InsertMediaTicket(ctx context.Context, arg InsertMediaTicketPa
 	return err
 }
 
-const listActiveMediaTicketsByLease = `-- name: ListActiveMediaTicketsByLease :many
+const listActiveMediaTicketsByEntry = `-- name: ListActiveMediaTicketsByEntry :many
 SELECT id, token_hash, lease_id, ref_digest, representation, session, epoch, entry, target, subject, issued_at, expires_at, absolute_expires_at, revoked
 FROM media_tickets
-WHERE lease_id = ? AND revoked = 0 AND expires_at > ?
+WHERE session = ? AND epoch = ? AND entry = ? AND revoked = 0 AND expires_at > ?
 `
 
-type ListActiveMediaTicketsByLeaseParams struct {
-	LeaseID   string
+type ListActiveMediaTicketsByEntryParams struct {
+	Session   string
+	Epoch     int64
+	Entry     string
 	ExpiresAt int64
 }
 
-func (q *Queries) ListActiveMediaTicketsByLease(ctx context.Context, arg ListActiveMediaTicketsByLeaseParams) ([]MediaTicket, error) {
-	rows, err := q.db.QueryContext(ctx, listActiveMediaTicketsByLease, arg.LeaseID, arg.ExpiresAt)
+func (q *Queries) ListActiveMediaTicketsByEntry(ctx context.Context, arg ListActiveMediaTicketsByEntryParams) ([]MediaTicket, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveMediaTicketsByEntry,
+		arg.Session,
+		arg.Epoch,
+		arg.Entry,
+		arg.ExpiresAt,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -125,23 +132,19 @@ func (q *Queries) ListActiveMediaTicketsByLease(ctx context.Context, arg ListAct
 	return items, nil
 }
 
-const listActiveMediaTicketsByEntry = `-- name: ListActiveMediaTicketsByEntry :many
+const listActiveMediaTicketsByLease = `-- name: ListActiveMediaTicketsByLease :many
 SELECT id, token_hash, lease_id, ref_digest, representation, session, epoch, entry, target, subject, issued_at, expires_at, absolute_expires_at, revoked
 FROM media_tickets
-WHERE session = ? AND epoch = ? AND entry = ? AND revoked = 0 AND expires_at > ?
+WHERE lease_id = ? AND revoked = 0 AND expires_at > ?
 `
 
-type ListActiveMediaTicketsByEntryParams struct {
-	Session   string
-	Epoch     int64
-	Entry     string
+type ListActiveMediaTicketsByLeaseParams struct {
+	LeaseID   string
 	ExpiresAt int64
 }
 
-func (q *Queries) ListActiveMediaTicketsByEntry(ctx context.Context, arg ListActiveMediaTicketsByEntryParams) ([]MediaTicket, error) {
-	rows, err := q.db.QueryContext(ctx, listActiveMediaTicketsByEntry,
-		arg.Session, arg.Epoch, arg.Entry, arg.ExpiresAt,
-	)
+func (q *Queries) ListActiveMediaTicketsByLease(ctx context.Context, arg ListActiveMediaTicketsByLeaseParams) ([]MediaTicket, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveMediaTicketsByLease, arg.LeaseID, arg.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -150,9 +153,20 @@ func (q *Queries) ListActiveMediaTicketsByEntry(ctx context.Context, arg ListAct
 	for rows.Next() {
 		var i MediaTicket
 		if err := rows.Scan(
-			&i.ID, &i.TokenHash, &i.LeaseID, &i.RefDigest, &i.Representation,
-			&i.Session, &i.Epoch, &i.Entry, &i.Target, &i.Subject,
-			&i.IssuedAt, &i.ExpiresAt, &i.AbsoluteExpiresAt, &i.Revoked,
+			&i.ID,
+			&i.TokenHash,
+			&i.LeaseID,
+			&i.RefDigest,
+			&i.Representation,
+			&i.Session,
+			&i.Epoch,
+			&i.Entry,
+			&i.Target,
+			&i.Subject,
+			&i.IssuedAt,
+			&i.ExpiresAt,
+			&i.AbsoluteExpiresAt,
+			&i.Revoked,
 		); err != nil {
 			return nil, err
 		}
