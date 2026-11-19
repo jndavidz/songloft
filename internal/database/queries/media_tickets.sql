@@ -25,3 +25,8 @@ UPDATE media_tickets SET expires_at = ? WHERE token_hash = ? AND revoked = 0;
 SELECT id, token_hash, lease_id, ref_digest, representation, session, epoch, entry, target, subject, issued_at, expires_at, absolute_expires_at, revoked
 FROM media_tickets
 WHERE lease_id = ? AND revoked = 0 AND expires_at > ?;
+
+-- name: ListActiveMediaTicketsByEntry :many
+SELECT id, token_hash, lease_id, ref_digest, representation, session, epoch, entry, target, subject, issued_at, expires_at, absolute_expires_at, revoked
+FROM media_tickets
+WHERE session = ? AND epoch = ? AND entry = ? AND revoked = 0 AND expires_at > ?;

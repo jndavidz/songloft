@@ -90,6 +90,7 @@ type Querier interface {
 	LinkSongArtist(ctx context.Context, arg LinkSongArtistParams) error
 	LinkSongTag(ctx context.Context, arg LinkSongTagParams) error
 	ListActiveManagedPrepareOps(ctx context.Context) ([]ManagedPrepareOp, error)
+	ListActiveMediaTicketsByEntry(ctx context.Context, arg ListActiveMediaTicketsByEntryParams) ([]MediaTicket, error)
 	ListActiveMediaTicketsByLease(ctx context.Context, arg ListActiveMediaTicketsByLeaseParams) ([]MediaTicket, error)
 	ListAllDuplicateSongs(ctx context.Context) ([]ListAllDuplicateSongsRow, error)
 	ListAllPlaylistNames(ctx context.Context) ([]string, error)

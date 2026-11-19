@@ -125,6 +125,48 @@ func (q *Queries) ListActiveMediaTicketsByLease(ctx context.Context, arg ListAct
 	return items, nil
 }
 
+const listActiveMediaTicketsByEntry = `-- name: ListActiveMediaTicketsByEntry :many
+SELECT id, token_hash, lease_id, ref_digest, representation, session, epoch, entry, target, subject, issued_at, expires_at, absolute_expires_at, revoked
+FROM media_tickets
+WHERE session = ? AND epoch = ? AND entry = ? AND revoked = 0 AND expires_at > ?
+`
+
+type ListActiveMediaTicketsByEntryParams struct {
+	Session   string
+	Epoch     int64
+	Entry     string
+	ExpiresAt int64
+}
+
+func (q *Queries) ListActiveMediaTicketsByEntry(ctx context.Context, arg ListActiveMediaTicketsByEntryParams) ([]MediaTicket, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveMediaTicketsByEntry,
+		arg.Session, arg.Epoch, arg.Entry, arg.ExpiresAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MediaTicket{}
+	for rows.Next() {
+		var i MediaTicket
+		if err := rows.Scan(
+			&i.ID, &i.TokenHash, &i.LeaseID, &i.RefDigest, &i.Representation,
+			&i.Session, &i.Epoch, &i.Entry, &i.Target, &i.Subject,
+			&i.IssuedAt, &i.ExpiresAt, &i.AbsoluteExpiresAt, &i.Revoked,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const renewMediaTicket = `-- name: RenewMediaTicket :exec
 UPDATE media_tickets SET expires_at = ? WHERE token_hash = ? AND revoked = 0
 `

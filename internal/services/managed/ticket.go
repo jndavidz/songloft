@@ -207,8 +207,17 @@ func (t *TicketIssuer) RevokeLease(ctx context.Context, leaseID string) error {
 	return t.q.RevokeMediaTicketsByLease(ctx, leaseID)
 }
 
-// RevokeEntry 撤销某 session/epoch/entry 的全部票据（换代语义：旧代次整体失效）。
+// RevokeEntry 撤销某 session/epoch/entry 的全部票据（stop/换代语义）。
+// 与 RevokeLease 对称：先取该 entry 下所有未撤销未过期票据做进程内即时广播
+// （在途流下一次 Read 即断，不等 1s DB 轮询），再落库持久化撤销位。
 func (t *TicketIssuer) RevokeEntry(ctx context.Context, session string, epoch int64, entry string) error {
+	if actives, err := t.q.ListActiveMediaTicketsByEntry(ctx, sqlc.ListActiveMediaTicketsByEntryParams{
+		Session: session, Epoch: epoch, Entry: entry, ExpiresAt: t.Now().Unix(),
+	}); err == nil {
+		for _, rec := range actives {
+			t.notifyRevoked(rec.TokenHash)
+		}
+	}
 	return t.q.RevokeMediaTicketsByEntry(ctx, sqlc.RevokeMediaTicketsByEntryParams{Session: session, Epoch: epoch, Entry: entry})
 }
 

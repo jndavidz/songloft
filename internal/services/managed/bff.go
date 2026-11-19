@@ -125,23 +125,30 @@ func (b *ManagedBFF) ConfirmHandoffStop(session string, epoch int64) error {
 }
 
 // Execute 执行命令。旧 epoch/非 managed 阶段的播放命令一律拒绝；
-// stop 在任何阶段都接受（stop 优先），且换代时撤销该 entry 票据。
+// stop 在任何阶段都接受（stop 优先），且按票据签发 epoch 撤销该 entry 票据。
 func (b *ManagedBFF) Execute(ctx context.Context, session string, cmd Command) error {
 	b.mu.Lock()
 	s := b.session(session)
+
+	// stop 先于一切：不受 stale-epoch 前置检查约束，按调用方携带的 epoch
+	// （= prepare 签发票据时的 epoch）撤销，而非 session 的本地代次。
+	// 旧实现先做 epoch 检查再用 s.Epoch 撤销，导致票据 epoch 与 session 代次
+	// 不一致时（如 verify06：票据 epoch=4、session 默认 1）stop 被 stale epoch
+	// 拒绝、票据零撤销——这是 T0 撤票缺陷的真因之一。
+	if cmd.Name == "stop" {
+		if b.tickets != nil {
+			_ = b.tickets.RevokeEntry(ctx, session, cmd.Epoch, cmd.Entry)
+		}
+		b.mu.Unlock()
+		return nil
+	}
+
 	if cmd.Epoch != s.Epoch {
 		epoch := s.Epoch
 		b.mu.Unlock()
 		return fmt.Errorf("bff: stale epoch %d (current %d)", cmd.Epoch, epoch)
 	}
 	switch cmd.Name {
-	case "stop":
-		// stop 先于一切：接受并撤销当前代次该 entry 的在途票据
-		if b.tickets != nil {
-			_ = b.tickets.RevokeEntry(ctx, session, s.Epoch, cmd.Entry)
-		}
-		b.mu.Unlock()
-		return nil
 	case "play", "next", "jump":
 		if s.Phase != PhaseManaged {
 			phase := s.Phase
