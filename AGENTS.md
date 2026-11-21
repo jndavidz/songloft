@@ -221,3 +221,9 @@ Issues 与 specs 以 markdown 存放于 `.scratch/<feature>/`，随仓库提交�
 ### Domain docs
 
 single-context：仓库根 `GLOSSARY.md` + `docs/adr/`；不存在时静默跳过。See `docs/agents/domain.md`.
+
+## 部署唯一权威（铁律，2026-11-21）
+
+- **代码库是唯一权威**：NAS 的 `docker-compose.yml` 形态以 `deploy/nas/docker-compose.yml` 为准；NAS 出现仓库没有的配置行 = 漂移，先回写仓库再部署（凭据只写 `${VAR}` 引用，值进 NAS `.env`）。
+- **部署脚本以仓库为唯一权威**：部署前跑 `deploy/nas/preflight.sh`（漂移 + 必填键检查），非零即中止；脚本不得依赖 NAS 上未入库的调优。
+- 已知必填 `.env` 键：`ADMIN_PASSWORD`、`KWQQ_SERVICE_TOKEN`、`BRIDGE_MUSIC_TOKEN`（键名登记在 `deploy/nas/.env.example`）。

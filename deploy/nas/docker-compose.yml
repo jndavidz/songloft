@@ -6,7 +6,7 @@ services:
     image: songloft-fork:full
     container_name: songloft
     network_mode: host          # 58091 直绑宿主
-    user: "1028:100"            # 不以 root 跑，避免 Synology ACL 000 权限问题
+    user: "1028:101"            # 主组必须含 administrators（否则 DSM ACL 拒读曲库）；不以 root 跑
     volumes:
       - /volume1/music:/app/music                  # 曲库共享（\\10.10.10.2\music）
       - /volume2/docker/songloft/data:/app/data    # DB + JS 插件 + 封面缓存
@@ -16,8 +16,13 @@ services:
       - MUSIC_DIR=/app/music
       - LISTEN_PORT=58091
       - ADMIN_USERNAME=admin
-      # 口令不入库：同目录 .env 提供（600，仅 NAS 本地），2026-11-01 轮换（外网化前置）
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD missing, set it in deploy .env}
+      # 口令/令牌不入库：同目录 .env 提供（600，仅 NAS 本地）；键名见 .env.example
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD missing, set it in /volume2/docker/songloft/.env}
+      # 统一门面（kwqq-api）服务令牌：Songloft 调门面用
+      - KWQQ_SERVICE_TOKEN=${KWQQ_SERVICE_TOKEN:?KWQQ_SERVICE_TOKEN missing, set it in /volume2/docker/songloft/.env}
+      # bridge 调本服务托管接口的地址与令牌（bridge 侧同值）
+      - BRIDGE_BASE_URL=http://10.10.10.2:9092
+      - BRIDGE_MUSIC_TOKEN=${BRIDGE_MUSIC_TOKEN:?BRIDGE_MUSIC_TOKEN missing, set it in /volume2/docker/songloft/.env}
       - TZ=Asia/Shanghai
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:58091/"]
