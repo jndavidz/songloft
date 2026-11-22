@@ -1,6 +1,7 @@
 package managed
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,4 +127,46 @@ func TestVerifyMP3_RealWorldJunk(t *testing.T) {
 			t.Fatal("截断帧流（无标签标记）必须拒绝")
 		}
 	})
+}
+
+// TestVerifyMP3_TruncatedTailNeverPanics：末帧声明长度越过 EOF 的截断（线上
+// 2026-11-22 panic 源 slice bounds [N:N-36]）——文件可正常播放，验证器必须
+// 容忍（新契约）或规范拒绝（in-bounds 旧路径），绝不 panic 杀死进程。
+func TestVerifyMP3_TruncatedTailNeverPanics(t *testing.T) {
+	data, err := os.ReadFile(fixturePath(t, "valid_128k.mp3"))
+	if err != nil {
+		t.Fatalf("读 fixture 失败: %v", err)
+	}
+	knownRejects := []string{"not a recognizable", "expected frame sync", "trailing bytes"}
+	for _, cutRel := range []int{1, 2, 3, 4, 10, 36, 50, 100, 200, 400} {
+		cut := len(data) - cutRel
+		if cut <= 0 {
+			continue
+		}
+		p := filepath.Join(t.TempDir(), "trunc.mp3")
+		if werr := os.WriteFile(p, data[:cut], 0644); werr != nil {
+			t.Fatalf("写截断件失败: %v", werr)
+		}
+		rep, verr := VerifyMP3(p, VerifyExpectation{MaxBitrateKbps: 320})
+		if verr != nil && strings.Contains(verr.Error(), "runtime error") {
+			t.Fatalf("cut -%d: panic 泄漏: %v", cutRel, verr)
+		}
+		if verr != nil {
+			ok := false
+			for _, k := range knownRejects {
+				if strings.Contains(verr.Error(), k) {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				t.Fatalf("cut -%d: 非规范拒绝: %v", cutRel, verr)
+			}
+			t.Logf("cut -%d: 规范拒绝 %v", cutRel, verr)
+			continue
+		}
+		if rep == nil || rep.FrameCount == 0 {
+			t.Fatalf("cut -%d: 容忍路径应有帧", cutRel)
+		}
+	}
 }

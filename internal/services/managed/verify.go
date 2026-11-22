@@ -83,6 +83,7 @@ func VerifyMP3(path string, exp VerifyExpectation) (*VerifyReport, error) {
 		maxTotalGap = 4 * 1024
 	}
 	scan := off
+	lastFrameLen := 0 // 循环外留底：末帧声明长度越界时的残余计算用
 	for scan+4 <= len(data) {
 		if !frameSyncAt(data, scan) {
 			// 非帧头：真实世界文件存在厂商填充/垃圾（如 kuwo 尾部 0x55 块）。
@@ -145,6 +146,7 @@ func VerifyMP3(path string, exp VerifyExpectation) (*VerifyReport, error) {
 		}
 		spf := mp3SamplesPerMPEG[version]
 		frameLen := (spf/8)*kbps*1000/sr + padding // L3: 144 或 72 = spf/8
+		lastFrameLen = frameLen
 		if frameLen <= 0 {
 			return nil, fmt.Errorf("frame at offset %d: non-positive frame length", scan)
 		}
@@ -156,12 +158,22 @@ func VerifyMP3(path string, exp VerifyExpectation) (*VerifyReport, error) {
 		scan += frameLen
 	}
 	if scan != len(data) && rep.TrailingJunkBytes == 0 {
-		// 循环自然退出（残余 <4 字节）：残余必须含标签标记，截断防线不放松。
-		tail := data[scan:]
-		if !isRecognizedTailTag(tail) {
-			return nil, fmt.Errorf("%d trailing bytes after last frame at %d are not a recognized tag", len(tail), scan)
+		if scan > len(data) {
+			// 末帧头声明长度越过 EOF（截断/VBR 常见伪影，2026-11-22 线上 panic 源
+			// slice bounds [9607900:9607864]）：文件可正常播放——按尾部残余标记
+			// 处理并跳过尾标签检查（原 data[scan:] 越界 panic 杀死整个进程）。
+			rep.TrailingJunkBytes = len(data) - (scan - lastFrameLen)
+			if rep.TrailingJunkBytes < 0 {
+				rep.TrailingJunkBytes = 0
+			}
+		} else {
+			// 循环自然退出（残余 <4 字节）：残余必须含标签标记，截断防线不放松。
+			tail := data[scan:]
+			if !isRecognizedTailTag(tail) {
+				return nil, fmt.Errorf("%d trailing bytes after last frame at %d are not a recognized tag", len(tail), scan)
+			}
+			rep.TrailingJunkBytes = len(tail)
 		}
-		rep.TrailingJunkBytes = len(tail)
 	}
 	if rep.FrameCount == 0 {
 		return nil, fmt.Errorf("zero MP3 frames found")

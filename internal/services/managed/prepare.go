@@ -269,7 +269,16 @@ func (m *Manager) run(op *PrepareOp, ref *Ref) {
 	if result.SizeBytes > 0 && !result.Verification.RequiresTranscode {
 		expect.DeclaredSize = size
 	}
-	rep, err := VerifyMP3(finalPath, expect)
+	// 2026-11-22 线上事故：VerifyMP3 的末帧越界 panic 杀死整个进程（restarts=26，
+	// facts §2.74）——verify 内部防御外，此处再兜底 recover：单 op 失败 ≠ 服务器死亡。
+	rep, err := func() (rep *VerifyReport, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("verify panic (contained): %v", r)
+			}
+		}()
+		return VerifyMP3(finalPath, expect)
+	}()
 	if err != nil {
 		m.fail(op, err)
 		return
