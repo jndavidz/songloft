@@ -111,11 +111,11 @@ INSERT INTO songs (
     plugin_entry_path, source_data, dedup_key,
     year, genre, language, style,
     fingerprint, fingerprint_duration,
-    isrc, track,
+    isrc, track, disc,
     cue_source_path, cue_track_index, cue_audio_path,
     file_modified_at, is_video,
-    cue_start_seconds, cue_end_seconds
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    cue_start_seconds, cue_end_seconds, rating, radio_mode
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateSongParams struct {
@@ -147,6 +147,7 @@ type CreateSongParams struct {
 	FingerprintDuration float64
 	Isrc                string
 	Track               string
+	Disc                string
 	CueSourcePath       string
 	CueTrackIndex       int64
 	CueAudioPath        string
@@ -154,6 +155,8 @@ type CreateSongParams struct {
 	IsVideo             int64
 	CueStartSeconds     float64
 	CueEndSeconds       float64
+	Rating              int64
+	RadioMode           string
 }
 
 func (q *Queries) CreateSong(ctx context.Context, arg CreateSongParams) (int64, error) {
@@ -186,6 +189,7 @@ func (q *Queries) CreateSong(ctx context.Context, arg CreateSongParams) (int64, 
 		arg.FingerprintDuration,
 		arg.Isrc,
 		arg.Track,
+		arg.Disc,
 		arg.CueSourcePath,
 		arg.CueTrackIndex,
 		arg.CueAudioPath,
@@ -193,6 +197,8 @@ func (q *Queries) CreateSong(ctx context.Context, arg CreateSongParams) (int64, 
 		arg.IsVideo,
 		arg.CueStartSeconds,
 		arg.CueEndSeconds,
+		arg.Rating,
+		arg.RadioMode,
 	)
 	if err != nil {
 		return 0, err
@@ -252,7 +258,7 @@ SELECT id, type, title, artist, album, duration, file_path, url,
     cue_source_path, cue_track_index, cue_audio_path,
     file_modified_at, track, language, style, is_video,
     cue_start_seconds, cue_end_seconds, fingerprint_attempted_at,
-    fingerprint_error
+    fingerprint_error, disc, rating, radio_mode, metadata_override_mask, metadata_edited_at, radio_detected_mode
 FROM songs WHERE id = ?
 `
 
@@ -301,6 +307,12 @@ func (q *Queries) GetSongByID(ctx context.Context, id int64) (Song, error) {
 		&i.CueEndSeconds,
 		&i.FingerprintAttemptedAt,
 		&i.FingerprintError,
+		&i.Disc,
+		&i.Rating,
+		&i.RadioMode,
+		&i.MetadataOverrideMask,
+		&i.MetadataEditedAt,
+		&i.RadioDetectedMode,
 	)
 	return i, err
 }
@@ -518,6 +530,49 @@ func (q *Queries) ListFailedFingerprints(ctx context.Context) ([]ListFailedFinge
 			&i.FilePath,
 			&i.FingerprintError,
 			&i.FingerprintAttemptedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIndexedLocalTracks = `-- name: ListIndexedLocalTracks :many
+SELECT id, file_path, title, artist, album FROM songs
+WHERE type = 'local' AND file_path != ''
+ORDER BY file_path, id
+`
+
+type ListIndexedLocalTracksRow struct {
+	ID       int64
+	FilePath string
+	Title    string
+	Artist   string
+	Album    string
+}
+
+func (q *Queries) ListIndexedLocalTracks(ctx context.Context) ([]ListIndexedLocalTracksRow, error) {
+	rows, err := q.db.QueryContext(ctx, listIndexedLocalTracks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListIndexedLocalTracksRow{}
+	for rows.Next() {
+		var i ListIndexedLocalTracksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FilePath,
+			&i.Title,
+			&i.Artist,
+			&i.Album,
 		); err != nil {
 			return nil, err
 		}
@@ -794,7 +849,7 @@ SELECT id, type, title, artist, album, duration, file_path, url,
     cue_source_path, cue_track_index, cue_audio_path,
     file_modified_at, track, language, style, is_video,
     cue_start_seconds, cue_end_seconds, fingerprint_attempted_at,
-    fingerprint_error
+    fingerprint_error, disc, rating, radio_mode, metadata_override_mask, metadata_edited_at, radio_detected_mode
 FROM songs WHERE cache_path != ''
 `
 
@@ -849,6 +904,12 @@ func (q *Queries) ListSongsWithCache(ctx context.Context) ([]Song, error) {
 			&i.CueEndSeconds,
 			&i.FingerprintAttemptedAt,
 			&i.FingerprintError,
+			&i.Disc,
+			&i.Rating,
+			&i.RadioMode,
+			&i.MetadataOverrideMask,
+			&i.MetadataEditedAt,
+			&i.RadioDetectedMode,
 		); err != nil {
 			return nil, err
 		}
@@ -899,6 +960,25 @@ type UpdateCachePathParams struct {
 func (q *Queries) UpdateCachePath(ctx context.Context, arg UpdateCachePathParams) error {
 	_, err := q.db.ExecContext(ctx, updateCachePath, arg.CachePath, arg.ID)
 	return err
+}
+
+const updateRadioDetectedMode = `-- name: UpdateRadioDetectedMode :execrows
+UPDATE songs SET radio_detected_mode = ?1
+WHERE id = ?2 AND type = 'radio' AND url = ?3 AND radio_mode = ''
+`
+
+type UpdateRadioDetectedModeParams struct {
+	Mode string
+	ID   int64
+	Url  string
+}
+
+func (q *Queries) UpdateRadioDetectedMode(ctx context.Context, arg UpdateRadioDetectedModeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateRadioDetectedMode, arg.Mode, arg.ID, arg.Url)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateRemoteSongMutable = `-- name: UpdateRemoteSongMutable :exec
@@ -971,10 +1051,10 @@ UPDATE songs SET
     plugin_entry_path = ?, source_data = ?, dedup_key = ?,
     year = ?, genre = ?, language = ?, style = ?,
     fingerprint = ?, fingerprint_duration = ?,
-    isrc = ?, track = ?,
+    isrc = ?, track = ?, disc = ?,
     cue_source_path = ?, cue_track_index = ?, cue_audio_path = ?,
     file_modified_at = ?, is_video = ?,
-    cue_start_seconds = ?, cue_end_seconds = ?
+    cue_start_seconds = ?, cue_end_seconds = ?, rating = ?, radio_mode = ?
 WHERE id = ?
 `
 
@@ -1007,6 +1087,7 @@ type UpdateSongParams struct {
 	FingerprintDuration float64
 	Isrc                string
 	Track               string
+	Disc                string
 	CueSourcePath       string
 	CueTrackIndex       int64
 	CueAudioPath        string
@@ -1014,6 +1095,8 @@ type UpdateSongParams struct {
 	IsVideo             int64
 	CueStartSeconds     float64
 	CueEndSeconds       float64
+	Rating              int64
+	RadioMode           string
 	ID                  int64
 }
 
@@ -1047,6 +1130,7 @@ func (q *Queries) UpdateSong(ctx context.Context, arg UpdateSongParams) (int64, 
 		arg.FingerprintDuration,
 		arg.Isrc,
 		arg.Track,
+		arg.Disc,
 		arg.CueSourcePath,
 		arg.CueTrackIndex,
 		arg.CueAudioPath,
@@ -1054,6 +1138,8 @@ func (q *Queries) UpdateSong(ctx context.Context, arg UpdateSongParams) (int64, 
 		arg.IsVideo,
 		arg.CueStartSeconds,
 		arg.CueEndSeconds,
+		arg.Rating,
+		arg.RadioMode,
 		arg.ID,
 	)
 	if err != nil {
@@ -1091,6 +1177,27 @@ type UpdateSongDurationParams struct {
 
 func (q *Queries) UpdateSongDuration(ctx context.Context, arg UpdateSongDurationParams) error {
 	_, err := q.db.ExecContext(ctx, updateSongDuration, arg.Duration, arg.ID)
+	return err
+}
+
+const updateSongFileObservation = `-- name: UpdateSongFileObservation :exec
+UPDATE songs SET file_size = ?, file_modified_at = ? WHERE id = ? AND file_path = ?
+`
+
+type UpdateSongFileObservationParams struct {
+	FileSize       int64
+	FileModifiedAt sql.NullTime
+	ID             int64
+	FilePath       string
+}
+
+func (q *Queries) UpdateSongFileObservation(ctx context.Context, arg UpdateSongFileObservationParams) error {
+	_, err := q.db.ExecContext(ctx, updateSongFileObservation,
+		arg.FileSize,
+		arg.FileModifiedAt,
+		arg.ID,
+		arg.FilePath,
+	)
 	return err
 }
 
@@ -1162,10 +1269,10 @@ UPDATE songs SET
     bit_rate    = CASE WHEN bit_rate = 0    AND ? > 0   THEN ? ELSE bit_rate END,
     sample_rate = CASE WHEN sample_rate = 0 AND ? > 0   THEN ? ELSE sample_rate END,
     format      = CASE WHEN format = ''     AND ? != '' THEN ? ELSE format END,
-    title       = CASE WHEN title = ''      AND ? != '' THEN ? ELSE title END,
-    artist      = CASE WHEN artist = ''     AND ? != '' THEN ? ELSE artist END,
-    album       = CASE WHEN album = ''      AND ? != '' THEN ? ELSE album END,
-    cover_path  = CASE WHEN cover_path = '' AND ? != '' THEN ? ELSE cover_path END,
+    title       = CASE WHEN title = ''      AND ? != '' AND (metadata_override_mask & 1) = 0 THEN ? ELSE title END,
+    artist      = CASE WHEN artist = ''     AND ? != '' AND (metadata_override_mask & 2) = 0 THEN ? ELSE artist END,
+    album       = CASE WHEN album = ''      AND ? != '' AND (metadata_override_mask & 4) = 0 THEN ? ELSE album END,
+    cover_path  = CASE WHEN cover_path = '' AND ? != '' AND (metadata_override_mask & 1024) = 0 THEN ? ELSE cover_path END,
     updated_at  = CURRENT_TIMESTAMP
 WHERE id = ?
 `
@@ -1190,6 +1297,7 @@ type UpdateSongMetadataParams struct {
 	ID         int64
 }
 
+// Manual bits follow models.SongMetadataMask values (title, artist, album, picture).
 func (q *Queries) UpdateSongMetadata(ctx context.Context, arg UpdateSongMetadataParams) error {
 	_, err := q.db.ExecContext(ctx, updateSongMetadata,
 		arg.Column1,
@@ -1213,6 +1321,23 @@ func (q *Queries) UpdateSongMetadata(ctx context.Context, arg UpdateSongMetadata
 	return err
 }
 
+const updateSongRating = `-- name: UpdateSongRating :execrows
+UPDATE songs SET rating = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+`
+
+type UpdateSongRatingParams struct {
+	Rating int64
+	ID     int64
+}
+
+func (q *Queries) UpdateSongRating(ctx context.Context, arg UpdateSongRatingParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateSongRating, arg.Rating, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateSongSource = `-- name: UpdateSongSource :exec
 UPDATE songs SET plugin_entry_path = ?, source_data = ?, updated_at = CURRENT_TIMESTAMP
 WHERE id = ?
@@ -1231,9 +1356,9 @@ func (q *Queries) UpdateSongSource(ctx context.Context, arg UpdateSongSourcePara
 
 const updateSongTagFields = `-- name: UpdateSongTagFields :exec
 UPDATE songs SET
-    title  = CASE WHEN ? != '' THEN ? ELSE title END,
-    artist = CASE WHEN ? != '' THEN ? ELSE artist END,
-    album  = CASE WHEN ? != '' THEN ? ELSE album END,
+    title  = CASE WHEN ? != '' AND (metadata_override_mask & 1) = 0 THEN ? ELSE title END,
+    artist = CASE WHEN ? != '' AND (metadata_override_mask & 2) = 0 THEN ? ELSE artist END,
+    album  = CASE WHEN ? != '' AND (metadata_override_mask & 4) = 0 THEN ? ELSE album END,
     updated_at = CURRENT_TIMESTAMP
 WHERE id = ?
 `
@@ -1248,6 +1373,7 @@ type UpdateSongTagFieldsParams struct {
 	ID      int64
 }
 
+// Manual bits follow models.SongMetadataMask values (title, artist, album).
 func (q *Queries) UpdateSongTagFields(ctx context.Context, arg UpdateSongTagFieldsParams) error {
 	_, err := q.db.ExecContext(ctx, updateSongTagFields,
 		arg.Column1,

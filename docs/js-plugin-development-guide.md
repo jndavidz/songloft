@@ -301,6 +301,8 @@ static/              # 静态资源目录（可选）
 - 安装 `@songloft/lynx-plugin-sdk` 作为宿主通信 SDK（替代 WebView 下的 `@songloft/client-sdk`）
 - `plugin.json` 中设置 `"staticHash": false`（防止 bundle 文件被重命名）
 
+服务端对完整 GET 的 `.bundle` 响应按客户端 `Accept-Encoding` 启用压缩，降低首次加载传输量；Range 响应和 HEAD 保持原始字节长度，条件缓存仍返回 304。插件应先显示页面框架，再异步加载配置与业务数据，避免首屏等待网络。
+
 构建产物结构：
 
 ```
@@ -313,6 +315,26 @@ static/
 **与宿主通信**：Lynx 插件不使用 `window.SongloftPlugin` / `@songloft/client-sdk`（那些是 WebView 专用），而是通过 `@songloft/lynx-plugin-sdk` 提供的 `invokeHost` / `onPlayerState` / `onThemeChange` 等 API，底层走 `NativeModules.SongloftPluginBridge` 原生桥。
 
 **回退机制**：不支持 Lynx 的客户端（如 Flutter 版本）会打开 `index.html`，由 web-core 加载 `.web.bundle` 在 WebView 中渲染——功能等价，只是失去原生性能优势。
+
+服务端按内嵌内容为 Lynx 回退页引用的宿主桥接脚本和模块生成版本 URL。插件可在回退页的桥接脚本标签上通过 `data-songloft-lynx-bundle` 声明自己的 Web bundle 地址，例如 `static/main.web.bundle?v=<内容哈希>`。相对地址以插件页面的 `<base>` 为基准，未声明时使用原有固定地址。
+
+**工具链 2.22.0 起自动完成这一步**：`songloft-plugin build` 平铺 `main.web.bundle` 时按内容计算 SHA-256 前 16 位，并在生成的回退页上声明带版本的地址。插件自带 `static/index.html` 时仍以插件的为准（构建时插件 `static/` 覆盖 builder 生成的页面），声明格式不变；带版本地址需要新版服务端（`lynx-plugin-bridge-shim` 读取声明）配合。
+
+**静态资源缓存**
+
+- 宿主文件随服务端发布，版本由服务端依据实际内容生成。插件自己的 JS、CSS、图片和字体应在构建时使用带内容哈希的文件名或 URL，并同步更新引用。内容相同可复用缓存，内容变化就请求新地址。
+- 工具链构建时会给 static/ 下的 JS、CSS、图片和字体文件名注入内容哈希并改写引用（manifest `staticHash: false` 可关闭）。Lynx 的 `main.web.bundle` / `main.lynx.bundle` 保持固定文件名以兼容直接加载固定入口的客户端及旧版宿主，其缓存版本由回退页声明（见上）。MIoT 和 Bili 早期用自定义脚本生成带版本的 `static/index.html`，该行为自工具链 2.22.0 起内置，升级依赖后自定义脚本可下线。
+- 验收时检查最终 ZIP 中的 HTML 声明与 bundle 哈希是否一致，再打开带部署子路径的回退页，确认浏览器实际请求新地址。只修改旧 URL 的缓存响应头，已经缓存一年的客户端仍可能继续用旧内容。
+
+Lynx 业务请求使用 `@songloft/lynx-plugin-sdk` 的 `apiGet<T>('/api/...')` / `apiPost<T>(path, body)` / `apiPut<T>(path, body)` / `apiDelete<T>(path)`。SDK 通过 `plugin.apiRequest` 调用当前 frame 的宿主；插件身份、认证和服务器子路径由宿主处理，插件不读取 Token。支持 GET/POST/PUT/DELETE JSON，请求最长 60 秒，桥接等待 65 秒；错误抛出异常。路径仅限当前插件 `/api` 下，禁止绝对 URL、编码路径及路径穿越。需要更新后的 Lynx 宿主，或服务端提供的 Web 回退 shim。
+
+
+`PluginSocket('/status/ws?...')` 提供当前插件内的文本 WebSocket，具有 `readyState`、`onopen/onmessage/onerror/onclose`、`send` 和 `close`。宿主构造认证 URL、限制每 frame 八条连接并在释放 frame 时清理；插件只能传相对路径，不能传服务器或 Token。推送事件为 `pluginSocket`（`{id,type,data?}`），HTTP/WS 前缀由业务路由保持一致。切后台应关闭业务连接，恢复后重新核对状态。
+
+复杂插件通过 `plugin.navigationState` / `plugin.navigationResult` 与 `navigationBack` 推送实现逐层返回；会话标识和请求 id 必须原样关联，过期响应不消费新页面的返回。外链走 `plugin.openUrl`（仅 HTTP/HTTPS）；歌曲封面走 `plugin.resourceUrl`（仅宿主歌曲封面端点）。这些能力要求配套新版宿主，不能用自定义全局对象替代 SDK。
+
+Web 回退通过 `/api/v1/jsplugin-assets/web-core/*` 加载运行时。完整版服务端自动复用内嵌 Lynx Web 的 `web-core/`，无需额外拷贝；lite 或嵌入 Flutter Web 的旧构建仍需提供磁盘目录（依次查找 `data/web-core/`、工作目录 `web-core/`、可执行文件旁 `web-core/`）。磁盘目录优先覆盖整套运行时，不与内嵌文件混用；固定名称资源使用 `no-cache`，升级后重新校验。工具链生成的入口先配置桥接，再以绝对地址加载 bundle。Lynx HTML 回退不发送 COEP 响应头，以兼容 Chromium 121 的 web-core srcdoc 初始化；普通 WebView 插件仍发送 `credentialless`。因此从启用隔离的宿主页跨源嵌入该 HTML 回退不在本次支持范围；Lynx 宿主直接加载原生/Web bundle，不经过该入口。
+
 
 ---
 
@@ -441,6 +463,8 @@ globalThis.onWebSocket = async function(req, socket) {
 ### HTTP 请求（全局 fetch）
 
 使用标准全局 `fetch` 函数发起 HTTP 请求（由运行时 polyfill 提供，返回 Promise）。**无需声明权限**。
+
+宿主运行时的 `fetch` 和 `songloft.net.httpStream` 优先使用 Songloft 的全局 HTTP 代理设置（`/settings/http-proxy`），修改后对后续请求即时生效，无需重启或重载插件。设置为空时，按进程的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`（也支持小写）处理。回环目标自动直连。此规则适用于插件后端的请求，浏览器页面中的 `fetch` 由浏览器处理。
 
 ```javascript
 // GET
@@ -611,7 +635,8 @@ async function songsExample() {
     file_path: "/path/to/file.mp3",
     url: "",
     cover_url: "",        // 封面 URL（CoverPath 内部字段不会序列化输出）
-    is_video: false       // 是否为视频容器
+    is_video: false,      // 是否为视频容器
+    rating: 80            // 评级 0-100（0=未评级；星级 UI 按 20/颗映射）；宿主 v2.14.0+ 提供
 }
 ```
 
@@ -629,15 +654,45 @@ async function playlistsExample() {
 ```
 
 
+歌单成员结果（包括 `brief: true`）另带 `playlist_added_at`，是 `playlist_songs.added_at` 的 RFC 3339 时间；`Song.added_at` 保持曲库入库时间。相同歌曲在不同歌单中可以有不同加入时间，普通歌曲详情不带这个字段。排序及原子替换中保留的成员保持原加入时间；移除后重新添加会记录新的时间。
+
 ### 歌单原子同步与延迟元数据探测
 
 包含 #558 支持的宿主提供 `await songloft.playlists.replaceSongs(playlistId, songIds)`（`playlists.write`）。仅普通歌单可用；成员及顺序在一个 UnitOfWork 事务中替换，空数组清空，缺失/重复/类型不匹配的 ID 拒绝，任一写入失败均回滚。内置歌单禁止使用此整表替换接口，原有增删及排序接口不受影响。
 
 目录同步可使用 `await songloft.songs.create(inputs, { probeMetadata: false })`（`songs.write`），仅导入歌曲信息，不触发后台音频探测。省略选项时保持原有自动补齐元数据行为。该选项不下载文件，也不改变播放时的地址解析。旧宿主缺少原子接口时，应停止同步并提示升级，不要退回「先清空、后添加」。
 
+### songloft.events — 歌单成员变更
+
+包含 #563 支持的宿主提供 `onPlaylistSongsChange(handler)` / `offPlaylistSongsChange()`，两者均返回 Promise。订阅需要 `playlists.read`（或 `playlists.*`）权限；每个插件只有一个处理器，再次注册会替换处理器。服务端 QuickJS 订阅不依赖设置页 WebView 是否打开。
+
+```javascript
+async function onInit() {
+    if (!songloft.events.onPlaylistSongsChange) {
+        throw new Error('请升级宿主以订阅歌单成员变更');
+    }
+    await songloft.events.onPlaylistSongsChange(async function(event) {
+        if (event.playlistId !== 1) return; // 内置「收藏」
+        // event.type === 'add' 对应 love，'remove' 对应 unlove。
+        // 使用 event.song.title / artist 调用第三方同步 API。
+        console.log(event.type, event.song.title, event.song.artist);
+    });
+}
+```
+
+事件字段：`playlistId`、`songId`、`type: 'add' | 'remove'`、`timestamp`（提交通知时的 Unix 毫秒），以及 `song: { id, title, artist }` 元数据快照。快照可在移除后歌曲被清理时继续使用。
+
+通知覆盖客户端 HTTP 与插件 `playlists.addSongs/removeSongs/replaceSongs` 经歌单服务执行的成员增删，包含收藏（id=1）、电台收藏（id=2）和普通歌单。批量添加只通知实际新增行，重复、跳过项不通知；较早批次已提交、后续批次失败时仍通知已提交部分。整表替换提交后通知真实增删差集；事务回滚、纯排序、相同成员的重排均不通知。删除歌单／曲库歌曲的级联清理、备份恢复和本地转换的内部关联替换不在本事件范围内。
+
+处理器可使用 async/await；分发经有界队列异步执行，单个写入调用不会等待插件网络请求。顺序写入按通知入队顺序投递；并发写入没有全局事务顺序保证。事件不持久化或重放，队列满、插件异常或服务重启可能丢失通知；同步插件仍应保留定期对账。
+
+空闲驱逐保留订阅身份，下次变更会唤醒插件；必须在 `onInit` 中恢复处理器（按存储的功能开关决定是否订阅）。主动 `await songloft.events.offPlaylistSongsChange()` 或禁用插件会取消订阅；需要休眠唤醒时不要在 `onDeinit` 中主动取消。重载会重新检查当前权限。QuickJS 事件不直接向 WebView 推送。新版 Flutter / Lynx 客户端认证后通过 `GET /api/v1/playlists/favorites/changes?cursor=...` 等待收藏失效通知；首次连接、断线重连和服务端重启后会重新读取收藏，歌曲／电台收藏提交后会立即唤醒等待请求并刷新红心与内置歌单缓存。无变更时服务端最多挂起 25 秒，客户端不周期性全量扫描；后台或会话切换停止当前订阅，恢复后重新对账。旧宿主返回 404 时停用这项自动订阅。插件页面仍可调用 `favorite.refresh` 保持旧客户端兼容，QuickJS 无需调用客户端桥。
+
 ### songloft.tags — 自定义标签
 
 需要权限：`tags.read`（读取）或 `tags.write`（修改）；或者通配符糖 `tags.*`。
+
+包含 #562 支持的宿主允许歌曲与歌单复用同一标签定义。`song_count` 为歌曲数，`playlist_count` 为可见歌单数；歌单引用存于现有 `labels` 的 `tag:<id>`，保留系统标记。绑定关系走标签接口，普通元数据编辑保留当前绑定；删除标签在同一事务中清理两类关联。
 
 ```javascript
 async function tagsExample() {
@@ -664,16 +719,16 @@ async function tagsExample() {
     var newTag = await songloft.tags.create({ name: "我的标签", color: "#ff6600" });
 
     // 更新标签
-    await songloft.tags.update({ id: 1, name: "新名称", color: "#00cc00" });
+    await songloft.tags.update(1, { name: "新名称", color: "#00cc00" });
 
     // 删除标签
     await songloft.tags.delete(1);
 
     // 批量绑定歌曲到标签（返回 { bound: <实际绑定数> }）
-    var result = await songloft.tags.bindSongs({ tagId: 1, songIds: [10, 20, 30] });
+    var result = await songloft.tags.bindSongs(1, [10, 20, 30]);
 
     // 批量解绑歌曲（返回 { unbound: <实际解绑数> }）
-    var result2 = await songloft.tags.unbindSongs({ tagId: 1, songIds: [10, 20] });
+    var result2 = await songloft.tags.unbindSongs(1, [10, 20]);
 }
 ```
 
@@ -684,11 +739,14 @@ async function tagsExample() {
 | `list(options?)` | `tags.read` | `{ keyword?, orderBy?, order?, limit?, offset? }` | Tag[] |
 | `getById(id)` | `tags.read` | `id: number` | Tag |
 | `getSongTags(songId)` | `tags.read` | `songId: number` | Tag[] |
+| `getPlaylistTags(playlistId)` | `tags.read` | `playlistId: number` | Tag[] |
+| `bindPlaylists(tagId, playlistIds)` | `tags.write` | `number, number[]` | `{ bound: number }` |
+| `unbindPlaylists(tagId, playlistIds)` | `tags.write` | `number, number[]` | `{ unbound: number }` |
 | `create(options)` | `tags.write` | `{ name: string, color: string }` | Tag |
-| `update(options)` | `tags.write` | `{ id: number, name: string, color: string }` | void |
+| `update(id, fields)` | `tags.write` | `number, { name?: string, color?: string }` | void |
 | `delete(id)` | `tags.write` | `id: number` | void |
-| `bindSongs(options)` | `tags.write` | `{ tagId: number, songIds: number[] }` | `{ bound: number }` |
-| `unbindSongs(options)` | `tags.write` | `{ tagId: number, songIds: number[] }` | `{ unbound: number }` |
+| `bindSongs(tagId, songIds)` | `tags.write` | `number, number[]` | `{ bound: number }` |
+| `unbindSongs(tagId, songIds)` | `tags.write` | `number, number[]` | `{ unbound: number }` |
 
 ### songloft.comm — 插件间通信
 
@@ -733,7 +791,7 @@ async function pluginInfoExample() {
     // 获取插件的 JWT Token（用于访问宿主 API，如音乐文件、封面等需认证的资源）
     var token = await songloft.plugin.getToken();
 
-    // 获取宿主服务的基础 URL（如 http://192.168.1.100:58091）
+    // 获取宿主服务的基础 URL（如 http://localhost:58091/songloft）
     var hostUrl = await songloft.plugin.getHostUrl();
 }
 ```
@@ -744,17 +802,14 @@ async function pluginInfoExample() {
 async function getMusicUrl(songId) {
     var host = await songloft.plugin.getHostUrl();
     var token = await songloft.plugin.getToken();
-    return host + "/music/" + encodedPath + "?access_token=" + token;
+    return host + "/api/v1/songs/" + songId + "/play?access_token=" + token;
 }
 ```
 
 **方法说明：**
 - `getToken()` — 返回当前有效的短期插件票据（约 1 小时），可用于访问宿主的受保护 API。票据按插件主体签发，scope 来自 `permissions`；宿主会在过期前自动重签，插件无需缓存或自行续期
-- `getHostUrl()` — 返回宿主服务的基础 URL，用于构建完整的 API 或资源地址
-
-> 插件票据只能访问数据面（歌曲/歌单/标签/资源代理）与自己的 `/api/v1/jsplugin/{entryPath}/*`。
-> 设置、配置、扫描、升级、插件管理等管理端点没有对应 scope，插件票据永远无法访问。
-> 插件更新、禁用、卸载或管理员撤销后，旧票据立即失效；宿主重启也会让旧票据失效。
+- `getHostUrl()` — 返回带部署路径的回环基础 URL。直接拼接 `/api/v1/...` 可访问宿主 API
+- `getNetworkAddresses()` — 返回本机局域网 IPv4 基础 URL 列表，每个地址都带部署路径
 
 ### songloft.lyrics — 歌词提供者
 
@@ -993,31 +1048,6 @@ globalThis.onHTTPRequest = (req: HTTPRequest) => router.handle(req);
 }
 ```
 
-### HTTP scope 与 manifest 一致
-
-`plugin.getToken()` 拿到的票据只携带 manifest 已声明的 HTTP scope：
-
-| 路径 | 方法 | 需要的 scope |
-|---|---|---|
-| `/api/v1/songs*`（含 play/lyric/cover） | GET/HEAD | `songs.read` |
-| `/api/v1/songs*` | 其他 | `songs.write` |
-| `/api/v1/playlists*` | GET/HEAD | `playlists.read` |
-| `/api/v1/playlists*` | 其他 | `playlists.write` |
-| `/api/v1/song-tags*`、`/api/v1/songs/{id}/song-tags` | GET/HEAD | `tags.read` |
-| 同上 | 其他 | `tags.write` |
-| `/api/v1/play-history` | GET | `songs.read` |
-| `/api/v1/proxy*` | 任意 | `net` |
-| `/api/v1/jsplugin/{自己的 entryPath}/*` | 任意 | 无需额外 scope |
-
-未归类路径一律 403，包括 `/api/v1/settings/*`、`/api/v1/configs/*`、`/api/v1/scan`、`/api/v1/auth/*`、
-`/api/v1/upgrade/*` 与 `/api/v1/jsplugins/*`。通配符糖（`songs.*` 等）在签发时展开为具体 scope。
-
-> 兼容窗口：升级后的有界窗口内（默认 14 天，`plugin_credential_legacy_until` 控制），宿主仍接受旧的
-> `plugin-system` 百年票据与全插件 scope 的新票据，方便存量插件迁移；全新安装没有存量插件，
-> 窗口直接关闭，从第一天起就是 manifest 最小 scope。窗口内旧票据保留原有数据面行为（含插件自身路径），
-> 但管理面始终不可达；窗口结束后旧票据彻底拒绝。`POST /api/v1/jsplugins/revoke-all-credentials`
-> 可立即吊销全部票据并关闭窗口。
-
 ---
 
 ## 7. 插件间通信
@@ -1144,7 +1174,7 @@ const { apiGet, apiPost } = SongloftPlugin;
 
 在 Songloft 客户端中打开的插件页面，可通过 `window.SongloftPlugin.host` / `.player` 调用宿主客户端能力——最常见的是改写宿主的「正在播放队列」。
 
-> - 生效范围：**native 客户端**（Android/iOS/macOS/Windows）的 webview 插件页；**Web 端插件页**（Tab 内嵌页与首页/全屏页均在宿主 iframe 内打开，走 postMessage 桥接）。**Linux 桌面当前没有 WebView 渲染引擎**：客户端不挂载插件页、改展示降级视图，用户需走「在浏览器中打开」（songloft-org/songloft-player#47）。
+> - 生效范围：**native 客户端**（Android/iOS/macOS/Windows）的 webview 插件页；**Web 端插件页**（Tab 内嵌页与首页/全屏页均在宿主 iframe 内打开，走 postMessage 桥接）。**Linux 桌面当前没有 WebView 渲染引擎**：客户端不挂载插件页、改展示降级视图，用户需走「在浏览器中打开」（songloft-org/songloft-player-flutter#47）。
 > - 不生效：仅当用户通过「在浏览器中打开」把插件页在独立新浏览器标签打开时（无宿主父窗口）——此时 `host.isAvailable()` 返回 `false`，调用会抛错，务必先 feature-detect。
 > - 能力由宿主客户端注入，跟随客户端版本。请在 `plugin.json` 设置合适的 `minHostVersion`，并用 `host.getInfo().capabilities` 做能力协商。
 
@@ -1181,6 +1211,14 @@ if (isClient()) {
 ```
 
 免构建的 vanilla 静态页面无需安装，直接用注入的 `window.SongloftPlugin.player` 即可（仅少了类型提示）。
+
+### 打开外链和全屏视频
+
+通过 `host.getInfo().capabilities` 检查 `plugin.openUrl` 或 `player.openVideo`。WebView 分别调用 `host.openExternalUrl(url)` 和 `player.openVideo({ id })`，原生 Lynx 使用 `invokeHost('plugin', 'openUrl', { url })` 和 `invokeHost('player', 'openVideo', { id })`。外链接收绝对 HTTP(S) 地址，曲库全屏视频接收条目 ID。各端的支持和验收状态见 [Lynx 平台支持表](https://github.com/songloft-org/songloft-player-lynx/blob/main/docs/reference/plugin-client-sdk.md#lynx-平台支持)。
+
+### 插件播放音效
+
+通过 `host.getInfo().capabilities` 检查 `player.audioEffects`。支持该能力的宿主提供 `player.getAudioEffects()`、`player.applyAudioEffects({ playbackId, effects })` 和 `player.clearAudioEffects({ playbackId })`。插件先用歌曲 ID 或歌单启动宿主播放，再按 `supported` 显示该输出可用的音效。清除音效会恢复用户设置并继续播放。Lynx 的 Android、iOS、macOS、Windows 和 Web 在可用输出上支持 EQ 预设。原生 Lynx 插件通过 `invokeHost('player', method, params)` 使用相同契约。详见 [Lynx 插件客户端 SDK](https://github.com/songloft-org/songloft-player-lynx/blob/main/docs/reference/plugin-client-sdk.md#插件播放音效)。
 
 ### 收藏状态同步 —— 改完收藏必须通知宿主
 
@@ -1615,18 +1653,8 @@ async function useTranslation(text) {
 1. 宿主 `internal/jsplugin/permissions.go` 的 `AllPermissions`
 2. `plugins/toolchain/packages/plugin-builder/src/manifest.ts` 的 `VALID_PERMISSIONS`——它在 build 时硬失败（`unknown permission: xxx`），漏了这处插件连产物都出不来
 3. `plugins/toolchain/packages/create-songloft-plugin/src/index.ts` 的 `AVAILABLE_PERMISSIONS`（脚手架勾选列表）
-4. 若该权限要作用于插件票据的 HTTP 面：`internal/plugincred/scopes.go` 的 scope 常量与 `HTTPPluginScopes`，并补 `RequiredScope` 路径映射；`jsplugin` 测试会锁定 scope 与权限常量一致
 
-`ValidatePermissions` 对未知权限**只 warn 不拒绝**：它挂在安装/更新的必经路径上，拒绝会让声明新权限的插件在旧宿主上直接装不上。`minHostVersion` 与 `capabilities` 则完全不同——二者是执行门（S-02）：宿主版本不足或能力面不支持时，安装、上传、商店安装、更新、自动更新、启动加载与懒加载全部失败关闭；UI 提示不是安全边界。
-
-### 插件凭据（S-02）
-
-- 票据按插件主体（`plugin:<entryPath>`）签发，默认 1 小时，带全局代次与插件代次；任一代次不匹配即拒绝。
-- 全局代次每次宿主启动递增（持久化在 `configs.plugin_credential_state`），所以重启后旧签名立即失效，不再依赖“重启即撤销”的假象。
-- 插件更新、禁用、卸载、管理员撤销都会递增该插件代次并清空宿主缓存；撤销不走 DB 查询旁路。
-- 票据 scope 来自 manifest（`strict`）或兼容档全插件 scope（`legacy`）。档位由 `/api/v1/jsplugins/credential-policy` 管理，默认 `auto`：窗口内 `legacy`，到期自动 `strict`。
-- scope 判定在 `internal/plugincred`，中间件对无法归类的路径 fail closed；插件票据不能被当作管理票据使用。
-- **不要**把 `access_token` 写进日志或长期持久化；票据短期且可撤销，需要时重新调用 `plugin.getToken()`。
+`ValidatePermissions` 对未知权限**只 warn 不拒绝**：它挂在安装/更新的必经路径上，拒绝会让声明新权限的插件在旧宿主上直接装不上。`minHostVersion` 是纯信息字段，宿主从不强制；新权限仍需等宿主版本铺开后再发插件。
 
 ### `net:insecure-tls` 的运行时投影
 

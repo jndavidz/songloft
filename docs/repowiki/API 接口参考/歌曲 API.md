@@ -60,10 +60,10 @@
 
 歌曲管理模块是 Songloft 核心 API，覆盖歌曲增删改查、播放流分发、封面/歌词、音频标签写入、文件整理和重复检测。所有端点均需 JWT 认证（`BearerAuth`），基础路径 `/api/v1`。
 
-**歌曲类型**: `local`（本地文件）、`remote`（外部 URL / 插件音源）、`radio`（在线广播/直播流）。
+**歌曲类型**: `local`（本地文件）、`remote`（外部 URL / 插件音源）、`radio`（在线广播/直播流）。查询参数 `type` 支持以逗号分隔的多个已存储类型，例如 `local,remote`。客户端可配合 `exclude_playlist_labels=hidden,audiobook` 排除隐藏和有声书歌单歌曲。类型值只用于查询，不会写入 Song 对象。
 
 **Song JSON 序列化规则**（`MarshalJSON` 统一处理）:
-- `url` -- 统一为 `/api/v1/songs/{id}/play`（HLS 电台为 `.../play.m3u8`）
+- `url` -- 普通播放和仅音频电台使用 `/api/v1/songs/{id}/play`，HLS 电台使用 `.../play.m3u8`，HTTP-FLV 电台使用 `.../play.flv`
 - `cover_url` -- 有封面时 `/api/v1/songs/{id}/cover`，否则空
 - `lyric_url` -- 有歌词时 `/api/v1/songs/{id}/lyric`，否则空
 - `source_url` -- 仅 remote/radio 类型返回原始流地址
@@ -90,9 +90,13 @@
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `type` | string | 否 | -- | `local` / `remote` / `radio` |
+| `type` | string | 否 | -- | 已存储类型，支持逗号分隔组合，例如 `local,remote` |
 | `keyword` | string | 否 | -- | 搜索关键词（匹配标题、艺术家、专辑） |
 | `path_prefix` | string | 否 | -- | 按 `file_path` 前缀过滤 |
+| `exclude_playlist_labels` | string | 否 | `hidden` | 排除带指定 label 的歌单内歌曲（逗号分隔），传 `none` 显示全部 |
+| `rating` | int | 否 | -- | 精确匹配 0–100（0 表示未评级），也可用 `-1` 筛选未评级 |
+| `min_rating` | int | 否 | -- | 评级下限（包含该值） |
+| `sort` | string | 否 | -- | 使用 `rating` 按评级排序 |
 | `limit` | int | 否 | `20` | 每页数量，上限 `100000` |
 | `offset` | int | 否 | `0` | 偏移量 |
 
@@ -106,7 +110,7 @@
 
 **路径:** `/api/v1/songs/ids` | **认证:** BearerAuth
 
-与 `/songs` 共享过滤条件（`type`、`keyword`、`path_prefix`），仅返回 ID。用于「全选当前筛选范围」等批量操作场景，不分页。
+与 `/songs` 共享过滤条件（包括 `type`、`keyword`、`path_prefix`、`exclude_playlist_labels`），仅返回 ID。用于「全选当前筛选范围」等批量操作场景，不分页。
 
 **成功响应 (200):** `{"ids": [1, 2, 3], "total": 3}`
 
@@ -155,6 +159,8 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `field` | string | 是 | -- | 聚合维度：`genre` / `artist` / `album` / `language` / `style` / `year` / `decade`（`year`/`decade` 的 value 为数字字符串，年代如 `"1990"` 表示 1990-1999） |
+| `type` | string | 否 | -- | 已存储类型，支持逗号分隔组合，例如 `local,remote` |
+| `exclude_playlist_labels` | string | 否 | `hidden` | 排除带指定 label 的歌单内歌曲（逗号分隔），传 `none` 显示全部 |
 | `keyword` | string | 否 | -- | 对取值模糊搜索 |
 | `limit` | int | 否 | `20` | 分页大小，上限 `100000` |
 | `offset` | int | 否 | `0` | 分页偏移 |
@@ -217,7 +223,7 @@
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `type` | string | 否 | -- | `local` / `remote` / `radio` |
+| `type` | string | 否 | -- | 已存储类型，支持逗号分隔组合，例如 `local,remote` |
 | `keyword` | string | 否 | -- | 搜索关键词 |
 | `path_prefix` | string | 否 | -- | 按 `file_path` 前缀过滤 |
 | `exclude_playlist_labels` | string | 否 | -- | 排除带指定 label 的歌单内歌曲（逗号分隔） |
@@ -273,6 +279,8 @@
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `field` | string | 是 | `title`（歌名）或 `artist`（歌手名） |
+| `type` | string | 否 | 已存储类型，支持逗号分隔组合，例如 `local,remote` |
+| `exclude_playlist_labels` | string | 否 | 排除带指定 label 的歌单内歌曲（逗号分隔），传 `none` 显示全部 |
 
 **成功响应 (200):** `{"field": "artist", "names": ["周杰伦", "林俊杰"], "total": 2}`
 
@@ -438,6 +446,11 @@
 **成功响应:** `204 No Content`（幂等，无任务时也返回 204）。
 
 ---
+
+### 3.9 评级和电台模式
+
+- `PUT /api/v1/songs/{id}/rating` 接收 `{"rating":80}`，`POST /api/v1/songs/batch-rating` 接收 `{"ids":[1,2],"rating":80}`。评级为 0–100 的整数，0 清除评级。批量操作跳过不存在的 ID，返回 `updated`。评级只存数据库。
+- `POST /api/v1/songs/batch-radio-mode` 接收 `{"ids":[1,2],"radio_mode":"hls"}`，可选 `is_video`。模式为 `""`（按 URL 自动识别）、`hls`、`flv` 或 `audio_only`。仅音频模式会清除视频标记。不存在的 ID 会跳过，无效模式或非电台歌曲会拒绝整批更新。
 
 ## 4. 歌词与标签
 
@@ -637,7 +650,9 @@ dry-run 预览目录整理变更，**不移动任何文件、不改数据库**�
 | `remote`（插件） | CacheService 下载缓存后返回 |
 | `remote`（外链） | 直接代理转发 |
 | `radio`（HLS） | 反代或 302（取决于 hls-proxy 开关） |
-| `radio`（非 HLS） | 直接代理上游流 |
+| `radio`（HTTP-FLV） | `/play.flv` 透传原始 FLV。无法直放的客户端可用 `POST /api/v1/songs/{id}/hls/sessions` 建立 HLS 会话 |
+| `radio`（仅音频） | FFmpeg 提取首条音轨并输出 MP3 |
+| `radio`（其他流） | 直接代理上游流 |
 
 **路径参数:** `id` (int, 必填)
 
@@ -666,7 +681,7 @@ dry-run 预览目录整理变更，**不移动任何文件、不改数据库**�
 
 **路径:** `/api/v1/songs/{id}/cover` | **认证:** BearerAuth
 
-获取封面图片。优先返回本地封面，不存在时代理外部 `CoverURL`。
+获取封面图片。优先返回本地封面，不存在时代理外部 `CoverURL`。本地封面可用 `?w=<像素>` 请求等比缩略图。封面响应以完整图片为单位，忽略字节 Range 并保留缓存验证。
 
 **路径参数:** `id` (int, 必填)
 
@@ -680,19 +695,19 @@ dry-run 预览目录整理变更，**不移动任何文件、不改数据库**�
 
 **章节来源**: `internal/handlers/hls.go`
 
-HLS 反代在 `hls_proxy` 开关开启（`PUT /settings/hls-proxy`）后生效。流程：`serveRadio` -> `ServeProxy` 拉取上游 m3u8 并改写 URI 为本机相对路径 -> 播放器回访 `playlist`/`segment` 拉取子层资源。每次入口做同源校验 + `IsHostnameAllowed` SSRF 防护，非同源 URL 保持原样不改写。
+HLS 反代在 `hls_proxy` 开关开启（`PUT /settings/hls-proxy`）后生效。流程：`serveRadio` -> `ServeProxy` 拉取上游 m3u8 并改写 URI 为本机相对路径 -> 播放器回访 `playlist`/`segment` 拉取子层资源。无签名请求保留同源校验（scheme+host+port 与 `song.URL` 严格相等）；跨源 HTTP(S) 资源从实际播放列表中改写为带 `sig` 的代理链接。HMAC-SHA256 签名绑定歌曲 ID、当前源 URL、端点类型及完整资源 URL，不能篡改或跨歌曲/端点复用。入口及每次重定向均用 `services.IsHostnameAllowed` 拦截私网；私网白名单仍不作用于 HLS。密钥仅在当前进程有效，重启后须重新获取播放列表。
 
 ### 7.1 GET /songs/{id}/hls/playlist -- 代理播放列表
 
 **路径:** `/api/v1/songs/{id}/hls/playlist` | **方法:** `GET` / `HEAD` | **认证:** BearerAuth
 
-反代 HLS 子层 m3u8。拉取上游 -> 同源校验 -> 改写 URI -> 回写。上游错误透传，播放列表上限 1 MB。
+反代 HLS 子层 m3u8。拉取上游 -> 同源/签名及主机校验 -> 改写 URI -> 回写。上游错误透传，播放列表上限 1 MB。
 
-**参数:** `id` (path, int) | `u` (query, string, 必填, base64url 编码的上游 URL) | `access_token` (query, string, 可选)
+**参数:** `id` (path, int) | `u` (query, string, 必填, base64url 编码的上游 URL) | `sig` (query, string, 跨源必填，由服务端生成) | `access_token` (query, string, 可选)
 
 **成功 (200):** 改写后 m3u8 文本，`Content-Type: application/vnd.apple.mpegurl`，`Cache-Control: no-store`
 
-**错误:** `400` 无效 ID / 缺少 u | `403` 非同源 / 主机不允许 | `404` 歌曲不存在 | `502` 上游不可用
+**错误:** `400` 无效 ID / 缺少 u | `403` 跨源缺少签名 / 签名无效 / 主机不允许 | `404` 歌曲不存在 | `502` 上游不可用
 
 ---
 
@@ -702,11 +717,11 @@ HLS 反代在 `hls_proxy` 开关开启（`PUT /settings/hls-proxy`）后生效�
 
 反代音频切片/key/init 段。透传 Range 和上游响应头。
 
-**参数:** `id` (path, int) | `u` (query, string, 必填, base64url 编码的上游 URL) | `access_token` (query, string, 可选)
+**参数:** `id` (path, int) | `u` (query, string, 必填, base64url 编码的上游 URL) | `sig` (query, string, 跨源必填，由服务端生成) | `access_token` (query, string, 可选)
 
 **成功:** `200` 切片内容 | `206` Range 部分内容。`Cache-Control: no-store`
 
-**错误:** `400` 无效 ID / 缺少 u | `403` 非同源 / 主机不允许 | `404` 歌曲不存在 | `502` 上游不可用
+**错误:** `400` 无效 ID / 缺少 u | `403` 跨源缺少签名 / 签名无效 / 主机不允许 | `404` 歌曲不存在 | `502` 上游不可用
 
 ---
 

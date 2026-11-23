@@ -96,8 +96,14 @@ registry fetch — up to 500 `plugin.json` files, 8 concurrent, 15s timeout each
 - Video container probe: when scanning containers like mp4/mov/m4v/mkv/webm/avi/ts/mpg/mpeg/flv/wmv/rm/rmvb/3gp, ffprobe detects whether a real video track is present (excluding the cover attached_pic) to set `songs.is_video`; the client uses this to render the picture / pick the cast mime
 - **When verifying locally, don't put the music directory under `/tmp`**: the default `exclude_dirs` for
   `music_path` includes `tmp`, and `ShouldExcludeDir` matches **any path segment by directory name**, so
-  the entire `/tmp/...` root gets excluded. The symptom is a scan that "completes successfully" with
-  `discovered_files=0` — **no error, no warning** — easy to misread as your own change breaking things
+  the entire `/tmp/...` root gets excluded. Historically this could "complete successfully" with
+  `discovered_files=0`. `/scan/validate` now returns the matching rule; a manual scan with every root
+  excluded returns 400 without starting a job. Actual traversal pruning is reported in progress `excluded_directories`.
+- Keep scan exclusions separate from automatic playlist exclusions. To avoid many one-song folder playlists,
+  use `auto_create_exclude_dirs` rather than `exclude_dirs/exclude_paths`. No temporary bypass is provided;
+  name/path exclusions retain their existing cleanup behavior when settings are saved.
+- Diagnostics count pruned directories, never presumed song counts, and do not walk excluded subtrees to
+  estimate their contents. See [#573 scan exclusion diagnostics](issue-573-scan-exclusions.md).
 
 <a id="scan-batches"></a>
 
@@ -156,7 +162,7 @@ and only symlinks and unknown types fall back to `os.Stat` (following symlinks, 
 
 - `dsf` is a default scan format; keep both fallback lists in `app.go` aligned with migration `0039_scan_support_dsf.sql`, which appends it to existing configs idempotently (case-insensitive).
 - `pkg/tag` reads DSF metadata and cover art; the raw DSD sample rate may be 8 times the PCM-equivalent value reported by ffprobe. Existing metadata tests handle this difference.
-- Playback uses the existing libmpv / ffmpeg path; browsers and DLNA devices without DSD support need an explicit transcoding parameter such as `?format=mp3`; the current Flutter Web `AudioFormatHelper` does not add one automatically for DSF. DSF is outside the tag-writing matrix; use the existing fallback handling when writes are unsupported.
+- Playback uses the existing libmpv / ffmpeg path; browsers and DLNA devices without DSD support need an explicit transcoding parameter such as `?format=mp3`; the current Flutter Web `AudioFormatHelper` does not add one automatically for DSF.
 
 <a id="sidecar-lyrics"></a>
 
@@ -186,21 +192,30 @@ and only symlinks and unknown types fall back to `os.Stat` (following symlinks, 
 
 <a id="tag-writing"></a>
 
-## Tag writing (pkg/tag)
+## Tag reading and writing
 
-- `tag.WriteTag(filePath, opts)` dispatches by file extension; all formats write atomically with a temp file + `os.Rename`
-- Support matrix:
+`pkg/tag` detects the container from file contents. The incremental writers use a sibling temporary file, validate the result, check that the source is still current, and replace it atomically. A native edit preserves untouched fields and media data. Layouts that cannot be rewritten safely leave the source intact.
 
-| Format | Text fields | Lyrics | Cover |
-|------|---------|------|------|
-| MP3 | ID3v2.3 text frames | USLT | APIC |
-| FLAC | Vorbis Comment | LYRICS | PICTURE block |
-| M4A/MP4/M4B/M4V/MOV/3GP | iTunes atoms (©nam, etc.) | ©lyr | covr |
-| OGG(.ogg/.oga/.opus) | Vorbis Comment | LYRICS | METADATA_BLOCK_PICTURE (base64) |
-| APE | APEv2 text items | Lyrics | Cover Art (Front) (binary item) |
-| WAV | RIFF LIST INFO | ICMT | **Not supported** (format limitation) |
-| AIFF/AIF | ID3v2.3 (ID3 chunk) + NAME/AUTH | USLT (ID3 chunk) | APIC (ID3 chunk) |
-- Unsupported formats → return `ErrUnsupportedWrite`; the caller **must** degrade to a log entry and **must not** block the main flow
+| Format | Native read | Native write | Songloft database fields |
+|---|---|---|---|
+| DSF, ADTS AAC | ID3v2 text, year, track/disc, lyrics, artwork | Same fields in ordinary ID3v2.3/2.4 blocks | All editable fields, including explicit clears |
+| WavPack | APEv2 text, year, track/disc, lyrics, artwork | Same fields in writable trailing APEv2 items | All editable fields |
+| QuickTime MOV | Legacy QuickTime text and iTunes metadata, track/disc, lyrics, artwork | iTunes text, track/disc, lyrics and artwork in supported unfragmented layouts | All editable fields |
+| WAV | RIFF INFO text and track, ID3v2 text, disc, lyrics and artwork | INFO title, artist, album, year, genre and track. ID3 for album artist, language, style, disc, lyrics and artwork | All editable fields |
+| DSDIFF DFF | DIIN title/artist, compatible ID3 tags, DSD/DST stream parameters | DIIN title and artist when the edit preserves index offsets | All editable fields. Album, year, genre, language, style, track, disc, lyrics and artwork use database storage |
+| Matroska MKA/MKV | Primary audio track text, year, track/disc and lyrics, cover attachments | Same track fields. Add a cover or replace a supported cover attachment | All editable fields. Cover removal with an existing attachment UID uses database storage |
+| WebM | Primary audio track text, year, track/disc and lyrics | Same track fields | All editable fields. Artwork uses database storage |
+| ASF WMA/WMV | Content Description and mapped extended fields, including a front cover when present | Existing title, artist, album/album artist, year, genre, language, style, track/disc and lyrics slots within the original header extent | All editable fields. Artwork uses database storage |
+| AVI | RIFF INFO title, artist, album, year, genre, track and comment | Title, artist, album, year, genre and track in a compatible single-segment AVI | All editable fields. OpenDML edits use database storage |
+| FLV | AMF0 `onMetaData` text, year, track/disc and lyrics | Replace recognized strings when their encoded length stays the same | All editable fields. Artwork, missing strings and strings that change length use database storage |
+| RealMedia RM/RMVB | CONT title, author, copyright and comment | Existing title and author within the original content block | All editable fields. Other fields use database storage |
+| DTS/DTS-HD, MPEG-TS, MPEG-PS | DTS technical parameters. MPEG service and stream descriptions where present | Database storage | All editable fields. Service names stay scoped to their services |
+| MP3, FLAC, M4A/MP4/M4B/M4V/3GP | Text, track/disc, lyrics and artwork | Incremental ID3, Vorbis Comment and iTunes tags in supported layouts | All editable fields, including explicit clears |
+| Ogg/Opus, APE, AIFF | Existing text, lyrics and artwork mappings | Existing Vorbis Comment, APEv2 and AIFF writers | Existing editing behavior |
+
+For independent local files in the expanded formats, `PUT /songs/{id}/tags` saves manual values, a per-song field bitmask, and the last manual edit time in one transaction. Existing clients can continue sending nonempty fields. Use `clear_fields` for explicit clears and `clear_cover` to clear artwork. Ordinary and incremental scans preserve marked fields, including empty values. In **Reimport**, optionally enable **Reset manual metadata edits**. The API sends `reset_metadata_overrides: true` with `reimport: true`; the reset applies to selected directories, or to the music root when none are selected. A successful file read restores existing scan values and clears the corresponding marks. Failed reads and cancellation before the transaction completes retain the marks. A song edited after the scan began keeps all its manual fields for that run. Full SQLite backups include these markers. Playlist JSON uses its existing schema.
+
+New installs and upgrades include AAC, DFF and WavPack in the supported scan formats. Their default local audio playback uses MP3 with Range support. Clients can specify an output format explicitly.
 
 <a id="fingerprints"></a>
 
@@ -272,12 +287,12 @@ Read all of the following before touching this area.
   pagination caller and is a separate issue. Likewise `ListSongIDsOrdered` and `GetPlaylistSongsPaginated` both order
   by `position ASC` with no secondary key; they only diverge if a playlist ends up with duplicate positions
   (e.g. an interrupted concurrent reorder)
-- **Client playback = play the first song immediately, fill circularly in the background**: the history entry carries
+- **Facet history playback = play the first song immediately, fill circularly in the background**: the history entry carries
   the full `Song`, so it becomes the queue and starts playing with **zero requests**; the background then fetches the
   ordered ID list (`GET /playlists/{id}/song-ids` for playlists, `GET /songs/ids` for facets), locates it via
   `indexOf`, and appends "everything after the target" followed by the wrapped "beginning…up to the target".
   `currentIndex` stays 0 throughout, so random mode's `_playedIndices` / `_preSelectedNextIndex` are untouched;
-  playlists and all 7 facets share one code path
+  playlists instead preserve the full original order and remap the current index, with independent position/mode persistence; see [Playlist resume](playlist-resume.md).
 - **Only `type=play` is persisted**: writing hooks into the `context_type`/`context_key` parameters of the existing
   reporting endpoint `POST /songs/{id}/played` (no second reporting channel, zero extra client requests). `finish`
   is a duplicate write for the same song; **`skip` is especially dangerous** -- it reports the **previous** song, and
@@ -308,8 +323,15 @@ Read all of the following before touching this area.
 - When to switch: turn on the proxy when origin Referer/UA anti-hotlinking causes playback failures, or when CORS blocks in Web embedded mode
 - Reverse-proxy endpoints: `/api/v1/songs/{id}/hls/playlist?u=<base64url>` and `/api/v1/songs/{id}/hls/segment?u=<base64url>`
 - HLS radio song.url is forced to carry a `.m3u8` suffix (`/api/v1/songs/{id}/play.m3u8`): ExoPlayer/AVPlayer pick the MediaSource by URL suffix, and without a suffix it falls into ProgressiveMediaSource, making live streams unplayable
+- Set `radio_mode=hls` for an extensionless HLS entry point, including URLs that redirect to a live stream. The client playback URL ends in `.m3u8`, and the original source URL stays in storage. An empty mode uses suffix detection. HEVC and other source codecs require a compatible client decoder.
+- Set `radio_mode=flv` for an HTTP-FLV station with an extensionless entry point, including redirect URLs. Auto mode recognizes `.flv` in the URL path. The server stores the original entry point and streams FLV bytes through `/play.flv`. Web clients demultiplex the stream locally when supported.
+- In auto mode, creating a station, changing its source, or explicitly selecting auto probes HTTP/HTTPS sources with unrecognized extensions. A batch shares a three-second budget, probes up to four sources concurrently, and reads up to 64 response bytes per probe. Probes reuse the live source and redirect checks. The separate detection result expires when the source or manual mode changes. Lists and playback use the saved result. Select Auto in the batch mode editor to probe existing stations again.
+- `/play.m3u8` and `/play.flv` require the corresponding station mode. A mismatched GET or HEAD returns 404 before contacting the source or switching playback. `/play` dispatches by song type and station mode.
+- The server logs `radio stream requested` before fetching a station for GET playback. Its `request_id` matches the final `access` entry. The logs contain URL paths. HEAD and prefetch requests use the regular `access` log.
+- A station with `radio_mode=audio_only` uses `/play` and clears `is_video`. Speakers can explicitly request MP3 from `/api/v1/songs/{id}/play.mp3` with `access_token` as the sole query parameter. Both paths use the live transcode gateway, its private address allowlist, and one of four shared transcode slots. They stream the first audio track as MP3 and return an HTTP error if startup fails. `HEAD` returns audio response headers only. Existing clients can still use `radio_transcode=mp3`.
+- When a live FLV response without a fixed length reaches a clean EOF, the audio pull gateway reopens the station entry while FFmpeg encodes the remaining buffered audio. The next encoder uses that connection and continues writing to the same HTTP response. The gateway closes unused connections and makes a normal pull if the early request fails. It emits short, paced silence if audio is still unavailable. Client disconnects cancel the upstream requests and transcoder. Media files with a fixed length end at EOF.
 - Rewrite rules: classic HLS + the full LL-HLS set (PART/PRELOAD-HINT/RENDITION-REPORT) + `EXT-X-DATERANGE:X-ASSET-URI` (HLS Interstitials single URI). `X-ASSET-LIST` (JSON sub-proxy) is not yet implemented and is passed through verbatim when encountered
-- Security: each endpoint entry performs a "same-origin check (scheme+host+port must exactly equal song.URL)" as the first line of defense, with `services.IsHostnameAllowed` as an SSRF backstop. **Non-same-origin URLs are left unchanged and not rewritten**, to avoid becoming an open proxy
+- Security: Unsigned requests retain the same-origin check (scheme+host+port must exactly match `song.URL`). Cross-origin HTTP(S) resources found in actual playlists are rewritten to proxy links carrying `sig`. HMAC-SHA256 binds the song ID, current source URL, endpoint type, and complete resource URL, preventing tampering or reuse across songs/endpoints. Entry requests and every redirect use `services.IsHostnameAllowed` to block private hosts; the private allowlist still does not apply to HLS. The key lasts for the current process only; refetch the playlist after a restart.
 - Player cross-origin: all rewritten URLs are relative paths (`playlist?u=...` / `segment?u=...`), sidestepping BASE_PATH sub-path deployment issues
 - Upstream 4xx/5xx are passed through to the player; the playlist body is capped at 1 MB; the first line must be `#EXTM3U`
 
@@ -317,12 +339,13 @@ Read all of the following before touching this area.
 
 ## Generic HTTP Proxy (/settings/http-proxy)
 
-- Business endpoint: `GET/PUT /api/v1/settings/http-proxy` with body `{proxy: string}`, default `""` (direct connection)
-- Only outbound requests using proxy-aware clients use this proxy; do not assume arbitrary `http.Client` instances or plugin `fetch` calls are automatically integrated.
+- The business endpoint `GET/PUT /api/v1/settings/http-proxy` uses `{proxy: string}`. The default `""` means there is no saved proxy address.
+- Outbound requests using proxy-aware backend clients and plugin runtime `fetch` / `songloft.net.httpStream` use this proxy; arbitrary new `http.Client` instances still need explicit integration.
 - Typical value: `http://192.168.1.1:7890` (supports HTTP/HTTPS/SOCKS5 proxies)
 - Loopback addresses (`localhost`/`127.0.0.1`/`::1`) automatically bypass the proxy, avoiding interference with internal requests
 - **Coexists** with GitHub mirror acceleration (`github_proxy` URL-prefix concatenation): the mirror prefix is concatenated first, then forwarded through the HTTP Proxy
 - Implementation: `globalProxy` (private `proxyConfig`) in `internal/httputil/proxy.go` is managed by `SetGlobalProxy` / `GetGlobalProxy`; `NewClient`, `NewStreamingClient`, and `NewDownloadClient` use shared transports suited to ordinary requests, streams, and downloads respectively.
+- Both normal and insecure TLS transports in the plugin runtime give priority to `ProxyFromGlobal`. When the setting is empty, Go's `http.ProxyFromEnvironment` applies `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` by protocol, including lowercase forms. Web settings take effect without reloading plugins.
 - The saved proxy address is loaded from the config table at startup (`app.go`); a PUT takes effect immediately without a restart
 - Examples include `jsplugin/registry.go`, `jsplugin/package.go`, `services/upgrade_service.go`, `handlers/jsplugin_registry.go`, and `handlers/hls.go`; use the `httputil.New*Client` call sites for the complete scope.
 - ffmpeg remote-pull transcode paths (`services/radio_transcode.go` radio transcode, `services/url_transcode.go` transcode proxy) are also integrated: passed to ffmpeg via `-http_proxy`. **HTTP/HTTPS proxies only**; SOCKS5 is not supported (ffmpeg `-http_proxy` limitation)
@@ -356,6 +379,7 @@ Read all of the following before touching this area.
 ## Remote video HLS transcode sessions (#541)
 
 - Entry: `POST /api/v1/proxy/transcode/hls/sessions`, JSON `{url, audio_bitrate?, user_agent?, referer?}`. `url` accepts an HTTP/HTTPS TS, MP4, or ordinary HLS source, without URL user credentials. Bitrate is 64/96/128/192/256 kbps, default 128. Requires the configured ffmpeg and ffprobe beside it or in PATH.
+- Clients without direct FLV playback can call `POST /api/v1/songs/{id}/hls/sessions`. The server loads the source from the HTTP-FLV station, validates redirects, and accepts only FLV input. It uses the session and output contract below. Direct playback through `/play.flv` creates no transcode session.
 - Tool builds must enable both the **HLS input demuxer** and the **crypto input protocol**; an HLS output muxer does not enable reading m3u8. `ffprobe -hide_banner -demuxers` must list `hls`, and the Input section of `ffprobe -hide_banner -protocols` must list `crypto` for AES-128 HLS. Docker tools come from `tools/ffmpeg-builder`, whose artifact tests cover TS, plain HLS, and encrypted HLS. Songloft's binary updater does not replace container tools: after fixing them, rebuild the Songloft image, pull it, and recreate the container.
 - The first version copies the first **progressive H.264** video track and encodes the first audio track as **AAC-LC / stereo / 48kHz**, delivering MPEG-TS HLS. HEVC, interlaced video, and missing video/audio tracks return 422; video is not automatically re-encoded. Source H.264 profile/level, resolution, and keyframes still need to suit the actual player; this does not guarantee Safari playback of every IPTV source.
 - Creation waits up to 30 seconds for a complete first segment; success returns 201 `{id, playlist_url, idle_timeout_seconds:120}` with `Location`. `playlist_url` includes deployment `BASE_PATH` and omits the token. For Safari `<video>`, append `?access_token=<URL-encoded access token>`; the server propagates it to relative segment references. Expired access tokens still return 401; callers must refresh the token and update the playback URL, keeping the same session when the ClientID is unchanged. Players using Authorization must send that header on every child request.
@@ -542,7 +566,7 @@ The project has three kinds of configuration endpoints. **User-visible feature t
 - **`/api/v1/<module>/config` — in-module config**: config strongly coupled to the module's action endpoints stays under the module prefix instead of moving to `/settings/`. Existing example: `/cache-manage/config` (shares `CacheService` with `stats/clean`). Decision rule: standalone or cross-module → `/settings/<name>`; strongly in-module → `/<module>/config` or `/<module>/<sub-name>`.
 - **`/api/v1/configs/{key}` — generic KV (admin editor only)**: only for generic config editors such as `config_manager.dart`. New business features **must not call it directly**: the generic PUT returns 404 when the key does not exist and has no strong typing, side effects, or defaults. After a business wrapper exists, the generic endpoint may still modify the same key, but the side effect must also be hooked into `configHandler.SetOnConfigChanged` (see `musicPathChanged` in `routers.go`).
 
-Client conventions: `SettingsApi` (`clients/player/lib/features/settings/data/settings_api.dart`) wraps all `/settings/*` calls and business-feature Providers always go through it; `ConfigApi` is only used by `config_manager.dart` and admin UIs such as "list all configs".
+Client conventions: `SettingsApi` (`clients/player-flutter/lib/features/settings/data/settings_api.dart`) wraps all `/settings/*` calls and business-feature Providers always go through it; `ConfigApi` is only used by `config_manager.dart` and admin UIs such as "list all configs".
 
 History: this convention was introduced in 2026-06 — `hls_proxy_enabled` was not preloaded, so PUT `/configs/{key}` returned 404, revealing three coexisting styles (`/configs`, `/settings/*`, `/cache-manage/config`). Business endpoints were chosen as the single source for user-visible entry points, with the generic KV degraded to an admin back door.
 

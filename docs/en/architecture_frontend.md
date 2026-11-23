@@ -1,10 +1,10 @@
 # Songloft Flutter Frontend Architecture
 
-> **Standalone repository**: [https://github.com/songloft-org/songloft-player](https://github.com/songloft-org/songloft-player)
+> **Standalone repository**: [https://github.com/songloft-org/songloft-player-flutter](https://github.com/songloft-org/songloft-player-flutter)
 
-This page describes Flutter. The ReactLynx + TypeScript preview client supports Android/iOS/HarmonyOS/Web; see [client selection](clients.md) and [Lynx guides](player-lynx/index.md). It has no desktop or bundled local backend and does not use the Flutter layout or build commands below.
+This page describes the Flutter client's own architecture and local-mode implementation. The backend Release publishes Flutter and Lynx Bundles. Flutter/Lynx Standard, Lynx HarmonyOS, and Web come from their client Releases. Lynx Android/iOS/Windows/macOS expose local mode from the login and settings screens. Backend CI builds the Windows and macOS Bundles. Device installation and playback remain to be verified. See [Bundle Mode](bundle-mode.md) and the [Lynx guides](player-lynx/index.md).
 
-The Songloft Flutter client supports six platforms: **Android, iOS, macOS, Windows, Linux, and Web**. The full server defaults to the separate Lynx Web client (`clients/player-lynx`); legacy embedded Flutter Web remains an explicit option. Flutter also supports **Bundle local mode**: embedding the Go backend into the client (as a native library via gomobile on mobile, and as a subprocess on desktop), so users can play local music without deploying a separate server.
+The Songloft Flutter client supports six platforms: **Android, iOS, macOS, Windows, Linux, and Web**. The full server defaults to the separate Lynx Web client (`clients/player-lynx`); legacy embedded Flutter Web remains an explicit option. The Flutter repository retains standard-edition releases, and the Lynx repository retains standard, HarmonyOS, and Web releases. The backend Release fixes full client and backend SHAs before publishing Bundles.
 
 ## Tech Stack
 
@@ -32,7 +32,7 @@ The Songloft Flutter client supports six platforms: **Android, iOS, macOS, Windo
 ## Directory Structure
 
 ```
-clients/player/lib/
+clients/player-flutter/lib/
 ├── config/                          # App configuration
 │   ├── app_config.dart              # API config, deployment mode, version number
 │   └── constants.dart               # App constants
@@ -524,13 +524,19 @@ flutter build windows --dart-define=HAS_BACKEND=true  # Windows
 - **Mobile**: the Go backend is compiled via gomobile into `.aar` (Android) / `.xcframework` (iOS); Flutter calls `Start/Stop/IsRunning/GetPort` through `MethodChannel('com.songloft/backend')`
 - **Desktop**: the Go backend is compiled into a `songloft-server` executable; Flutter runs it as a subprocess at startup and parses the listening port from stdout
 - **Web**: Bundle mode is not supported
-- Local mode startup flow: request storage permission → start the embedded backend at `127.0.0.1:<port>` → poll the health check (up to 10 × 300ms) → auto login with `admin/admin`
+- Local mode startup flow: request required storage access → start the embedded backend on a dynamic port → after its health check, read the local backend-generated administrator credentials and sign in automatically; Bundle does not use the server's default `admin/admin`
 - `BackendLifecycle` (WidgetsBindingObserver) listens to the app lifecycle and automatically restarts the backend when the app resumes to the foreground
 - **Android paths**: in Bundle mode the CWD is `/`, so directories such as covers must resolve relative to `DBPath`, not the CWD
 - **Mobile temporary directory**: before initializing services, `mobile.Start` creates `<dataDir>/tmp` and sets the Go process's `TMPDIR` for temporary HLS, download, and cover files. Android's default `/data/local/tmp` is not writable by ordinary apps. `Stop` retains this environment setting; the HLS service removes its own session directory when closed.
 - **Native bridging**: Android calls the gomobile-generated classes by reflection via `Class.forName("mobile.Mobile")`; when the `.aar` is not bundled, `isAvailable()` returns false (graceful degradation). iOS uses Swift to call Objective-C functions such as `MobileStart`
-- **Desktop subprocess**: `DesktopBackendService` looks for `songloft-server` in the same directory as the Flutter executable (on macOS, `Contents/Resources/`) and parses the actual listening port from stdout
-- **CI artifacts**: all start with `songloft-bundled-`; Android/Linux/Windows include the architecture, while Apple uses `songloft-bundled-macos.zip` and `songloft-bundled-ios-nosign.ipa`. The 4 parallel jobs (Android/Linux/Apple/Windows) do not block the main release on failure
+- **Desktop subprocess**: `DesktopBackendService` looks for `songloft-server` alongside the Flutter executable, with `Contents/Resources/` also supported on macOS. It parses the actual listening port from stdout.
+- **Flutter release boundary**: this section describes Flutter's source implementation. The backend `release.yml` fixes the full root, Flutter, Lynx, and `pkg/tag` SHAs during preparation, then builds and publishes Flutter and Lynx Bundles. Standard, HarmonyOS, and Web packages remain in their client Releases.
+
+## Playlist Tags and Resume
+
+Flutter and Lynx use shared `/song-tags` definitions for song and playlist tags, and invalidate tag counts when playlists are deleted or hidden. The independent `/playlists/{id}/playback-progress` endpoint stores normal-playlist track, millisecond position and mode, shared by the server instance. Explicit track selection starts from zero; Continue restores saved progress.
+
+Large playlist queues load up to 100 tracks around the selected track, then extend toward later tracks before earlier ones, publishing each batch without reloading current audio. See [Playlist resume and audiobooks](playlist-resume.md) for persistence, conflict and older-server behavior. Native background persistence still requires device acceptance.
 
 ## Audio Playback Architecture
 
@@ -555,7 +561,7 @@ SongloftAudioHandler (extends BaseAudioHandler)
 ## Development Commands
 
 ```bash
-cd songloft-player
+cd clients/player-flutter
 flutter pub get                    # Install dependencies
 flutter run -d chrome              # Web debugging (standalone mode)
 flutter run -d chrome --dart-define=DEPLOY_MODE=embedded  # Simulate embedded mode
@@ -589,18 +595,19 @@ make build-frontend-ios
 # All platforms supported by the current system
 make build-frontend-all
 
-# Bundle local mode (compile the Go backend first, then build the Flutter client)
+# Flutter source local-mode build reference (not used by root Releases)
 # 1. Compile the Go backend into a mobile library / desktop executable
-make build-go-mobile-android       # → clients/player/android/app/libs/songloft.aar
-make build-go-mobile-ios           # → clients/player/ios/Songloft.xcframework (macOS only)
-make build-go-desktop-linux        # → clients/player/linux/songloft-server
-make build-go-desktop-windows      # → clients/player/windows/songloft-server.exe
-make build-go-desktop-macos-arm64  # → clients/player/macos/Runner/songloft-server
+make build-go-mobile-android       # → clients/player-flutter/android/app/libs/songloft.aar
+make build-go-mobile-ios SONGLOFT_FFMPEG_IOS_ASSET=/path/to/staged/ios-ffmpeg   # macOS only
+make build-go-desktop-linux        # → clients/player-flutter/linux/songloft-server
+make build-go-desktop-windows      # → clients/player-flutter/windows/songloft-server.exe
+make build-go-desktop-macos-arm64  # → clients/player-flutter/macos/Runner/songloft-server
 
 # 2. Build the Flutter client (add --dart-define=HAS_BACKEND=true)
-# In CI this is done automatically by release.yml's build-bundled-{android,linux,apple,windows} Jobs
+# The backend `release.yml` builds Bundle releases; client workflows build standard, HarmonyOS, and Web packages
 ```
 
-Prebuilt installer downloads:
-- Standard edition (requires connecting to a server): [https://github.com/songloft-org/songloft-player/releases](https://github.com/songloft-org/songloft-player/releases)
-- Bundle edition (backend embedded): [https://github.com/songloft-org/songloft/releases](https://github.com/songloft-org/songloft/releases) (`songloft-bundled-*` files)
+Prebuilt installer downloads
+
+- Flutter Standard (requires a server) · [Latest stable](https://github.com/songloft-org/songloft-player-flutter/releases/latest) · [dev](https://github.com/songloft-org/songloft-player-flutter/releases/tag/dev)
+- Flutter and Lynx Bundle (embedded backend) · [Latest stable](https://github.com/songloft-org/songloft/releases/latest) · [dev](https://github.com/songloft-org/songloft/releases/tag/dev)

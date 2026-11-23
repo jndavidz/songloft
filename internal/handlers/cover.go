@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"image"
@@ -10,10 +11,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	// 注册常见封面格式的解码器（jpeg 已随 image/jpeg 注册，这里补 png/gif）。
@@ -21,6 +26,7 @@ import (
 	_ "image/png"
 
 	"golang.org/x/image/draw"
+	"songloft/internal/httputil"
 	"songloft/internal/services"
 )
 
@@ -35,6 +41,113 @@ const coverThumbJPEGQuality = 85
 // （如 3000×3000 = 36MB），不限并发在弱设备上会 OOM（songloft-org/songloft#389）。
 var coverThumbSem = make(chan struct{}, coverThumbWorkers())
 
+const invalidCoverReference = "封面地址不能指向本服务的歌曲或歌单封面接口"
+
+const (
+	remoteCoverFailureTTL   = 30 * time.Second
+	remoteCoverFailureLimit = 1024
+)
+
+var (
+	localCoverEndpoint  = regexp.MustCompile(`^/api/v1/(?:songs|playlists)/[+-]?[0-9]+/cover$`)
+	remoteCoverSlots    = make(chan struct{}, 32)
+	remoteCoverFailures = coverFailureCache{entries: make(map[[sha256.Size]byte]coverFailure)}
+)
+
+type coverFailure struct {
+	status  int
+	expires time.Time
+}
+
+type coverFailureCache struct {
+	mu      sync.Mutex
+	entries map[[sha256.Size]byte]coverFailure
+}
+
+func (c *coverFailureCache) status(key [sha256.Size]byte, now time.Time) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	failure, ok := c.entries[key]
+	if ok && now.Before(failure.expires) {
+		return failure.status
+	}
+	delete(c.entries, key)
+	return 0
+}
+
+func (c *coverFailureCache) remember(key [sha256.Size]byte, status int, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.entries[key]; !exists && len(c.entries) >= remoteCoverFailureLimit {
+		var oldestKey [sha256.Size]byte
+		var oldest time.Time
+		for k, failure := range c.entries {
+			if oldest.IsZero() || failure.expires.Before(oldest) {
+				oldestKey, oldest = k, failure.expires
+			}
+		}
+		delete(c.entries, oldestKey)
+	}
+	c.entries[key] = coverFailure{status: status, expires: now.Add(remoteCoverFailureTTL)}
+}
+
+func referencesLocalCover(r *http.Request, resolver *services.InternalURLResolver, rawURL string) bool {
+	target, err := url.Parse(rawURL)
+	return err == nil && isLocalCoverEndpoint(r, resolver, target)
+}
+
+func isLocalCoverEndpoint(r *http.Request, resolver *services.InternalURLResolver, target *url.URL) bool {
+	cleanPath := path.Clean(target.Path)
+	if !localCoverEndpoint.MatchString(cleanPath) && !localCoverEndpoint.MatchString(resolver.WithoutBasePath(cleanPath)) {
+		return false
+	}
+	if target.Host == "" || resolver.TargetsInternalListener(target) {
+		return true
+	}
+	// Proxies may terminate TLS before forwarding the original Host to this app.
+	defaultPort := ":80"
+	if target.Scheme == "https" {
+		defaultPort = ":443"
+	}
+	return strings.EqualFold(strings.TrimSuffix(target.Host, defaultPort), strings.TrimSuffix(r.Host, defaultPort))
+}
+
+func proxyRemoteCover(w http.ResponseWriter, r *http.Request, resolver *services.InternalURLResolver, rawURL string, allowFallback bool) bool {
+	if referencesLocalCover(r, resolver, rawURL) {
+		if !allowFallback {
+			respondError(w, http.StatusNotFound, "封面不存在", nil)
+		}
+		return false
+	}
+	resolvedURL := resolver.Resolve(rawURL)
+	key := sha256.Sum256([]byte(resolvedURL + "\x00" + r.Header.Get("Accept") + "\x00" + httputil.GetGlobalProxy()))
+	if status := remoteCoverFailures.status(key, time.Now()); status != 0 {
+		if !allowFallback {
+			respondError(w, status, "cover fetch failed", nil)
+		}
+		return false
+	}
+	// Do not queue a fetch while holding an outer cover request open. A proxy
+	// alias we cannot recognize can otherwise make requests wait on one another.
+	select {
+	case remoteCoverSlots <- struct{}{}:
+		defer func() { <-remoteCoverSlots }()
+	default:
+		if !allowFallback {
+			respondError(w, http.StatusServiceUnavailable, "封面请求繁忙", nil)
+		}
+		return false
+	}
+	return tryServeRemoteResource(w, requestWithoutCoverRange(r), resolvedURL, RemoteResourceOptions{
+		AllowFallback: allowFallback,
+		Timeout:       songCoverProxyTimeout,
+		ErrorStatus:   http.StatusNotFound,
+		ErrorMessage:  "cover fetch failed",
+		RejectURL:     func(target *url.URL) bool { return isLocalCoverEndpoint(r, resolver, target) },
+		OnFailure:     func(status int) { remoteCoverFailures.remember(key, status, time.Now()) },
+	})
+}
+
 func coverThumbWorkers() int {
 	n := runtime.GOMAXPROCS(0) / 2
 	if n < 1 {
@@ -48,7 +161,7 @@ func coverThumbWorkers() int {
 
 // serveCoverFile 统一的本地封面文件服务。
 //
-// 无 ?w=（或非法/超限）时：等价于旧行为，直接 http.ServeFile 原图（保留 ETag/Range/304）。
+// 无 ?w=（或非法）时：直接服务完整原图（保留条件请求，不使用 Range）。
 //
 // 有 ?w=N 时：把封面等比缩放到目标宽度 N（物理像素，绝不放大）后以 JPEG 返回。
 // 这是 songloft-org/songloft#309 的服务端配合：Web 端封面改回浏览器原生 <img>
@@ -63,9 +176,12 @@ func coverThumbWorkers() int {
 func serveCoverFile(w http.ResponseWriter, r *http.Request, path string, thumbCache *services.CoverThumbCache) {
 	widthStr := strings.TrimSpace(r.URL.Query().Get("w"))
 	if widthStr == "" {
-		// 无缩略请求：老路径，直接服务原图。
+		// 无缩略请求：直接服务原图。封面是完整的图片资源，不参与字节范围传输。
+		// 浏览器可能在缓存校验时发送单字节 Range 请求。若把它交给
+		// http.ServeFile，响应会成为只含一个字节的 206，图片解码器无法显示。
+		// 保留 If-Modified-Since 等完整资源的条件请求，单独移除 Range。
 		w.Header().Set("Cache-Control", "public, max-age=31536000")
-		http.ServeFile(w, r, path)
+		serveCoverOriginal(w, r, path)
 		return
 	}
 
@@ -73,7 +189,7 @@ func serveCoverFile(w http.ResponseWriter, r *http.Request, path string, thumbCa
 	if err != nil || width <= 0 {
 		slog.Debug("封面缩略参数非法，回退原图", "path", path, "w", widthStr, "error", err)
 		w.Header().Set("Cache-Control", "public, max-age=31536000")
-		http.ServeFile(w, r, path)
+		serveCoverOriginal(w, r, path)
 		return
 	}
 	if width > coverThumbMaxWidth {
@@ -131,7 +247,7 @@ func serveCoverFile(w http.ResponseWriter, r *http.Request, path string, thumbCa
 			"path", path, "w", width, "error", err)
 		// 已写过 ETag，但原图直出用 ServeFile 会自带自己的校验，这里删掉避免语义冲突。
 		w.Header().Del("ETag")
-		http.ServeFile(w, r, path)
+		serveCoverOriginal(w, r, path)
 		return
 	}
 
@@ -157,6 +273,25 @@ func serveCoverFile(w http.ResponseWriter, r *http.Request, path string, thumbCa
 	if _, err := w.Write(data); err != nil {
 		slog.Debug("封面缩略写出失败（客户端可能已断开）", "path", path, "error", err)
 	}
+}
+
+// serveCoverOriginal 返回完整的本地封面文件。
+// 图片请求不需要音频播放那样的 Range seek，禁用 Range 可以避免浏览器缓存校验
+// 产生单字节 206，导致图片解码器只拿到不完整的资源。
+func serveCoverOriginal(w http.ResponseWriter, r *http.Request, path string) {
+	http.ServeFile(w, requestWithoutCoverRange(r), path)
+}
+
+// requestWithoutCoverRange 为本地文件和远程代理保持完整图片语义。
+// 音频端点仍保留各自的 Range 行为。
+func requestWithoutCoverRange(r *http.Request) *http.Request {
+	if r.Header.Get("Range") == "" {
+		return r
+	}
+	request := r.Clone(r.Context())
+	request.Header.Del("Range")
+	request.Header.Del("If-Range")
+	return request
 }
 
 // serveCachedThumb 从磁盘缓存文件直接返回缩略图。

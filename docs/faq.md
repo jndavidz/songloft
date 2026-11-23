@@ -14,9 +14,11 @@ A: **不收费，也不接受任何赞助或捐款。** Songloft 是纯粹出于
 
 ### Q: 我应该如何下载 Songloft？
 
-A: 
-- **后端服务器**：从 [GitHub Releases](https://github.com/songloft-org/songloft/releases) 下载适合您系统的版本，支持 Linux、macOS 和 Windows 平台，提供二进制文件和 Docker 镜像两种部署方式。
-- **Flutter 客户端**：从 [Flutter 客户端 Releases](https://github.com/songloft-org/songloft-player/releases) 下载预编译安装包，支持 Android、iOS、macOS、Windows、Linux 和 Web。
+A:
+
+- **后端服务器、Flutter Bundle 和 Lynx Bundle** · [最新正式版](https://github.com/songloft-org/songloft/releases/latest) · [dev](https://github.com/songloft-org/songloft/releases/tag/dev)。后端支持 Linux、macOS 和 Windows，提供二进制文件和 Docker 镜像。
+- **Flutter 标准版** · [最新正式版](https://github.com/songloft-org/songloft-player-flutter/releases/latest) · [dev](https://github.com/songloft-org/songloft-player-flutter/releases/tag/dev)。
+- **Lynx 标准版** · [最新正式版](https://github.com/songloft-org/songloft-player-lynx/releases/latest) · [dev](https://github.com/songloft-org/songloft-player-lynx/releases/tag/dev)。HarmonyOS 和 Web 产物也在同一发布页。
 
 - **Electron 桌面客户端**：[Songloft Desktop Releases](https://github.com/songloft-org/songloft-desktop/releases/latest)，连接已有服务器。
 - **TV 客户端**：[Songloft TV Releases](https://github.com/songloft-org/songloft-tv/releases/latest)，支持 Android 5.0+ 大屏设备。
@@ -270,6 +272,8 @@ A: 支持主流音频格式：**MP3、FLAC、WAV、APE、OGG、M4A、MP4、MOV�
 
 DSF 默认可扫描入库，支持读取内嵌标签和封面。已有部署升级后会自动将 `dsf` 补入扫描格式列表，重新扫描即可发现文件。原生客户端沿用 libmpv 播放；浏览器或不支持 DSD 的 DLNA 设备需显式请求服务端 ffmpeg 转码，例如 `GET /api/v1/songs/{id}/play?format=mp3`（也可用 `format=flac`，以设备兼容性为准）。当前 Web 客户端不会为 DSF 自动添加转码参数。DSF 暂不支持将标签、歌词或封面写回音频文件。
 
+本地 `.dts` 文件默认可扫描入库，已有部署升级后重新扫描即可发现。扫描使用 ffprobe 提取时长等音频参数，标题缺省时使用文件名。播放默认转为 MP3，多声道会混为双声道。支持多声道 FLAC 的播放器可以显式请求 `GET /api/v1/songs/{id}/play?format=flac`。Docker 部署通过更新镜像取得支持 DTS 输入的 FFmpeg 和 ffprobe。
+
 此外也支持扫描常见**视频容器**：**MKV、WEBM、AVI、TS**（连同带画面的 MP4/MOV）。扫描时后端会用 ffprobe 探测文件是否含真实视频轨并标记 `is_video`（内嵌封面图不算视频）。这类文件常见于电子书、网课等以"听"为主的音视频混合内容：
 
 - 始终可播放其中的**音频轨**；
@@ -299,8 +303,19 @@ A: 检查以下几点：
 
 A: 部分电台源站有 Referer / User-Agent 防盗链，或在 Web 嵌入模式下受 CORS 限制，导致客户端直接拉流失败。可在客户端 **设置 → HLS 代理** 中打开该开关：
 
-- 开启后，服务端会代拉并改写 `.m3u8`、代理所有切片 / key / init 段，规避源站防盗链与浏览器跨域限制。
+- 开启后，服务端会代拉并改写 `.m3u8`，代理切片 / key / init 段（包括播放列表实际引用的跨域 CDN 资源），缓解源站防盗链与浏览器跨域限制。源站自身不可达或需要额外鉴权时仍可能失败。
+- 代理继续拦截私网地址，资源代理的私网白名单不作用于 HLS；服务重启后请重新打开流以获取新的代理链接。
 - 代价：**所有切片走服务器带宽**，请留意流量成本；不需要时可关闭（默认关闭，此时电台 `.m3u8` 直接由客户端拉取源站）。
+
+### Q: 咪咕 IPTV 这类没有 `.m3u8` 后缀的直播怎么播放？
+
+添加或编辑电台，保留原始直播地址，将**电台播放模式**选为 **HLS**。需要看画面时同时开启**视频内容**。H.265（HEVC）画面由客户端解码，具体支持情况取决于设备和浏览器。
+
+只想收听时选**仅音频**。服务端用 FFmpeg 从 HLS、TS 或 MP4 源提取第一条音轨，输出实时 MP3。对音视频复用在同一切片的源，服务端仍需下载包含视频的源切片。
+
+### Q: 有声书如何继续上次收听？
+
+A: 编辑普通歌单并开启「有声书」，随后用「继续收听」恢复上次歌曲、播放位置与该歌单的播放模式。直接点某首歌曲会从头播放。普通歌单也支持独立续播；电台歌单不支持。进度由同一服务实例共享，旧服务端仍可基本播放，详见[歌单续播与有声书](playlist-resume.md)。
 
 ### Q: 如何扫描音乐库？
 
@@ -423,4 +438,4 @@ A:
 
 - **GitHub Issues**: [https://github.com/songloft-org/songloft/issues](https://github.com/songloft-org/songloft/issues)
 - **项目主页**: [https://github.com/songloft-org/songloft](https://github.com/songloft-org/songloft)
-- **Flutter 客户端**: [https://github.com/songloft-org/songloft-player](https://github.com/songloft-org/songloft-player)
+- **Flutter 客户端**: [https://github.com/songloft-org/songloft-player-flutter](https://github.com/songloft-org/songloft-player-flutter)

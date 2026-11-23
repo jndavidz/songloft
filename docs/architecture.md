@@ -1,8 +1,8 @@
 # Songloft 项目架构说明
 
-Songloft 是一个自托管的本地音乐服务器，采用前后端分离架构。支持两种运行模式：**服务器模式**（独立部署 Go 后端）和 **Bundle 本地模式**（Go 后端嵌入 Flutter 客户端，无需单独部署服务器）。
+Songloft 是一个自托管的本地音乐服务器，采用前后端分离架构。支持两种运行模式：**服务器模式**（独立部署 Go 后端）和 **Bundle 本地模式**（Go 后端随客户端安装，无需单独部署服务器）。后端 Release 固定主仓库与客户端子模块完整 SHA，统一发布 Flutter Bundle 和 Lynx Bundle；标准版、HarmonyOS 和 Web 继续由各自客户端 Release 发布。
 
-服务器模式支持 Flutter、ReactLynx、官方 Electron Desktop 与 Android TV 客户端。Lynx 目前为 Android/iOS/HarmonyOS/Web 预览版，无桌面或 Bundle 模式；下方的客户端架构图描述默认 Flutter 方案。
+服务器模式支持 Flutter、ReactLynx、官方 Electron Desktop 与 Android TV 客户端。Flutter Bundle 覆盖 Android/iOS/macOS/Windows/Linux，Lynx Bundle 覆盖 Android/iOS/Windows/macOS。Lynx 桌面 Bundle 在后端 CI 完成打包，设备安装和播放待验收。下方的客户端架构图描述 Flutter 客户端自身的架构。
 
 ## 架构文档导航
 
@@ -10,6 +10,7 @@ Songloft 是一个自托管的本地音乐服务器，采用前后端分离架�
 - **[前端架构](./architecture_frontend.md)** - Flutter 跨平台前端详细架构
 - **[客户端选择](./clients.md)** - Flutter、Lynx、Electron Desktop 与 TV 的平台、能力和下载入口
 - **[Lynx 客户端](./player-lynx/index.md)** - 安装、构建、测试与独立发版指南
+- **[Bundle 模式](./bundle-mode.md)** - Lynx 本地模式、包体来源和登录/设置入口
 - **[颜色系统](./color_system.md)** - Material 3 颜色体系和主题规范
 - **[快速开始](./quick-start.md)** - 快速上手指南（由 README.md 同步生成）
 
@@ -18,7 +19,7 @@ Songloft 是一个自托管的本地音乐服务器，采用前后端分离架�
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  Flutter 跨平台前端                                          │
-│  /clients/player (独立仓库: github.com/songloft-org/songloft-player) │
+│  /clients/player-flutter (独立仓库: github.com/songloft-org/songloft-player-flutter) │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
 │  │ Android  │ │   iOS    │ │  macOS   │ │ Windows  │       │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
@@ -149,13 +150,13 @@ songloft/
 | `make build-prod` | 无标签 | 生产完整版（默认），嵌入 Lynx Web |
 | `make build-prod-lite` | `-tags lite` | 生产精简版，不含前端 |
 | `make build-go-mobile-android` | `-tags lite` | Go 后端编译为 Android .aar（gomobile bind） |
-| `make build-go-mobile-ios` | `-tags lite` | Go 后端编译为 iOS .xcframework（gomobile bind） |
+| `make build-go-mobile-ios` | `-tags lite,bundle_ffmpeg` | gomobile 将 Go 后端和已验证的 FFmpeg 静态库打包为 iOS .xcframework。设置 `SONGLOFT_FFMPEG_IOS_ASSET` 指向解包目录。 |
 | `make build-go-desktop-{linux,windows,macos}` | `-tags lite` | Go 后端编译为桌面可执行文件（Bundle 用） |
 
 ### 构建参数与嵌入
 
 - `VERSION` 与 `BUILD_TYPE` 正交：`VERSION=dev` 自动启用 `-tags dev`（含 Swagger + pprof），正式版为 `X.Y.Z`；`BUILD_TYPE=lite` 不嵌入前端，留空即完整版。**禁止** `BUILD_TYPE=dev` 之类的混合值
-- 前端嵌入路径固定为 `clients/player-build/web-embedded`（**不是** `clients/player/build/web-embedded`）
+- 前端嵌入路径固定为 `clients/player-build/web-embedded`（**不是** `clients/player-flutter/build/web-embedded`）
 - SPA 回退只对不存在且末段不含 `.` 的路径返回 `index.html`；缺失静态资源必须返回 404，不能返回 HTML 冒充 JS/JSON
 - 子路径部署：启动时传 `-base-path /xxx` 或 `BASE_PATH=/xxx`；入口用 `http.StripPrefix` 剥离前缀，`embed.go` 运行时把 `<base href="/">` 替换为 `<base href="/xxx/">`；Lynx 宿主页通过 `webBaseUrl` 注入部署目录，供 API、Worker 和静态资源使用
 - 完整版用 Node.js 22 + pnpm 11.15.1 构建 Lynx Web，显式应用引擎补丁并预压缩；`embedded-build.json` 分别记录客户端与服务器身份

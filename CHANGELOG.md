@@ -6,6 +6,179 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [v2.13.13] - 2026-11-21
+### :sparkles: New Features
+- [`c3bd9be`](https://github.com/songloft-org/songloft/commit/c3bd9bec3845eb02188a6ff9d2f9e422e00471a4) - 歌曲评级（rating 0-100），支持单首/批量设置、过滤、排序与分面聚合 *(PR [#574](https://github.com/songloft-org/songloft/pull/574) by [@charce526](https://github.com/charce526))*
+- [`b348661`](https://github.com/songloft-org/songloft/commit/b348661f111086e5f52cba29916e2878cc8f162d) - **radio**: 支持无后缀 HLS 电台和纯音频播放 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`dcd40b2`](https://github.com/songloft-org/songloft/commit/dcd40b23a26f2bf9c8dfed1e1aeab904bd76f734) - **radio**: 支持 HTTP-FLV 直播和按需 HLS 回退 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`5629c25`](https://github.com/songloft-org/songloft/commit/5629c251c5658af484ebb458b5775d0580930f44) - **plugin**: 接入宿主播放音效 SDK *(commit by [@hanxi](https://github.com/hanxi))*
+- [`bedee5c`](https://github.com/songloft-org/songloft/commit/bedee5c3df7720b37f4334dfc0acc61d545c103d) - **plugin**: 同步宿主外链、全屏视频和音效文档 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`16b0ff5`](https://github.com/songloft-org/songloft/commit/16b0ff5af6ff44ee35dc77c8eb5442448bc83a7e) - **bundle**: 支持桌面宿主生命周期与移动后端构建 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`31ee38c`](https://github.com/songloft-org/songloft/commit/31ee38c673a8c9a599d8109f3d9b77a4c19e2f8b) - **library**: 支持组合歌曲类型筛选 songloft-org/songloft[#583](https://github.com/songloft-org/songloft/pull/583) *(commit by [@hanxi](https://github.com/hanxi))*
+- [`44a6ec7`](https://github.com/songloft-org/songloft/commit/44a6ec7f65e752729949a1fd931ab184271ca8ce) - **library**: 支持批量设置电台播放模式 *(PR [#585](https://github.com/songloft-org/songloft/pull/585) by [@hanxi](https://github.com/hanxi))*
+- [`81190ca`](https://github.com/songloft-org/songloft/commit/81190ca977c629cd9b9367885c2f6645d5082665) - **release**: 固定 FFmpeg Bundle 资产 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`4396dd0`](https://github.com/songloft-org/songloft/commit/4396dd0c601b7c9257e1eccc8b9faff5e46c3c7b) - **bundle**: 集成随包 FFmpeg 与 iOS 原生转码 *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :bug: Bug Fixes
+- [`ff7cd2c`](https://github.com/songloft-org/songloft/commit/ff7cd2c43e2057e0ecdb88d4573429e8ba3bdc9b) - **scan**: 保留自动歌单扫描顺序并追加新歌单 (Ref [#573](https://github.com/songloft-org/songloft/pull/573)) *(commit by [@hanxi](https://github.com/hanxi))*
+- [`b9d4a3a`](https://github.com/songloft-org/songloft/commit/b9d4a3a162ce65205775570a1336a0c4a410955a) - **jsruntime**: 插件网络请求接入全局 HTTP 代理，修复 [#575](https://github.com/songloft-org/songloft/pull/575) *(commit by [@hanxi](https://github.com/hanxi))*
+- [`2b3807f`](https://github.com/songloft-org/songloft/commit/2b3807f0f7098a67a56f1767d3aaa69051f0d78e) - **scan**: 解释目录排除规则并拒绝空扫描范围 (Ref [#573](https://github.com/songloft-org/songloft/pull/573)) *(commit by [@hanxi](https://github.com/hanxi))*
+- [`b5ecf54`](https://github.com/songloft-org/songloft/commit/b5ecf54f42324076d5d174138a7da4bbea37fb51) - **jsplugin**: 版本化 Lynx 回退桥接资源 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`fd557e8`](https://github.com/songloft-org/songloft/commit/fd557e8bdd50f059d6607e65ad684721614129ee) - **scripts**: 补齐 Lynx fallback 测试的 document.querySelector stub *(commit by [@hanxi](https://github.com/hanxi))*
+- [`ab02154`](https://github.com/songloft-org/songloft/commit/ab021545689797dfb35402609e391167e61ac6df) - **web**: 同步内嵌播放器进度修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`e3fb5dc`](https://github.com/songloft-org/songloft/commit/e3fb5dc776ffdc8feb94d406662bf6c7fee35116) - **web**: 同步长播进度与自动切歌修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`a349792`](https://github.com/songloft-org/songloft/commit/a34979230f23a224b78dfd53a64290b72595b186) - **play**: 回收音箱切歌后的本地播放流 songloft-org/songloft[#584](https://github.com/songloft-org/songloft/pull/584) *(commit by [@hanxi](https://github.com/hanxi))*
+- [`336e286`](https://github.com/songloft-org/songloft/commit/336e2867ab94ba33282b5c2650dda3666da1ba9f) - **library**: 全部播放排除电台和有声书 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`e25a43c`](https://github.com/songloft-org/songloft/commit/e25a43c01223b89cd5dd2f74c763269b266bed03) - **player-lynx**: 固定桌面发布包文件名 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`c817931`](https://github.com/songloft-org/songloft/commit/c817931435f19ecb1a5330943bd686c9dc0843c3) - **bundle**: 同步动态监听端口 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`ae2d130`](https://github.com/songloft-org/songloft/commit/ae2d130a1f0c830c166e5d76bfb656ae5a63e4cb) - **miot**: 更新 Android 滑块修复指针 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`3db64f1`](https://github.com/songloft-org/songloft/commit/3db64f19974ab1b21e9c66f3eb335d9d2e60e3ed) - **lynx**: 更新拖动布局修复指针 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`7a368e4`](https://github.com/songloft-org/songloft/commit/7a368e4d638fb423e669143bfd5da287d57052e0) - **cover**: 禁用封面 Range 响应 songloft-org/songloft[#586](https://github.com/songloft-org/songloft/pull/586) *(commit by [@hanxi](https://github.com/hanxi))*
+- [`50ee82b`](https://github.com/songloft-org/songloft/commit/50ee82b39f694734f6e5f04125c51fc7ac5e83a8) - **release**: 保持 previous release 测试脚本边界 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`d4f050b`](https://github.com/songloft-org/songloft/commit/d4f050b079076245986906c59b67c4a25401ac82) - **release**: 在固定后端源码内执行 Lynx gomobile *(commit by [@hanxi](https://github.com/hanxi))*
+- [`e4e0c6e`](https://github.com/songloft-org/songloft/commit/e4e0c6ec3780932c6bdf8bcf30e2d927a97d328b) - **release**: 跳过未配置 SDK 的桌面 Bundle *(commit by [@hanxi](https://github.com/hanxi))*
+- [`16965e6`](https://github.com/songloft-org/songloft/commit/16965e682eaa475f6cd1ee64740dd8218701dce9) - **release**: 使用合法的 Lynx 矩阵条件 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`e4f59db`](https://github.com/songloft-org/songloft/commit/e4f59dbc702d41784dec21ec5bbc09d2a615ff13) - **release**: 完整准备 Lynx Bundle 原生依赖 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`e1f3867`](https://github.com/songloft-org/songloft/commit/e1f3867b612f6f194bfc0a56ce21498e7243fe2e) - **release**: 传递 Lynx 桌面 SDK 架构 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`b4330c2`](https://github.com/songloft-org/songloft/commit/b4330c2153b1028a53c31e771487a0db8e4af20a) - **release**: 配置 Lynx SDK 与 Android Java *(commit by [@hanxi](https://github.com/hanxi))*
+- [`1467f2e`](https://github.com/songloft-org/songloft/commit/1467f2ec2d060840cf52da45902f03071c4953ff) - **release**: 安装 Lynx 桌面运行时 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`bce62f8`](https://github.com/songloft-org/songloft/commit/bce62f887ce29b2f19b9d5ee19329dc995d607ff) - **release**: 生成 Lynx 桌面构建身份 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`6160949`](https://github.com/songloft-org/songloft/commit/616094963038cffbd61446de67c3d63cb425b346) - **release**: 分离 Lynx SDK 下载与资源打包 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`c6eb437`](https://github.com/songloft-org/songloft/commit/c6eb437fd587da059fd01710a00e403652986b47) - **release**: 移除未发布的 FFmpeg 资产闸门 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`b786eca`](https://github.com/songloft-org/songloft/commit/b786ecaf066b5b36c9124088ba8e68bf28e1c90c) - **bundle**: 同步 Android ARMv7 的 FFmpeg 构建修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`51c9800`](https://github.com/songloft-org/songloft/commit/51c9800de93a9266fd59bf62ef6e0060499d4062) - **ci**: 兼容新版 FFmpeg 并同步 Lynx 打包测试 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`7ca6062`](https://github.com/songloft-org/songloft/commit/7ca6062e33d3b0bfbf6da85b945a750ea025c1d2) - **release**: 校验 Bundle 安装包与签名发布流程 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`bb49477`](https://github.com/songloft-org/songloft/commit/bb494778df6d6d698c24ab2efe906548be09f4c7) - **release**: 固定 Lynx 签名身份并同步下载文档 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`76f920b`](https://github.com/songloft-org/songloft/commit/76f920be791112c2829e3ce57264709e704b6042) - **release**: 复用同一份 Lynx 客户端构建 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`59cae55`](https://github.com/songloft-org/songloft/commit/59cae55c7a0e79959e1e4155a9c74617154e74de) - **release**: 修复 Lynx iOS 归档与 Intel macOS FFmpeg 依赖 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`eaf715f`](https://github.com/songloft-org/songloft/commit/eaf715f23d53f30a8d2fc3d522aa39da08624436) - **jsplugin**: 保留宿主地址的部署路径 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`6c7a9a2`](https://github.com/songloft-org/songloft/commit/6c7a9a23d8cce6779be7dedde2e3e3892e796325) - **release**: 同步 Flutter 标准版 Android 发布修复 *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :white_check_mark: Tests
+- [`0cf803c`](https://github.com/songloft-org/songloft/commit/0cf803c9135d6a23480a86960305cd084c3b0481) - **release**: 修正 FFmpeg 解析器夹具 *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :construction_worker: Build System
+- [`54c4486`](https://github.com/songloft-org/songloft/commit/54c4486482d1ab27d394b5ce5e1a4ca3b9820681) - **clients**: 更新 Flutter 与 Lynx 发布流程 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`fea5402`](https://github.com/songloft-org/songloft/commit/fea54024c31eff86e74a9f7656f16bd9879ce380) - **release**: 统一由后端发布 Bundle *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :memo: Documentation Changes
+- [`4430946`](https://github.com/songloft-org/songloft/commit/44309463af527e5aff5273ef7abc74d820b8a6d3) - update CHANGELOG for v2.13.12 *(commit by [@github-actions[bot]](https://github.com/apps/github-actions))*
+- [`d427128`](https://github.com/songloft-org/songloft/commit/d427128d9801450b887a73a01c33c05dd5b8bf60) - **guide**: 说明工具链自动声明 Lynx 回退页版本 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`1861c33`](https://github.com/songloft-org/songloft/commit/1861c33ac0046ed32fac0a8eb5bb7bc0f1216939) - **bundle**: 同步自动选用最新后端的打包流程 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`7919040`](https://github.com/songloft-org/songloft/commit/79190406199800f3c2f6ff7727fab57b20947f72) - **bundle**: 同步 Flutter 通用 Android APK *(commit by [@hanxi](https://github.com/hanxi))*
+- [`7a3718f`](https://github.com/songloft-org/songloft/commit/7a3718f537e5d3282af0ef23f70106f847797a8e) - **site**: 更新 Flutter 通用 APK 下载入口 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`6e66ca3`](https://github.com/songloft-org/songloft/commit/6e66ca38bd260aa61f66739ae44ee8bc6ca04eec) - **bundle**: 同步 Lynx 桌面共用发行入口 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`7fff283`](https://github.com/songloft-org/songloft/commit/7fff2831b0946f6961b12b35e6e7e094d8c30658) - 更新 Lynx 桌面发布入口 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`4e90470`](https://github.com/songloft-org/songloft/commit/4e904709ddd99c257f17bce05246a8d5ce8c214a) - **release**: 同步 Bundle 发布归属与打包验收记录 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`be4649c`](https://github.com/songloft-org/songloft/commit/be4649c58362d0afd5720279ad7d139075210684) - 同步各仓库文档、落地页与发布验收 *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :wrench: Chores
+- [`d57b42b`](https://github.com/songloft-org/songloft/commit/d57b42ba45c565bc48cd2d8f3f70f5b68d32859a) - **submodules**: 同步协议修正与许可证补全 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`8177b2f`](https://github.com/songloft-org/songloft/commit/8177b2f208d8436f24a97e08a4ae237f372f88c5) - **submodules**: 同步歌单下一首播放入口与验证 [#572](https://github.com/songloft-org/songloft/pull/572) *(commit by [@hanxi](https://github.com/hanxi))*
+- [`caf3729`](https://github.com/songloft-org/songloft/commit/caf3729128ff85dbd5280b861ea9eace439b0efa) - **submodules**: 同步 miot 定时页与布局修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`4e73b07`](https://github.com/songloft-org/songloft/commit/4e73b078d86472e0c3409d24a87a6aca2b82380a) - **submodules**: 同步鸿蒙插件白屏修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`204a8c6`](https://github.com/songloft-org/songloft/commit/204a8c640abfd2229d5a72298755900987767801) - **submodules**: 同步插件保留、封面与歌曲定位修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`b671981`](https://github.com/songloft-org/songloft/commit/b6719811adbf56737ec08f45ec2bcfb636aa209a) - **submodules**: 同步默认封面加载过渡修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`1f98fe9`](https://github.com/songloft-org/songloft/commit/1f98fe9ea3f92316ba271ff19e1b2506261db43c) - **plugins**: 同步智能音箱歌手续播修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`86d0490`](https://github.com/songloft-org/songloft/commit/86d0490681a56d70ab48248467f81e4b5d2411f4) - **clients**: 同步 Flutter 和 Lynx 逐字歌词修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`81204e2`](https://github.com/songloft-org/songloft/commit/81204e279428db3565f4c33df176a76f7fbf4514) - **plugins**: 同步智能音箱排障记录 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`3f2554f`](https://github.com/songloft-org/songloft/commit/3f2554fb97adbcb4cefe65eac41d44ff30d4e284) - **submodules**: 同步插件工具链 Lynx 回退页版本化 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`5f5b486`](https://github.com/songloft-org/songloft/commit/5f5b48609dcf4159adb19ed4092bd44d6e466105) - **submodules**: 同步 miot 插件升级 plugin-builder 2.22.0 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`463911f`](https://github.com/songloft-org/songloft/commit/463911fa7c84b9bb8fa5aff83d42bdec3eac2f68) - **submodules**: 同步 MIoT 前端交互优化 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`3c0ef98`](https://github.com/songloft-org/songloft/commit/3c0ef98d19d466e18a771e91277f6f49593d536f) - **submodules**: 同步 MIoT 界面与播放进度修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`d7d5b36`](https://github.com/songloft-org/songloft/commit/d7d5b36f17f9e0cbf0c60b0b4f9c50da99b67529) - **submodules**: 同步 MIoT 玻璃弹层与设备栏修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`a3d32f7`](https://github.com/songloft-org/songloft/commit/a3d32f70544e64686ba6ea570307f12689915cee) - **submodules**: 同步 MIoT Web 歌曲列表快滑修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`7665468`](https://github.com/songloft-org/songloft/commit/7665468d2b20ed0885fbf6da501fad23a7321f0a) - **submodules**: 同步 Lynx 歌曲列表和导航启动修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`25a7197`](https://github.com/songloft-org/songloft/commit/25a71974574848770912f99616c0d6242177a058) - **submodules**: 同步 MIoT 单曲循环起播失败修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`f75be9e`](https://github.com/songloft-org/songloft/commit/f75be9eaf8a9e4918408b741cc253f03b9e4c4e1) - **submodules**: 同步 Lynx 插件图标冷启动修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`fb2b875`](https://github.com/songloft-org/songloft/commit/fb2b875dd5af746087b1a2e90bdb3f608613e625) - **submodules**: 同步 MIoT 窄屏文字重叠修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`6e6d67b`](https://github.com/songloft-org/songloft/commit/6e6d67b02242688fb119791c4228491a8524edff) - **release**: 将 Bundle 打包迁至客户端仓库 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`9e55202`](https://github.com/songloft-org/songloft/commit/9e552024e141805f60b79879245b98c2349a5102) - **submodules**: 同步客户端最新后端打包流程 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`5b2a57b`](https://github.com/songloft-org/songloft/commit/5b2a57b68520bc7a7b5b870eb551e225d677cf8f) - **submodules**: 同步 Flutter Bundle 接口校验修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`4303de7`](https://github.com/songloft-org/songloft/commit/4303de7ad769864041cb24b21711e311f64b5ae5) - **clients**: 更新 Lynx 音量修复指针 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`d6a354d`](https://github.com/songloft-org/songloft/commit/d6a354d6ee57619cd411dbabd29fcb72ce1194e7) - **clients**: 更新 Lynx 桌面发布修复指针 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`1fc18da`](https://github.com/songloft-org/songloft/commit/1fc18dae5a0419adbfd65191ff60b917c2df52ef) - **clients**: 更新 Lynx 桌面文档指针 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`afb8344`](https://github.com/songloft-org/songloft/commit/afb83447061efea2a44e4f891d4dd8a6fb5d83f0) - **clients**: 更新 Lynx 桌面说明指针 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`b79ba86`](https://github.com/songloft-org/songloft/commit/b79ba86d4bc0f724f2dd92a8818411854042a965) - **clients**: 更新 Lynx 验收记录指针 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`a64525c`](https://github.com/songloft-org/songloft/commit/a64525caa41eb29ca961daef9fecdc7b6502be31) - **clients**: 更新桌面开发版文档指针 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`dff636c`](https://github.com/songloft-org/songloft/commit/dff636c8905f0fae717a78a97f40d892d1247a07) - **clients**: 重命名 Flutter 客户端仓库与子模块 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`df29a52`](https://github.com/songloft-org/songloft/commit/df29a528bc70c66d74a68690d2d9c4288086c3ed) - **plugin**: 更新 MIoT 插件 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`6899aaf`](https://github.com/songloft-org/songloft/commit/6899aaf359e8410fb5bc3dfa258da1ff642ff3c9) - **clients**: 同步 Flutter 与 Lynx 客户端发布版本 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`57a9f6b`](https://github.com/songloft-org/songloft/commit/57a9f6b8f20da1f018154488c8c8f8e6f26885d5) - release version 2.13.13 *(commit by [@hanxi](https://github.com/hanxi))*
+
+
+## [v2.13.12] - 2026-11-17
+### :bug: Bug Fixes
+- [`afe3640`](https://github.com/songloft-org/songloft/commit/afe36400e441f5a4bb2df48db144a75be7be58f0) - **jsplugin**: 修复 Flutter 打开 Lynx 插件白屏 *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :memo: Documentation Changes
+- [`ff493cb`](https://github.com/songloft-org/songloft/commit/ff493cb8683fff81ec62faa29b5b95c471d5c015) - update CHANGELOG for v2.13.11 *(commit by [@github-actions[bot]](https://github.com/apps/github-actions))*
+- [`39cc87d`](https://github.com/songloft-org/songloft/commit/39cc87db2a1b92f0be2d96741dc3a1178a1ea7c3) - **ci**: 记录 Linux 固定环境发布验证 *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :wrench: Chores
+- [`281ca48`](https://github.com/songloft-org/songloft/commit/281ca487465e0e8bf3b3c5e7f82ca3b13fad7917) - **clients**: 同步 Flutter 与 Lynx 客户端发布版本 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`8c014b3`](https://github.com/songloft-org/songloft/commit/8c014b342ea69683293fec729e9396a925b94e66) - release version 2.13.12 *(commit by [@hanxi](https://github.com/hanxi))*
+
+
+## [v2.13.11] - 2026-11-16
+### :sparkles: New Features
+- [`b98eb00`](https://github.com/songloft-org/songloft/commit/b98eb00361b3cfcc79353413468c5c72e4773c78) - **jsplugin**: 完善 Lynx 插件回退资源及客户端接入 *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :bug: Bug Fixes
+- [`81849b2`](https://github.com/songloft-org/songloft/commit/81849b28c6649d28c87ebfd7b31a7acb8b253f2a) - **cache**: 统一校验远程音频缓存并淘汰无效文件 *(PR [#570](https://github.com/songloft-org/songloft/pull/570) by [@hanxi](https://github.com/hanxi))*
+- [`e2bfea9`](https://github.com/songloft-org/songloft/commit/e2bfea9b1b2ccce65176f27e9fa0968dbc14acd9) - **library**: 按碟号和音轨号排序专辑歌曲 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`8917470`](https://github.com/songloft-org/songloft/commit/8917470b20028976cb4c5559e3c1d8053bcdca11) - **jsplugin**: 更新 Lynx 宿主并支持直接加载歌曲封面 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`b25b31a`](https://github.com/songloft-org/songloft/commit/b25b31a7b7341ded21041fe086469975bc44b4ba) - **ci**: 固定 Linux Bundle 构建系统基线 *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :memo: Documentation Changes
+- [`06db562`](https://github.com/songloft-org/songloft/commit/06db5629795979014b9f4110d70359a3fff0b4bb) - **release**: 安装说明改为中英文指南链接 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`2326b38`](https://github.com/songloft-org/songloft/commit/2326b38a6ab97b194cc7b7cb1595f49d75bcd32b) - update CHANGELOG for v2.13.10 *(commit by [@github-actions[bot]](https://github.com/apps/github-actions))*
+- [`ebdbdde`](https://github.com/songloft-org/songloft/commit/ebdbddedde6c47dc3ec8919b9be2f4e88815faab) - 同步中英文文档站并更新 Lynx 修复指针 *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :wrench: Chores
+- [`4df1e97`](https://github.com/songloft-org/songloft/commit/4df1e97b3a7874d08d1d74ce799baa9295b512b4) - **deps**: 更新 MIoT 插件 HD 问答修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`d5935c4`](https://github.com/songloft-org/songloft/commit/d5935c42d57dce17add89762e5a455a891d39bf0) - **toolchain**: 同步 v2.20.0 及 npm 发布恢复支持 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`6b3f38c`](https://github.com/songloft-org/songloft/commit/6b3f38c923cf15358a1e7156c6290cac9d43b8c2) - **miot**: 同步语音匹配阈值插件 v2026.11.15.1 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`7180df3`](https://github.com/songloft-org/songloft/commit/7180df38176ca7b44c1a7d8cf2b3ec269d35ac7d) - **lynx**: 同步插件状态保留与输入事件修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`5e42210`](https://github.com/songloft-org/songloft/commit/5e422105250ee58b0b09ef095076206f32de46d9) - **plugins**: 更新智能音箱 Lynx 版本和 SDK 引用 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`00dbe3c`](https://github.com/songloft-org/songloft/commit/00dbe3c708a3bf194625c554446532fa9e3112ed) - **plugins**: 同步智能音箱节假日数据版本 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`3db91f6`](https://github.com/songloft-org/songloft/commit/3db91f69c1c00eecf04f630ba425df91c6fb5544) - **plugins**: 更新智能音箱交互优化版本 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`2a8c1f8`](https://github.com/songloft-org/songloft/commit/2a8c1f8fdb87803e2fd2322886db82d1c8ce1b10) - **clients**: 同步 Flutter 与 Lynx 客户端发布版本 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`da5d0da`](https://github.com/songloft-org/songloft/commit/da5d0dacac5ed33e15b67094007a5d50f9565712) - release version 2.13.11 *(commit by [@hanxi](https://github.com/hanxi))*
+
+
+## [v2.13.10] - 2026-11-15
+### :sparkles: New Features
+- [`f1c4936`](https://github.com/songloft-org/songloft/commit/f1c4936d5a6dda299dd26cc3178beb61d5e71dce) - **navidrome**: 接入独立同步插件并规范自动发布 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`c686994`](https://github.com/songloft-org/songloft/commit/c686994c13cb4a6611a29ef410b3f13236516158) - **playlist**: 共享标签并优化歌单封面与布局 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`cda7928`](https://github.com/songloft-org/songloft/commit/cda7928858f2e99045f7b76f8f3ba691e10b48da) - **jsplugin**: 广播歌单成员变更并同步客户端收藏 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`4c7550c`](https://github.com/songloft-org/songloft/commit/4c7550ccf1cd3566c6cfa227d8280ee6eb3c6fd3) - **miot**: 同步全部歌曲虚拟歌单插件 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`e879a53`](https://github.com/songloft-org/songloft/commit/e879a5348d78e326397526aa63c06e50d7158711) - **playback**: 增加歌单续播状态与有声书标记 *(commit by [@hanxi](https://github.com/hanxi))*
+
+### :bug: Bug Fixes
+- [`e8f3929`](https://github.com/songloft-org/songloft/commit/e8f3929abffef9d85206118977528f5ec4872856) - **mobile**: 使用沙盒临时目录修复本地模式启动失败 *(PR [#559](https://github.com/songloft-org/songloft/pull/559) by [@hanxi](https://github.com/hanxi))*
+- [`2b7c11d`](https://github.com/songloft-org/songloft/commit/2b7c11daea37a0f612e69c81638adc96f4fa06a1) - **jsplugin**: 空闲驱逐保留播放事件订阅并在广播时唤醒被驱逐插件 *(PR [#560](https://github.com/songloft-org/songloft/pull/560) by [@deerwan](https://github.com/deerwan))*
+- [`3c1c93a`](https://github.com/songloft-org/songloft/commit/3c1c93a91d004e467855352a08b49af222057532) - **client**: 同步手机歌曲行排版优化 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`b35fc09`](https://github.com/songloft-org/songloft/commit/b35fc09e52bf4404ba9dfb1e7e999066ae844b1d) - **plugins**: 同步 Navidrome 元数据修复版本 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`22cd87e`](https://github.com/songloft-org/songloft/commit/22cd87edf308b53ad6301e0b8a418bd8a6e784a2) - **miot**: 同步无触发词问答设置说明与发布版本 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`493e02b`](https://github.com/songloft-org/songloft/commit/493e02b37bcd42a120133c515b718580aaad0415) - **miot**: 同步分组起播时差修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`6115afb`](https://github.com/songloft-org/songloft/commit/6115afb969ff1f4b7ced0fbe39d223350adb9e5c) - **playback**: 同步大歌单队列分批加载修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`3ad14b4`](https://github.com/songloft-org/songloft/commit/3ad14b4a8aed4b82eb912366ff80212a2947c4b8) - **hls**: 为跨域播放资源生成签名代理链接 *(PR [#567](https://github.com/songloft-org/songloft/pull/567) by [@hanxi](https://github.com/hanxi))*
+
+### :memo: Documentation Changes
+- [`59bfec2`](https://github.com/songloft-org/songloft/commit/59bfec265f7d2cf0daf3c3fd426ccc46e00ff597) - **ci**: 补充 Android Bundle 修复验收证据 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`bcae196`](https://github.com/songloft-org/songloft/commit/bcae19684013de6f8b3cf7789658027a7345784d) - update CHANGELOG for v2.13.9 *(commit by [@github-actions[bot]](https://github.com/apps/github-actions))*
+- [`a5f57e3`](https://github.com/songloft-org/songloft/commit/a5f57e35ecca69fc81e965b82dcdcf4c129afe4d) - **ci**: 记录完整发布恢复验收 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`3049574`](https://github.com/songloft-org/songloft/commit/3049574c76431ddefc20dbe9c1adba8bef3212ef) - **faq**: 补充 NAS 音乐目录挂载排查说明 *(PR [#557](https://github.com/songloft-org/songloft/pull/557) by [@hanxi](https://github.com/hanxi))*
+- [`59f1fb8`](https://github.com/songloft-org/songloft/commit/59f1fb825118328bcb7da31a4ce485e76a4b81a3) - **hls**: 补充 ysp-live 真实直播验证记录 *(PR [#567](https://github.com/songloft-org/songloft/pull/567) by [@hanxi](https://github.com/hanxi))*
+
+### :wrench: Chores
+- [`518953c`](https://github.com/songloft-org/songloft/commit/518953c4edcc87d73342bf03e0f7cb6b1207e654) - **plugins**: 更新智能音箱 Responses 搜索与连接测试 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`7089a9b`](https://github.com/songloft-org/songloft/commit/7089a9b032591dd305b26e1d22636bc9f6562f8b) - **miot**: 同步 AI 触发词与连续追问修复 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`25e8a8a`](https://github.com/songloft-org/songloft/commit/25e8a8adbc5e9c622b58993a57f231815115fca9) - **clients**: 同步 Flutter 与 Lynx 客户端发布版本 *(commit by [@hanxi](https://github.com/hanxi))*
+- [`19fbcab`](https://github.com/songloft-org/songloft/commit/19fbcabfe4cc2fe7bcb6c9d4fa73d6b601bbb1bd) - release version 2.13.10 *(commit by [@hanxi](https://github.com/hanxi))*
+
+
 ## [v2.13.9] - 2026-11-04
 ### :bug: Bug Fixes
 - [`507a4c0`](https://github.com/songloft-org/songloft/commit/507a4c0e82fcbbd5e047d78440ce103b46e1bdf6) - **ci**: 为 Android Bundle 编译释放磁盘空间 *(commit by [@hanxi](https://github.com/hanxi))*
@@ -2357,3 +2530,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [v2.13.7]: https://github.com/songloft-org/songloft/compare/v2.13.5...v2.13.7
 [v2.13.8]: https://github.com/songloft-org/songloft/compare/v2.13.7...v2.13.8
 [v2.13.9]: https://github.com/songloft-org/songloft/compare/v2.13.8...v2.13.9
+[v2.13.10]: https://github.com/songloft-org/songloft/compare/v2.13.9...v2.13.10
+[v2.13.11]: https://github.com/songloft-org/songloft/compare/v2.13.10...v2.13.11
+[v2.13.12]: https://github.com/songloft-org/songloft/compare/v2.13.11...v2.13.12
+[v2.13.13]: https://github.com/songloft-org/songloft/compare/v2.13.12...v2.13.13

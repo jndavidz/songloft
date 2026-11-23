@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -24,6 +25,7 @@ import (
 	"songloft/internal/services/playactivity"
 
 	"github.com/go-chi/chi/v5"
+	chi_middleware "github.com/go-chi/chi/v5/middleware"
 )
 
 // PlayEventBroadcaster 向 JS 插件广播播放事件
@@ -53,6 +55,7 @@ type SongHandler struct {
 	reassigner        AsyncReassigner
 	lyricFetcher      *services.LyricFetcher // 解包插件 JSON 拿 LRC 文本(歌词 url 分支用)
 	hlsHandler        *HLSHandler            // 电台 HLS 流的反代委托（开关在 HLSHandler 内）
+	hlsTranscode      *services.HLSTranscodeService
 	playActivity      *playactivity.Registry // 跟踪进行中的 play/prefetch/transcode/reassign 工作，用户切歌时一次性 cancel
 	getMusicPath      func() string          // 获取 music_path（由 scanner.GetMusicPath 注入）
 	playBroadcaster   PlayEventBroadcaster   // JS 插件播放事件广播（可选，nil 安全）
@@ -87,6 +90,10 @@ func NewSongHandler(
 		playActivity: playActivity,
 		radioClient:  radioClient,
 	}
+}
+
+func (h *SongHandler) SetHLSTranscodeService(s *services.HLSTranscodeService) {
+	h.hlsTranscode = s
 }
 
 // SetGetMusicPath 注入 music_path 获取函数。
@@ -335,6 +342,9 @@ func parseSongSort(sort, order string) (orderBy, dir string) {
 	dir = order
 	if dir == "" {
 		dir = "DESC"
+		if orderBy == "track" || orderBy == "rating" {
+			dir = "ASC"
+		}
 	}
 	return orderBy, dir
 }
@@ -352,13 +362,22 @@ func parseExcludePlaylistLabels(raw string) []string {
 	return strings.Split(raw, ",")
 }
 
+// parseSongTypeQuery validates the comma-separated songs type filter while
+// preserving the raw value for the repository filter.
+func parseSongTypeQuery(r *http.Request) (string, error) {
+	values := r.URL.Query()["type"]
+	raw := strings.Join(values, ",")
+	_, err := database.ParseSongTypes(raw)
+	return raw, err
+}
+
 // ListSongs 获取歌曲列表
 // @Summary 获取歌曲列表
 // @Description 获取歌曲列表，支持按类型过滤、关键词搜索和分页。默认排除隐藏歌单里的歌，传 exclude_playlist_labels=none 显示全部
 // @Tags 歌曲管理
 // @Accept json
 // @Produce json
-// @Param type query string false "歌曲类型" Enums(local, remote, radio)
+// @Param type query string false "歌曲类型，支持 local、remote、radio 的逗号分隔组合；不传表示全部类型"
 // @Param keyword query string false "搜索关键词"
 // @Param path_prefix query string false "按 file_path 前缀过滤（如 music/Pop）"
 // @Param genre query string false "按流派精确过滤"
@@ -368,12 +387,15 @@ func parseExcludePlaylistLabels(raw string) []string {
 // @Param style query string false "按风格精确过滤"
 // @Param year query int false "按发行年份精确过滤"
 // @Param decade query int false "按年代过滤（起始年，如 1990 匹配 1990-1999）"
+// @Param rating query int false "按评级精确过滤（0-100；0=未评级；-1 表示只要未评级歌曲）"
+// @Param min_rating query int false "按评级下限过滤（如 60 = 至少 3 星）；与 rating 同时出现时 rating=-1 优先生效"
 // @Param exclude_playlist_labels query string false "排除属于这些 label 歌单的歌曲(逗号分隔), 默认 hidden; 传 none 显示全部" default(hidden)
 // @Param limit query int false "每页数量" default(20)
 // @Param offset query int false "偏移量" default(0)
-// @Param sort query string false "排序字段，缺省 added_at" Enums(id, title, artist, album, duration, added_at, updated_at, file_modified_at, year, genre, file_size)
-// @Param order query string false "排序方向，缺省 desc" Enums(asc, desc)
+// @Param sort query string false "排序字段；指定 album 时缺省 track（碟号、音轨号数字排序），其他情况缺省 added_at；未知轨号排在同碟末尾" Enums(id, title, artist, album, duration, added_at, updated_at, file_modified_at, year, genre, file_size, track, rating)
+// @Param order query string false "排序方向，track/rating 缺省 asc，其他字段缺省 desc" Enums(asc, desc)
 // @Success 200 {object} map[string]any "成功返回歌曲列表"
+// @Failure 400 {object} map[string]string "歌曲类型参数无效"
 // @Failure 500 {object} map[string]string "服务器错误"
 // @Security BearerAuth
 // @Router /songs [get]
@@ -381,7 +403,11 @@ func (h *SongHandler) ListSongs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// 解析查询参数
-	songType := r.URL.Query().Get("type")
+	songType, err := parseSongTypeQuery(r)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "歌曲类型参数无效", err)
+		return
+	}
 	keyword := r.URL.Query().Get("keyword")
 	pathPrefix := r.URL.Query().Get("path_prefix")
 	orderBy, order := parseSongSort(r.URL.Query().Get("sort"), r.URL.Query().Get("order"))
@@ -430,7 +456,7 @@ func (h *SongHandler) ListSongs(w http.ResponseWriter, r *http.Request) {
 // @Tags 歌曲管理
 // @Accept json
 // @Produce json
-// @Param type query string false "歌曲类型"
+// @Param type query string false "歌曲类型，支持 local、remote、radio 的逗号分隔组合；不传表示全部类型"
 // @Param keyword query string false "搜索关键词"
 // @Param path_prefix query string false "按 file_path 前缀过滤"
 // @Param genre query string false "按流派精确过滤"
@@ -443,16 +469,22 @@ func (h *SongHandler) ListSongs(w http.ResponseWriter, r *http.Request) {
 // @Param exclude_playlist_labels query string false "排除属于这些 label 歌单的歌曲(逗号分隔), 默认 hidden; 传 none 显示全部" default(hidden)
 // @Param limit query int false "随机返回数量，默认 50，上限 500" default(50)
 // @Success 200 {object} map[string]any "成功返回随机歌曲列表"
+// @Failure 400 {object} map[string]string "歌曲类型参数无效"
 // @Failure 500 {object} map[string]string "服务器错误"
 // @Security BearerAuth
 // @Router /songs/random [get]
 func (h *SongHandler) ListRandomSongs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	songType, err := parseSongTypeQuery(r)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "歌曲类型参数无效", err)
+		return
+	}
 
 	limit, _ := parsePagination(r, 50, 500)
 
 	filter := &database.SongFilter{
-		Type:                  r.URL.Query().Get("type"),
+		Type:                  songType,
 		Keyword:               r.URL.Query().Get("keyword"),
 		PathPrefix:            r.URL.Query().Get("path_prefix"),
 		ExcludePlaylistLabels: parseExcludePlaylistLabels(r.URL.Query().Get("exclude_playlist_labels")),
@@ -478,7 +510,7 @@ func (h *SongHandler) ListRandomSongs(w http.ResponseWriter, r *http.Request) {
 // @Tags 歌曲管理
 // @Accept json
 // @Produce json
-// @Param type query string false "歌曲类型"
+// @Param type query string false "歌曲类型，支持 local、remote、radio 的逗号分隔组合；不传表示全部类型"
 // @Param keyword query string false "搜索关键词"
 // @Param path_prefix query string false "按 file_path 前缀过滤"
 // @Param genre query string false "按流派精确过滤"
@@ -489,18 +521,24 @@ func (h *SongHandler) ListRandomSongs(w http.ResponseWriter, r *http.Request) {
 // @Param year query int false "按发行年份精确过滤"
 // @Param decade query int false "按年代过滤（起始年，如 1990 匹配 1990-1999）"
 // @Param exclude_playlist_labels query string false "排除属于这些 label 歌单的歌曲(逗号分隔), 默认 hidden; 传 none 显示全部" default(hidden)
-// @Param sort query string false "排序字段，缺省 added_at" Enums(id, title, artist, album, duration, added_at, updated_at, file_modified_at, year, genre, file_size)
-// @Param order query string false "排序方向，缺省 desc" Enums(asc, desc)
+// @Param sort query string false "排序字段；指定 album 时缺省 track（碟号、音轨号数字排序），其他情况缺省 added_at；未知轨号排在同碟末尾" Enums(id, title, artist, album, duration, added_at, updated_at, file_modified_at, year, genre, file_size, track)
+// @Param order query string false "排序方向，track 缺省 asc，其他字段缺省 desc" Enums(asc, desc)
 // @Success 200 {object} map[string]any "成功返回 ID 列表"
+// @Failure 400 {object} map[string]string "歌曲类型参数无效"
 // @Failure 500 {object} map[string]string "服务器错误"
 // @Security BearerAuth
 // @Router /songs/ids [get]
 func (h *SongHandler) ListSongIDs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	songType, err := parseSongTypeQuery(r)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "歌曲类型参数无效", err)
+		return
+	}
 
 	orderBy, order := parseSongSort(r.URL.Query().Get("sort"), r.URL.Query().Get("order"))
 	filter := &database.SongFilter{
-		Type:                  r.URL.Query().Get("type"),
+		Type:                  songType,
 		Keyword:               r.URL.Query().Get("keyword"),
 		PathPrefix:            r.URL.Query().Get("path_prefix"),
 		ExcludePlaylistLabels: parseExcludePlaylistLabels(r.URL.Query().Get("exclude_playlist_labels")),
@@ -526,6 +564,9 @@ func applySongTagFilters(filter *database.SongFilter, q url.Values) {
 	filter.Genre = q.Get("genre")
 	filter.Artist = q.Get("artist")
 	filter.Album = q.Get("album")
+	if filter.Album != "" && q.Get("sort") == "" {
+		filter.OrderBy, filter.Order = parseSongSort("track", q.Get("order"))
+	}
 	filter.Language = q.Get("language")
 	filter.Style = q.Get("style")
 	if y, err := strconv.Atoi(q.Get("year")); err == nil && y > 0 {
@@ -538,6 +579,22 @@ func applySongTagFilters(filter *database.SongFilter, q url.Values) {
 		filter.TagID = tagID
 	}
 	filter.TagName = q.Get("tag")
+	// 评级过滤：min_rating 为「≥ 下限」（如 20 = 至少 1 星）；
+	// rating 为精确匹配，0 合法（未评级），-1 表示「未评级」专用筛选。
+	if mr, err := strconv.Atoi(q.Get("min_rating")); err == nil && mr > 0 {
+		filter.MinRating = mr
+	}
+	if raw := q.Get("rating"); raw != "" {
+		if rv, err := strconv.Atoi(raw); err == nil {
+			if rv >= 0 {
+				filter.ExactRating = &rv
+			} else {
+				zero := 0
+				filter.ExactRating = &zero
+				filter.MinRating = 0
+			}
+		}
+	}
 }
 
 // songFacetFields 是 /songs/facets 支持的维度白名单。
@@ -545,30 +602,38 @@ func applySongTagFilters(filter *database.SongFilter, q url.Values) {
 var songFacetFields = map[string]struct{}{
 	"genre": {}, "artist": {}, "album": {},
 	"language": {}, "style": {}, "year": {}, "decade": {},
-	"tag": {},
+	"rating": {},
+	"tag":    {},
 }
 
 // ListSongFacets 按维度聚合曲库标签，返回该维度下的取值 + 计数 + 代表封面（支持搜索/排序/分页）。
 // @Summary 曲库标签分类聚合
 // @Description 按指定维度聚合曲库，返回该维度下非空取值、各自的歌曲数量及一首代表歌曲的封面 URL，用于「分类浏览」的卡片网格。
-// @Description 支持维度：genre(流派)/artist(歌手)/album(专辑)/language(语种)/style(风格)/year(年份)/decade(年代)/tag(标签)。
-// @Description year/decade 的 value 为数字字符串（年代如 "1990" 表示 1990-1999）。取到某取值后可用 /songs?<field>=<value> 拉取该分类下歌曲（tag 维度除外——tag 的 value 为标签名，需用 /songs?tag_name=<value> 过滤）。
+// @Description 支持维度：genre(流派)/artist(歌手)/album(专辑)/language(语种)/style(风格)/year(年份)/decade(年代)/rating(评级)/tag(标签)。
+// @Description year/decade/rating 的 value 为数字字符串（年代如 "1990" 表示 1990-1999；rating 为 20-100 的评级值，未评级歌曲不参与聚合）。取到某取值后可用 /songs?<field>=<value> 拉取该分类下歌曲（tag 维度除外——tag 的 value 为标签名，需用 /songs?tag_name=<value> 过滤）。
 // @Description 支持 keyword 模糊搜索取值、limit/offset 分页、sort(count|name)/order 排序；返回 total 为该维度去重取值总数。
 // @Tags 歌曲管理
 // @Produce json
-// @Param field query string true "聚合维度" Enums(genre, artist, album, language, style, year, decade, tag)
+// @Param field query string true "聚合维度" Enums(genre, artist, album, language, style, year, decade, rating, tag)
+// @Param type query string false "歌曲类型，支持 local、remote、radio 的逗号分隔组合；不传表示全部类型"
+// @Param exclude_playlist_labels query string false "排除属于这些 label 歌单的歌曲(逗号分隔), 默认 hidden; 传 none 显示全部"
 // @Param keyword query string false "对取值模糊搜索"
 // @Param limit query int false "分页大小，缺省 20，上限 100000"
 // @Param offset query int false "分页偏移，缺省 0"
 // @Param sort query string false "排序维度，缺省 count" Enums(count, name)
 // @Param order query string false "排序方向；count 缺省 desc，name 缺省 asc" Enums(asc, desc)
 // @Success 200 {object} map[string]any "成功返回聚合结果 {field, facets:[{value,count,cover_url}], total, limit, offset}"
-// @Failure 400 {object} map[string]string "缺少或不支持的 field"
+// @Failure 400 {object} map[string]string "缺少或不支持的 field，或歌曲类型参数无效"
 // @Failure 500 {object} map[string]string "服务器错误"
 // @Security BearerAuth
 // @Router /songs/facets [get]
 func (h *SongHandler) ListSongFacets(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	songType, err := parseSongTypeQuery(r)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "歌曲类型参数无效", err)
+		return
+	}
 
 	field := r.URL.Query().Get("field")
 	if _, ok := songFacetFields[field]; !ok {
@@ -580,11 +645,13 @@ func (h *SongHandler) ListSongFacets(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parsePagination(r, models.DefaultPaginationLimit, models.MaxPaginationLimit)
 
 	filter := &database.FacetFilter{
-		Keyword: keyword,
-		OrderBy: r.URL.Query().Get("sort"),
-		Order:   r.URL.Query().Get("order"),
-		Limit:   limit,
-		Offset:  offset,
+		Type:                  songType,
+		ExcludePlaylistLabels: parseExcludePlaylistLabels(r.URL.Query().Get("exclude_playlist_labels")),
+		Keyword:               keyword,
+		OrderBy:               r.URL.Query().Get("sort"),
+		Order:                 r.URL.Query().Get("order"),
+		Limit:                 limit,
+		Offset:                offset,
 	}
 
 	facets, err := h.songService.ListFacet(ctx, field, filter)
@@ -596,7 +663,7 @@ func (h *SongHandler) ListSongFacets(w http.ResponseWriter, r *http.Request) {
 		facets = []database.Facet{}
 	}
 
-	total, err := h.songService.CountFacet(ctx, field, keyword)
+	total, err := h.songService.CountFacetFiltered(ctx, field, filter)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "获取标签分类总数失败", err)
 		return
@@ -624,13 +691,20 @@ var songNameFields = map[string]struct{}{
 // @Tags 歌曲管理
 // @Produce json
 // @Param field query string true "维度" Enums(title, artist)
+// @Param type query string false "歌曲类型，支持 local、remote、radio 的逗号分隔组合；不传表示全部类型"
+// @Param exclude_playlist_labels query string false "排除属于这些 label 歌单的歌曲(逗号分隔), 默认 hidden; 传 none 显示全部"
 // @Success 200 {object} map[string]any "成功返回 {field, names:[...], total}"
-// @Failure 400 {object} map[string]string "缺少或不支持的 field"
+// @Failure 400 {object} map[string]string "缺少或不支持的 field，或歌曲类型参数无效"
 // @Failure 500 {object} map[string]string "服务器错误"
 // @Security BearerAuth
 // @Router /songs/names [get]
 func (h *SongHandler) ListSongNames(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	songType, err := parseSongTypeQuery(r)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "歌曲类型参数无效", err)
+		return
+	}
 
 	field := r.URL.Query().Get("field")
 	if _, ok := songNameFields[field]; !ok {
@@ -638,7 +712,10 @@ func (h *SongHandler) ListSongNames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	names, err := h.songService.ListDistinctNames(ctx, field)
+	names, err := h.songService.ListDistinctNamesFiltered(ctx, field, &database.SongFilter{
+		Type:                  songType,
+		ExcludePlaylistLabels: parseExcludePlaylistLabels(r.URL.Query().Get("exclude_playlist_labels")),
+	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "获取曲库名录失败", err)
 		return
@@ -886,11 +963,6 @@ func (h *SongHandler) audioTrackProbePath(song *models.Song) string {
 	if song.Type == models.TypeLocal {
 		return song.FilePath
 	}
-	if song.CachePath != "" {
-		if _, err := os.Stat(song.CachePath); err == nil {
-			return song.CachePath
-		}
-	}
 	if p, ok := h.cacheService.FindCachedFileBySong(song); ok {
 		return p
 	}
@@ -971,12 +1043,12 @@ func (h *SongHandler) BatchDeleteSongs(w http.ResponseWriter, r *http.Request) {
 
 // UpdateSong 更新歌曲信息
 // @Summary 更新歌曲信息
-// @Description 更新歌曲信息（仅支持网络歌曲和电台）
+// @Description 更新网络歌曲或电台。电台可将 radio_mode 设为 hls、flv 或 audio_only（服务端输出 MP3），空字符串恢复自动识别并探测无已知后缀的源，省略则保留手选模式。自动模式换源时重新探测。纯音频模式清除 is_video。cover_url 不得指向本服务的歌曲或歌单封面接口。
 // @Tags 歌曲管理
 // @Accept json
 // @Produce json
 // @Param id path int true "歌曲ID"
-// @Param request body object{title=string,artist=string,album=string,url=string,cover_url=string,is_live=boolean,is_video=boolean} true "歌曲信息"
+// @Param request body object{title=string,artist=string,album=string,url=string,cover_url=string,is_live=boolean,is_video=boolean,radio_mode=string} true "歌曲信息"
 // @Success 200 {object} models.Song "更新成功"
 // @Failure 400 {object} map[string]string "请求数据错误"
 // @Failure 404 {object} map[string]string "歌曲不存在"
@@ -1002,13 +1074,14 @@ func (h *SongHandler) UpdateSong(w http.ResponseWriter, r *http.Request) {
 
 	// 解析请求
 	var req struct {
-		Title    string `json:"title"`
-		Artist   string `json:"artist"`
-		Album    string `json:"album"`
-		URL      string `json:"url"`
-		CoverURL string `json:"cover_url"`
-		IsLive   *bool  `json:"is_live"`
-		IsVideo  *bool  `json:"is_video"` // 是否含视频画面;仅在显式提供时更新
+		Title     string            `json:"title"`
+		Artist    string            `json:"artist"`
+		Album     string            `json:"album"`
+		URL       string            `json:"url"`
+		CoverURL  string            `json:"cover_url"`
+		IsLive    *bool             `json:"is_live"`
+		IsVideo   *bool             `json:"is_video"` // 是否含视频画面;仅在显式提供时更新
+		RadioMode *models.RadioMode `json:"radio_mode"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1021,8 +1094,13 @@ func (h *SongHandler) UpdateSong(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "标题不能为空", nil)
 		return
 	}
+	if referencesLocalCover(r, h.urlResolver, req.CoverURL) {
+		respondError(w, http.StatusBadRequest, invalidCoverReference, nil)
+		return
+	}
 
 	// 更新歌曲信息
+	previousURL, previousMode := existingSong.URL, existingSong.RadioMode
 	existingSong.Title = req.Title
 	existingSong.Artist = req.Artist
 	existingSong.Album = req.Album
@@ -1039,16 +1117,36 @@ func (h *SongHandler) UpdateSong(w http.ResponseWriter, r *http.Request) {
 	if req.IsVideo != nil {
 		existingSong.IsVideo = *req.IsVideo
 	}
+	if req.RadioMode != nil {
+		if existingSong.Type != models.TypeRadio {
+			respondError(w, http.StatusBadRequest, "radio_mode 仅适用于电台", nil)
+			return
+		}
+		existingSong.RadioMode = *req.RadioMode
+	}
+	if !existingSong.RadioMode.ValidForSource(existingSong.URL) {
+		respondError(w, http.StatusBadRequest, "电台播放模式或 HTTP/HTTPS 源地址无效", nil)
+		return
+	}
+	if existingSong.RadioMode == models.RadioModeAudioOnly {
+		existingSong.IsVideo = false
+	}
 
 	// 非本地歌曲更新后必须仍有可用音源：直链 URL 或插件 source_data。
 	if existingSong.Type != models.TypeLocal && existingSong.URL == "" && !existingSong.IsPluginSourced() {
 		respondError(w, http.StatusBadRequest, "URL不能为空", nil)
 		return
 	}
+	if previousURL != existingSong.URL || previousMode != existingSong.RadioMode {
+		existingSong.RadioDetectedMode = models.RadioModeAuto
+	}
 
-	if err := h.songService.Update(ctx, existingSong); err != nil {
+	if err := h.songService.UpdateUserSong(ctx, existingSong); err != nil {
 		respondError(w, http.StatusInternalServerError, "更新歌曲失败", err)
 		return
+	}
+	if existingSong.Type == models.TypeRadio && existingSong.RadioMode == models.RadioModeAuto && (req.RadioMode != nil || previousURL != existingSong.URL) {
+		h.songService.RefreshRadioModes(ctx, []*models.Song{existingSong})
 	}
 
 	respondJSON(w, http.StatusOK, existingSong)
@@ -1105,6 +1203,10 @@ func (h *SongHandler) AddRemoteSongs(w http.ResponseWriter, r *http.Request) {
 		hasPlugin := req.PluginEntryPath != "" && req.SourceData != ""
 		if req.URL == "" && !hasPlugin {
 			respondError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 条:必须提供 url 或 (plugin_entry_path + source_data)", i+1), nil)
+			return
+		}
+		if referencesLocalCover(r, h.urlResolver, req.CoverURL) {
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 条：%s", i+1, invalidCoverReference), nil)
 			return
 		}
 		inputs = append(inputs, services.RemoteSongInput{
@@ -1168,11 +1270,11 @@ func (h *SongHandler) waitForDownloadIdle() {
 
 // AddRadios 批量添加电台/广播
 // @Summary 批量添加电台/广播
-// @Description 批量添加电台/广播到数据库
+// @Description 批量添加电台。radio_mode 缺省时自动识别，先按已知 URL 后缀，再在有界时间内探测其他 HTTP/HTTPS 源。hls 和 flv 可显式指定格式。audio_only 从 HTTP/HTTPS HLS、TS、MP4 或 FLV 源实时提取第一条音轨并输出 MP3，需 FFmpeg。
 // @Tags 歌曲管理
 // @Accept json
 // @Produce json
-// @Param request body []object{url=string,title=string,cover_url=string,is_video=boolean} true "电台/广播列表"
+// @Param request body []object{url=string,title=string,artist=string,cover_url=string,is_video=boolean,radio_mode=string} true "电台/广播列表"
 // @Success 201 {object} object{songs=[]models.Song,count=int} "添加成功"
 // @Failure 400 {object} map[string]string "请求数据错误"
 // @Failure 500 {object} map[string]string "添加失败"
@@ -1182,11 +1284,12 @@ func (h *SongHandler) AddRadios(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var reqs []struct {
-		URL      string `json:"url"`
-		Title    string `json:"title"`
-		Artist   string `json:"artist"`
-		CoverURL string `json:"cover_url"`
-		IsVideo  bool   `json:"is_video"` // 是否为视频电台(直播画面);由调用方(客户端开关)显式声明
+		URL       string           `json:"url"`
+		Title     string           `json:"title"`
+		Artist    string           `json:"artist"`
+		CoverURL  string           `json:"cover_url"`
+		IsVideo   bool             `json:"is_video"` // 是否为视频电台(直播画面);由调用方(客户端开关)显式声明
+		RadioMode models.RadioMode `json:"radio_mode"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&reqs); err != nil {
@@ -1205,12 +1308,21 @@ func (h *SongHandler) AddRadios(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 条：URL 和标题不能为空", i+1), nil)
 			return
 		}
+		if !req.RadioMode.ValidForSource(req.URL) {
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 条：电台播放模式或 HTTP/HTTPS 源地址无效", i+1), nil)
+			return
+		}
+		if referencesLocalCover(r, h.urlResolver, req.CoverURL) {
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("第 %d 条：%s", i+1, invalidCoverReference), nil)
+			return
+		}
 		inputs = append(inputs, services.RadioInput{
-			URL:      req.URL,
-			Title:    req.Title,
-			Artist:   req.Artist,
-			CoverURL: req.CoverURL,
-			IsVideo:  req.IsVideo,
+			URL:       req.URL,
+			Title:     req.Title,
+			Artist:    req.Artist,
+			CoverURL:  req.CoverURL,
+			IsVideo:   req.IsVideo,
+			RadioMode: req.RadioMode,
 		})
 	}
 
@@ -1237,6 +1349,7 @@ func (h *SongHandler) AddRadios(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string "无效的歌曲 ID"
 // @Failure 404 {object} map[string]string "歌曲或封面不存在"
 // @Failure 500 {object} map[string]string "服务器错误"
+// @Failure 503 {object} map[string]string "远程封面并发抓取已满"
 // @Security BearerAuth
 // @Router /songs/{id}/cover [get]
 func (h *SongHandler) GetSongCover(w http.ResponseWriter, r *http.Request) {
@@ -1262,35 +1375,16 @@ func (h *SongHandler) GetSongCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 本地封面不存在时,代理转发外部 URL
-	// 支持插件相对路径:以 "/" 开头的 URL 经 InternalURLResolver 解析为本机绝对 URL + access_token,
-	// 与歌词的 LyricFetcher 解析机制一致;绝对 URL 原样透传。
 	if song.CoverURL != "" {
-		coverURL := song.CoverURL
-		if h.urlResolver != nil {
-			coverURL = h.urlResolver.Resolve(coverURL)
-		}
-		ServeRemoteResourceWithOptions(w, r, coverURL, RemoteResourceOptions{
-			Timeout:      songCoverProxyTimeout,
-			ErrorStatus:  http.StatusNotFound,
-			ErrorMessage: "cover fetch failed",
-		})
+		proxyRemoteCover(w, r, h.urlResolver, song.CoverURL, false)
 		return
 	}
 
 	// 本地封面和远程 URL 都不存在时，尝试从已注册的封面提供者插件获取
-	if h.coverSearcher != nil {
-		if coverURL, err := h.coverSearcher.SearchCover(ctx, song.Title, song.Artist, song.Album, song.Fingerprint, song.ISRC); err == nil && coverURL != "" {
+	if h.coverSearcher != nil && !song.MetadataOverrideMask.Has(models.MetadataOverridePicture) {
+		if coverURL, err := h.coverSearcher.SearchCover(ctx, song.Title, song.Artist, song.Album, song.Fingerprint, song.ISRC); err == nil && coverURL != "" && !referencesLocalCover(r, h.urlResolver, coverURL) {
 			go h.songService.UpdateCoverURL(context.Background(), song.ID, coverURL)
-			resolvedURL := coverURL
-			if h.urlResolver != nil {
-				resolvedURL = h.urlResolver.Resolve(resolvedURL)
-			}
-			ServeRemoteResourceWithOptions(w, r, resolvedURL, RemoteResourceOptions{
-				Timeout:      songCoverProxyTimeout,
-				ErrorStatus:  http.StatusNotFound,
-				ErrorMessage: "cover fetch failed",
-			})
+			proxyRemoteCover(w, r, h.urlResolver, coverURL, false)
 			return
 		}
 	}
@@ -1413,11 +1507,12 @@ func (h *SongHandler) UpdateSongLyrics(w http.ResponseWriter, r *http.Request) {
 // 不需要判断 song.type/source — 所有分发逻辑都集中在这里。
 //
 // @Summary 流式播放歌曲
-// @Description 按 song.ID 流式返回音频。内部根据 song.type 分发到本地文件 / 缓存下载 / 直链下载 / 电台 302。
+// @Description 按 song.ID 流式播放。play.m3u8 仅适用于 HLS 电台，返回播放列表或 302。play.flv 仅适用于 HTTP-FLV 电台，返回原始 FLV。两条路径与电台模式不匹配时返回 404。play.mp3 仅用于电台，强制抽取首条音轨并返回 MP3 或转码错误，无需 radio_transcode 参数。配置为 audio_only 的电台通过 play 返回 MP3。无固定长度的 FLV 上游正常断开后，MP3 转码会重新访问电台入口并继续使用同一响应。
 // @Tags 歌曲管理
 // @Produce application/octet-stream
 // @Param id path int true "歌曲 ID"
-// @Param format query string false "目标转码格式（如 mp3、ogg），用于平台兼容性转码"
+// @Param access_token query string false "无法发送 Authorization 头时使用的访问 token"
+// @Param format query string false "目标转码格式（如 mp3、ogg），用于平台兼容性转码。本地 .dts、.wv、.aac、.dff 音频默认转为 MP3"
 // @Param quality query string false "目标音质码率（128/192/320），不传或不合法值表示原始音质。指定后默认转码为 mp3（除非同时指定了 format）"
 // @Param source_quality query string false "音源档位 hint（musicdl native 拼写：128k/192k/320k）。播放链路的音质路由参数：客户端只对网络歌曲追加，服务端把它原样透传给音源插件 /api/music/url 请求体的 quality 字段（向源索取对应档位、不足由插件/上游降档），**不参与本服务转码判定**（转码请用 quality）；本地歌曲与电台不追加；非法值由插件侧防御归一为 320k。与 quality 互不干扰，可同时缺省"
 // @Param track query int false "抽取指定音频流播放（audio-relative 0-based，对应 ffmpeg -map 0:a:N）。用于 Web 端双音轨（原唱/伴奏 mka）切轨：后端抽出单条音轨，AAC 编码时无损 remux 成 m4a、否则转 mp3。缺省/负数=不抽轨；与 media=video 互斥"
@@ -1431,11 +1526,16 @@ func (h *SongHandler) UpdateSongLyrics(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {file} binary "音频文件"
 // @Success 202 {string} string "预拉取已触发"
 // @Success 302 {string} string "电台流重定向"
-// @Failure 404 {string} string "歌曲不存在"
-// @Failure 502 {string} string "音源不可用"
+// @Failure 404 {string} string "歌曲不存在或不适用播放路径"
+// @Failure 403 {object} map[string]string "纯音频转码的源或其子资源不在允许范围内"
+// @Failure 502 {string} string "音源不可用或电台纯音频转码失败"
+// @Failure 503 {object} map[string]string "纯音频转码工具不可用或并发已满"
+// @Failure 504 {object} map[string]string "纯音频转码启动超时"
 // @Security BearerAuth
 // @Router /songs/{id}/play [get]
 // @Router /songs/{id}/play.m3u8 [get]
+// @Router /songs/{id}/play.flv [get]
+// @Router /songs/{id}/play.mp3 [get]
 func (h *SongHandler) GetSongPlay(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	songID, err := strconv.ParseInt(idStr, 10, 64)
@@ -1444,20 +1544,37 @@ func (h *SongHandler) GetSongPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 用户进入正式播放路径时，让该客户端会话下其他歌曲的进行中工作集体退场
-	// （prefetch / transcode / reassign），避免它们继续占用 plugin worker / 转码 sem。
-	// 仅 prefetch 旁路跳过 Activate，因为 prefetch 自己也注册到 registry，
-	// 让它由后续真实播放或下一次 prefetch 触发清理。
-	sk := playactivity.SessionFromContext(r.Context())
-	if r.URL.Query().Get("prefetch") != "1" && h.playActivity != nil {
-		h.playActivity.Activate(sk, songID)
-	}
+	mp3Radio := strings.HasSuffix(r.URL.Path, "/play.mp3")
+	prefetch := !mp3Radio && r.URL.Query().Get("prefetch") == "1"
 
 	ctx := r.Context()
 	song, err := h.songService.GetByID(ctx, songID)
 	if err != nil || song == nil {
 		http.NotFound(w, r)
 		return
+	}
+	if mp3Radio && (song.Type != models.TypeRadio || song.URL == "") {
+		http.NotFound(w, r)
+		return
+	}
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/play.m3u8") && !song.IsHLSStream():
+		respondError(w, http.StatusNotFound, "该播放路径仅适用于 HLS 电台", nil)
+		return
+	case strings.HasSuffix(r.URL.Path, "/play.flv") && !song.IsFLVStream():
+		respondError(w, http.StatusNotFound, "该播放路径仅适用于 HTTP-FLV 电台", nil)
+		return
+	}
+
+	if song.Type == models.TypeRadio && r.Method == http.MethodGet && !prefetch {
+		slog.Info("radio stream requested", "method", r.Method, "path", r.URL.Path, "song_id", song.ID,
+			"request_id", chi_middleware.GetReqID(ctx))
+	}
+
+	// Only an applicable playback request can cancel work on the previous song.
+	sk := playactivity.SessionFromContext(ctx)
+	if !prefetch && !(mp3Radio && r.Method == http.MethodHead) && h.playActivity != nil {
+		h.playActivity.Activate(sk, songID)
 	}
 
 	targetFormat := r.URL.Query().Get("format")
@@ -1491,7 +1608,7 @@ func (h *SongHandler) GetSongPlay(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// normalize：启用 EBU R128 音量均衡（songloft-org/songloft#315, songloft-org/songloft-player#33）。
+	// normalize：启用 EBU R128 音量均衡（songloft-org/songloft#315, songloft-org/songloft-player-flutter#33）。
 	// 需要转码，若未指定 format 则默认使用 mp3。
 	//
 	// 优先级：?normalize=1 显式开启；?normalize=0 显式关闭；
@@ -1508,7 +1625,15 @@ func (h *SongHandler) GetSongPlay(w http.ResponseWriter, r *http.Request) {
 		normalize = h.configService.GetBool(volumeNormalizeConfigKey, false)
 	}
 	normalize = normalize && !videoIntent
-	if normalize && targetFormat == "" {
+	// 裸 DTS 在浏览器和部分原生播放器中无法直接播放，共用现有 MP3 转码及预热链路。
+	var compatibilityTranscode bool
+	if song.Type == models.TypeLocal {
+		switch strings.ToLower(filepath.Ext(song.FilePath)) {
+		case ".dts", ".wv", ".aac", ".dff":
+			compatibilityTranscode = true
+		}
+	}
+	if !videoIntent && targetFormat == "" && (normalize || compatibilityTranscode) {
 		targetFormat = "mp3"
 	}
 
@@ -1532,13 +1657,29 @@ func (h *SongHandler) GetSongPlay(w http.ResponseWriter, r *http.Request) {
 	// 通过 playActivity.Track 注册进 registry（CatPrefetch），但 Activate 不会取消 prefetch
 	// （songloft-org/songloft#300）：prefetch 天然为「下一首」预热，切到当前歌时不能连带杀掉
 	// 下一首的预热转码。转码跑完后 prepareSongPlayback 返回、defer release() 注销 entry。
-	if r.URL.Query().Get("prefetch") == "1" {
+	if prefetch {
 		go func() {
 			pctx, release := h.trackActivity(context.Background(), sk, song.ID, playactivity.CatPrefetch)
 			defer release()
 			h.prepareSongPlayback(pctx, song, targetFormat, bitrate, normalize)
 		}()
 		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	// 把正式播放请求纳入 playActivity，让同会话切到其他歌曲时可以停止旧流，避免多个连接
+	// 同时读取外接磁盘。保留同曲请求，兼容同一客户端向多台音箱的同步播放。
+	var releasePlay func()
+	if h.playActivity != nil && r.Method != http.MethodHead {
+		playCtx, release := h.trackActivity(r.Context(), sk, song.ID, playactivity.CatPlay)
+		releasePlay = release
+		r = r.WithContext(playCtx)
+	}
+	if releasePlay != nil {
+		defer releasePlay()
+	}
+	if mp3Radio {
+		h.serveRadioAudio(w, r, song)
 		return
 	}
 
@@ -2007,7 +2148,7 @@ func speedRequested(speed float64) bool {
 // ctx 驱动 ffmpeg 生命周期，可能被 playActivity.Activate 提前取消；connCtx 是真正的
 // HTTP 请求/连接 ctx（seek 流直接用 r.Context() 传两次，均衡流的 ctx 是 trackedCtx、
 // connCtx 是 r.Context()），只在客户端真的断开时才会 Done——两者的区分详见
-// services.StreamSeekedMP3 注释与 songloft-org/songloft-player#35。
+// services.StreamSeekedMP3 注释与 songloft-org/songloft-player-flutter#35。
 //
 // plan 非 nil 时按 Range 语义应答（`Content-Length` + `Accept-Ranges`，206 时另加
 // `Content-Range`），让客户端能真正拖动进度条，见 cbrRangePlan。为 nil 时保持
@@ -2051,7 +2192,7 @@ func (h *SongHandler) streamPipedMP3(ctx, connCtx context.Context, w http.Respon
 	if errors.Is(err, services.ErrSeekStreamAborted) {
 		// ffmpeg 被 playActivity.Activate 提前掐掉，但连接仍存活：绝不能让 chunked 响应
 		// 优雅收尾（客户端会把截断的音频误判为下载成功并永久缓存）。强制切断底层连接，
-		// 让客户端的 HTTP 层感知为读取失败（songloft-org/songloft-player#35）。
+		// 让客户端的 HTTP 层感知为读取失败（songloft-org/songloft-player-flutter#35）。
 		if hj, ok := w.(http.Hijacker); ok {
 			if conn, _, herr := hj.Hijack(); herr == nil {
 				_ = conn.Close()
@@ -2281,7 +2422,94 @@ func (h *SongHandler) serveLocal(w http.ResponseWriter, r *http.Request, song *m
 			w.Header().Set("Content-Type", "audio/x-matroska")
 		}
 	}
-	http.ServeFile(w, r, srcPath)
+	serveAudioFile(w, r, srcPath)
+}
+
+// serveAudioFile 与 http.ServeFile 保持 Range、条件请求和 MIME 推断语义，同时让播放活动取消
+// 能在下一次读取前停止文件流。http.ServeFile 直接持有 *os.File，无法观察派生 context。
+func serveAudioFile(w http.ResponseWriter, r *http.Request, path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	contentWriter := &contextResponseWriter{ResponseWriter: w, ctx: r.Context()}
+	http.ServeContent(contentWriter, r, info.Name(), info.ModTime(), &contextReadSeeker{
+		ctx:  r.Context(),
+		file: f,
+	})
+}
+
+type contextResponseWriter struct {
+	http.ResponseWriter
+	ctx context.Context
+}
+
+func (w *contextResponseWriter) Write(p []byte) (int, error) {
+	select {
+	case <-w.ctx.Done():
+		return 0, w.ctx.Err()
+	default:
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *contextResponseWriter) ReadFrom(src io.Reader) (int64, error) {
+	buf := make([]byte, 32*1024)
+	var total int64
+	for {
+		select {
+		case <-w.ctx.Done():
+			return total, w.ctx.Err()
+		default:
+		}
+		n, err := src.Read(buf)
+		if n > 0 {
+			written, writeErr := w.Write(buf[:n])
+			total += int64(written)
+			if writeErr != nil {
+				return total, writeErr
+			}
+			if written != n {
+				return total, io.ErrShortWrite
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return total, nil
+			}
+			return total, err
+		}
+	}
+}
+
+type contextReadSeeker struct {
+	ctx  context.Context
+	file io.ReadSeeker
+}
+
+func (s *contextReadSeeker) Read(p []byte) (int, error) {
+	select {
+	case <-s.ctx.Done():
+		return 0, s.ctx.Err()
+	default:
+	}
+	return s.file.Read(p)
+}
+
+func (s *contextReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	select {
+	case <-s.ctx.Done():
+		return 0, s.ctx.Err()
+	default:
+	}
+	return s.file.Seek(offset, whence)
 }
 
 // videoContentType 按视频容器扩展名返回对应的 MIME 类型;非视频容器返回空字符串。
@@ -2323,6 +2551,10 @@ func (h *SongHandler) serveRadio(w http.ResponseWriter, r *http.Request, song *m
 		http.NotFound(w, r)
 		return
 	}
+	if song.RadioMode == models.RadioModeAudioOnly {
+		h.serveRadioAudio(w, r, song)
+		return
+	}
 
 	// radio_transcode=<fmt>：把电台流实时转码为目标格式（典型 mp3）。用于只支持 MP3、无法解码
 	// AAC/HE-AAC 或不支持 HLS 的音箱（songloft-org/songloft#275）。由客户端按设备能力下发；
@@ -2356,7 +2588,7 @@ func (h *SongHandler) serveRadio(w http.ResponseWriter, r *http.Request, song *m
 		slog.Warn("radio transcode unavailable, falling back to passthrough", "songId", song.ID, "url", song.URL, "error", err)
 	}
 
-	if isHLSURL(song.URL) {
+	if song.IsHLSStream() {
 		// hls=direct：原生 player（mpv/ExoPlayer/AVPlayer）自带 HLS 解析且无 CORS 限制，
 		// 让它直接 302 到源站自行拉取切片。经本机反代会多一次「拉列表→改写→客户端回访切片」
 		// 往返，对文件名带时间戳、窗口很短的直播源(#249 brtv-radiolive)会导致切片在回访前
@@ -2372,6 +2604,13 @@ func (h *SongHandler) serveRadio(w http.ResponseWriter, r *http.Request, song *m
 		return
 	}
 
+	isFLV := song.IsFLVStream()
+	if isFLV && r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "video/x-flv")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, song.URL, nil)
 	if err != nil {
 		slog.Warn("radio stream request failed", "url", song.URL, "error", err)
@@ -2387,7 +2626,7 @@ func (h *SongHandler) serveRadio(w http.ResponseWriter, r *http.Request, song *m
 	// 上游会按 icy-metaint 每隔 N 字节插入一段元数据,这些字节被浏览器当作音频解码,
 	// 播放约 1 秒(16000 字节 ≈ 1.4s@88kbps)后即崩断(#275)。
 	// 原生播放器(mpv/ExoPlayer 等)需要元数据时会自带此头,由下面的 icy-* 头透传闭环。
-	clientWantsMeta := r.Header.Get("Icy-MetaData") != ""
+	clientWantsMeta := !isFLV && r.Header.Get("Icy-MetaData") != ""
 	if clientWantsMeta {
 		upstreamReq.Header.Set("Icy-MetaData", r.Header.Get("Icy-MetaData"))
 	}
@@ -2406,6 +2645,21 @@ func (h *SongHandler) serveRadio(w http.ResponseWriter, r *http.Request, song *m
 		return
 	}
 	defer resp.Body.Close()
+
+	if isFLV && resp.StatusCode == http.StatusOK {
+		body := bufio.NewReader(resp.Body)
+		if magic, _ := body.Peek(3); string(magic) != "FLV" {
+			respondError(w, http.StatusBadGateway, "电台未返回 FLV 直播流", nil)
+			return
+		}
+		w.Header().Set("Content-Type", "video/x-flv")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		if _, err := io.Copy(w, body); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Debug("FLV radio stream copy failed", "error", err)
+		}
+		return
+	}
 
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", normalizeAudioContentType(ct))
@@ -2438,6 +2692,28 @@ func (h *SongHandler) serveRadio(w http.ResponseWriter, r *http.Request, song *m
 	// 电台是无限直播流，w.WriteHeader 已调用，流式输出已开始
 	if _, err := io.Copy(w, body); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Debug("radio stream copy failed", "error", err)
+	}
+}
+
+func (h *SongHandler) serveRadioAudio(w http.ResponseWriter, r *http.Request, song *models.Song) {
+	if h.hlsTranscode == nil {
+		respondError(w, http.StatusServiceUnavailable, "电台纯音频转码不可用", nil)
+		return
+	}
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	log := slog.With("songId", song.ID, "path", r.URL.Path, "request_id", chi_middleware.GetReqID(r.Context()))
+	log.Debug("radio MP3 requested", "mode", song.RadioMode)
+	err := h.hlsTranscode.StreamAudio(r.Context(), w, radioPullOptions(song.URL))
+	var transcodeErr *services.HLSTranscodeError
+	if errors.As(err, &transcodeErr) && r.Context().Err() == nil {
+		log.Warn("radio MP3 startup failed", "status", transcodeErr.Status, "reason", transcodeErr.Message)
+		w.Header().Del("Content-Type")
+		respondHLSTranscodeError(w, transcodeErr)
 	}
 }
 
@@ -2475,32 +2751,13 @@ func radioTranscodeContentType(format string) string {
 	}
 }
 
-// isHLSURL 判断 URL 是否指向 HLS 播放列表(.m3u8/.m3u),忽略大小写与查询串。
-func isHLSURL(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	ext := strings.ToLower(filepath.Ext(u.Path))
-	return ext == ".m3u8" || ext == ".m3u"
-}
-
 // serveRemote 网络歌曲:根据音源类型分发到缓存或代理。
-// - 插件来源歌曲:走 CacheService.Get(下载缓存)
-// - 纯外链歌曲:走 ServeRemoteResource(直接代理)
+// - 已缓存歌曲:校验后提供本地文件，无效缓存淘汰后重新解析 URL。
+// - 未缓存歌曲:解析 URL 后流式代理，完整文件异步校验落盘。
 // 失败时:返回 502,后台异步切源(若注入了 reassigner),客户端下次播放该 song 会用新源。
 // targetFormat 非空且与原格式不同时,对已缓存文件走 ffmpeg 转码。
 func (h *SongHandler) serveRemote(w http.ResponseWriter, r *http.Request, song *models.Song, opts servePlayOptions) {
 	// 1. 缓存命中 → 直接 ServeFile
-	if song.CachePath != "" {
-		if _, err := os.Stat(song.CachePath); err == nil {
-			h.serveCachedFile(w, r, song, song.CachePath, opts)
-			return
-		}
-		h.cacheService.ClearStaleCachePath(song.ID)
-	}
-
-	// fallback: 旧格式缓存（兼容升级过渡）
 	if cachedPath, ok := h.cacheService.FindCachedFileBySong(song); ok {
 		h.serveCachedFile(w, r, song, cachedPath, opts)
 		return
@@ -2607,7 +2864,7 @@ func (h *SongHandler) serveCachedFile(w http.ResponseWriter, r *http.Request, so
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=604800")
-	http.ServeFile(w, r, cachedPath)
+	serveAudioFile(w, r, cachedPath)
 }
 
 // GetSongLyric 获取歌曲歌词。
@@ -2687,9 +2944,9 @@ func (h *SongHandler) GetSongLyric(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 歌词为空时（或手动刷新且非权威来源时），尝试从已注册的歌词提供者插件获取
-	if payload.IsEmpty() && h.lyricSearcher != nil {
+	if payload.IsEmpty() && h.lyricSearcher != nil && !song.MetadataOverrideMask.Has(models.MetadataOverrideLyrics) {
 		if found, err := h.lyricSearcher.SearchLyrics(ctx, song.Title, song.Artist, song.Album, song.Duration, song.Fingerprint, song.ISRC); err == nil && found != nil && !found.IsEmpty() {
-			go h.songService.UpdateLyrics(context.Background(), song.ID, found.MarshalString(), models.LyricSourceScraped, "")
+			go h.songService.StoreScrapedLyrics(context.Background(), song.ID, found.MarshalString())
 			payload = *found
 		}
 	}
@@ -2717,25 +2974,27 @@ func (h *SongHandler) GetSongLyric(w http.ResponseWriter, r *http.Request) {
 
 // WriteSongTagsRequest 写入歌曲标签的请求体。
 type WriteSongTagsRequest struct {
-	Title      string `json:"title"`
-	Artist     string `json:"artist"`
-	Album      string `json:"album"`
-	Year       int    `json:"year"`
-	Genre      string `json:"genre"`
-	Language   string `json:"language"`
-	Style      string `json:"style"`
-	Track      string `json:"track"`
-	Lyrics     string `json:"lyrics"`
-	CoverData  string `json:"cover_data"`
-	CoverURL   string `json:"cover_url"`
-	ClearCover bool   `json:"clear_cover"`
+	Title       string   `json:"title"`
+	Artist      string   `json:"artist"`
+	Album       string   `json:"album"`
+	Year        int      `json:"year"`
+	Genre       string   `json:"genre"`
+	Language    string   `json:"language"`
+	Style       string   `json:"style"`
+	Track       string   `json:"track"`
+	Disc        string   `json:"disc"`
+	Lyrics      string   `json:"lyrics"`
+	CoverData   string   `json:"cover_data"`
+	CoverURL    string   `json:"cover_url"`
+	ClearCover  bool     `json:"clear_cover"`
+	ClearFields []string `json:"clear_fields,omitempty"` // 显式清空字段，例如 ["artist","lyrics"]。
 	// RenameFile 为 true 时按新标题重命名本地音频文件（保留原目录与扩展名），仅对本地非 CUE 歌曲生效。
 	RenameFile bool `json:"rename_file"`
 }
 
 // WriteTags 写入歌曲标签
 // @Summary 写入歌曲标签
-// @Description 将元数据写入数据库和本地音频文件标签（仅本地歌曲）。cover_data(base64) 优先于 cover_url。非空字段覆盖，空值保留原值。设置 clear_cover=true 可显式清空封面。rename_file=true 时按 "{artist} - {title}" 重命名本地音频文件（保留原目录与扩展名，artist 为空则回退为仅 title，多歌手由 artist 中的 " & " 分隔符体现；仅本地非 CUE 歌曲生效）；标题清理后为空或目标文件名已存在时返回 400，与原文件同名则不移动仅写库。
+// @Description 将元数据写入数据库和本地音频文件标签（仅本地歌曲）。cover_data(base64) 优先于 cover_url。非空字段覆盖，空值保留原值。设置 clear_cover=true 可显式清空封面。clear_fields 可显式清空指定字段。rename_file=true 时按 "{artist} - {title}" 重命名本地音频文件（保留原目录与扩展名，artist 为空则回退为仅 title，多歌手由 artist 中的 " & " 分隔符体现；仅本地非 CUE 歌曲生效）；标题清理后为空或目标文件名已存在时返回 400，与原文件同名则不移动仅写库。
 // @Tags 歌曲管理
 // @Accept json
 // @Produce json
@@ -2771,35 +3030,56 @@ func (h *SongHandler) WriteTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Title != "" {
-		song.Title = req.Title
+	fields := make([]string, 0, 11)
+	clear := make(map[string]bool, len(req.ClearFields))
+	for _, field := range req.ClearFields {
+		if !services.IsMetadataField(field) || field == "title" && !services.SupportsMetadataOverrides(song) {
+			respondError(w, http.StatusBadRequest, "不支持清空该字段", nil)
+			return
+		}
+		clear[field] = true
 	}
-	if req.Artist != "" {
-		song.Artist = req.Artist
-	}
-	if req.Album != "" {
-		song.Album = req.Album
-	}
-	if req.Year > 0 {
+	if req.Year > 0 || clear["year"] {
+		fields = append(fields, "year")
+		if clear["year"] {
+			req.Year = 0
+		}
 		song.Year = req.Year
 	}
-	if req.Genre != "" {
-		song.Genre = req.Genre
-	}
-	if req.Language != "" {
-		song.Language = req.Language
-	}
-	if req.Style != "" {
-		song.Style = req.Style
-	}
-	if req.Track != "" {
-		song.Track = req.Track
-	}
-	if req.Lyrics != "" {
-		song.Lyric = models.LyricPayloadFromLRC(req.Lyrics).MarshalString()
-		song.LyricSource = models.LyricSourceManual
+	for _, entry := range []struct {
+		field, value string
+		dst          *string
+	}{
+		{"title", req.Title, &song.Title}, {"artist", req.Artist, &song.Artist}, {"album", req.Album, &song.Album},
+		{"genre", req.Genre, &song.Genre}, {"language", req.Language, &song.Language}, {"style", req.Style, &song.Style},
+		{"track", req.Track, &song.Track}, {"disc", req.Disc, &song.Disc},
+	} {
+		if clear[entry.field] {
+			*entry.dst = ""
+		} else if entry.value != "" {
+			*entry.dst = entry.value
+		} else {
+			continue
+		}
+		fields = append(fields, entry.field)
 	}
 
+	if req.Lyrics != "" || clear["lyrics"] {
+		fields = append(fields, "lyrics")
+		if clear["lyrics"] {
+			req.Lyrics = ""
+		}
+		song.Lyric = models.LyricPayloadFromLRC(req.Lyrics).MarshalString()
+		song.LyricSource = models.LyricSourceManual
+		song.LyricRemoteURL = ""
+	}
+
+	if clear["picture"] {
+		req.CoverData, req.CoverURL, req.ClearCover = "", "", true
+	}
+	if req.CoverData != "" || req.CoverURL != "" || req.ClearCover {
+		fields = append(fields, "picture")
+	}
 	if req.CoverData != "" {
 		data, err := base64.StdEncoding.DecodeString(req.CoverData)
 		if err != nil {
@@ -2816,6 +3096,7 @@ func (h *SongHandler) WriteTags(w http.ResponseWriter, r *http.Request) {
 			song.CoverURL = ""
 		} else {
 			song.CoverPath = coverPath
+			song.CoverURL = ""
 		}
 	} else if req.CoverURL != "" {
 		if coverPath, err := h.songService.DownloadCover(ctx, req.CoverURL); err != nil {
@@ -2831,24 +3112,142 @@ func (h *SongHandler) WriteTags(w http.ResponseWriter, r *http.Request) {
 		song.CoverURL = ""
 	}
 
-	// rename_file=true 且为本地非 CUE 歌曲时，按新标题重命名文件（内部完成文件移动 + DB 写回）；
-	// 否则走普通 DB 更新。两种路径完成后都用最新 FilePath 写文件标签。
-	if req.RenameFile && song.Type == models.TypeLocal && song.CueSourcePath == "" {
-		if _, err := h.songService.RenameLocalSongFile(ctx, song, song.Title); err != nil {
+	song, fileWrite, err := h.songService.EditLocalMetadata(ctx, song, fields, req.RenameFile)
+	if err != nil {
+		if req.RenameFile {
 			respondError(w, http.StatusBadRequest, "重命名文件失败", err)
-			return
+		} else {
+			respondError(w, http.StatusInternalServerError, "更新歌曲失败", err)
 		}
-	} else if err := h.songService.Update(ctx, song); err != nil {
-		respondError(w, http.StatusInternalServerError, "更新歌曲失败", err)
 		return
 	}
-
-	fileWrite := services.WriteSongTags(song.FilePath, song)
 
 	respondJSON(w, http.StatusOK, map[string]any{
 		"song":       song,
 		"file_write": string(fileWrite),
 	})
+}
+
+// UpdateSongRating 设置单首歌曲的评级。
+// @Summary 设置歌曲评级
+// @Description 设置单首歌曲的评级（0-100 整数；0 表示清除评级，未评级歌曲缺省 0）。评级是用户主观标注，仅存数据库，不写入音频文件标签。星级 UI 按 20/颗映射（如 80 = 4 星）。
+// @Tags 歌曲管理
+// @Accept json
+// @Produce json
+// @Param id path int true "歌曲ID"
+// @Param request body object{rating=int} true "评级值 0-100，0 表示清除评级"
+// @Success 200 {object} map[string]any "成功返回 {id, rating}"
+// @Failure 400 {object} map[string]string "评级值超出 0-100 范围"
+// @Failure 404 {object} map[string]string "歌曲不存在"
+// @Failure 500 {object} map[string]string "服务器错误"
+// @Security BearerAuth
+// @Router /songs/{id}/rating [put]
+func (h *SongHandler) UpdateSongRating(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "无效的歌曲ID", err)
+		return
+	}
+
+	var req struct {
+		Rating *int `json:"rating"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "无效的请求数据", err)
+		return
+	}
+	if req.Rating == nil {
+		respondError(w, http.StatusBadRequest, "缺少 rating 字段", nil)
+		return
+	}
+
+	if err := h.songService.UpdateRating(ctx, id, *req.Rating); err != nil {
+		if errors.Is(err, database.ErrNotFound) {
+			respondError(w, http.StatusNotFound, "歌曲不存在", err)
+			return
+		}
+		respondError(w, http.StatusBadRequest, "设置评级失败", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"id": id, "rating": *req.Rating})
+}
+
+// BatchUpdateSongRating 批量设置歌曲评级。
+// @Summary 批量设置歌曲评级
+// @Description 按 ID 列表批量设置评级（0-100；0 表示清除评级）。列表中不存在的 ID 静默跳过，updated 返回实际更新数量。评级仅存数据库，不写入音频文件标签。
+// @Tags 歌曲管理
+// @Accept json
+// @Produce json
+// @Param request body models.BatchUpdateRatingRequest true "批量评级请求"
+// @Success 200 {object} models.BatchUpdateRatingResponse "成功返回 {updated}"
+// @Failure 400 {object} map[string]string "请求数据错误或评级值超出范围"
+// @Failure 500 {object} map[string]string "服务器错误"
+// @Security BearerAuth
+// @Router /songs/batch-rating [post]
+func (h *SongHandler) BatchUpdateSongRating(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req models.BatchUpdateRatingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "无效的请求数据", err)
+		return
+	}
+	if len(req.IDs) == 0 {
+		respondError(w, http.StatusBadRequest, "ID 列表不能为空", nil)
+		return
+	}
+	if req.Rating < 0 || req.Rating > 100 {
+		respondError(w, http.StatusBadRequest, "评级值超出 0-100 范围", nil)
+		return
+	}
+
+	updated, err := h.songService.UpdateRatingBatch(ctx, req.IDs, req.Rating)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "批量设置评级失败", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, models.BatchUpdateRatingResponse{Updated: int(updated)})
+}
+
+// BatchUpdateRadioMode 批量设置电台播放模式。
+// @Summary 批量设置电台播放模式
+// @Description 按 ID 列表批量设置电台播放模式。radio_mode 支持空字符串（自动）、hls、flv、audio_only。选择自动会尝试探测无已知后缀的源。is_video 省略时保留各电台原值，仅音频模式始终清除视频内容。不存在的 ID 静默跳过，非电台歌曲或无效模式会拒绝整批更新。
+// @Tags 歌曲管理
+// @Accept json
+// @Produce json
+// @Param request body models.BatchUpdateRadioModeRequest true "批量电台模式请求"
+// @Success 200 {object} models.BatchUpdateRadioModeResponse "更新成功"
+// @Failure 400 {object} map[string]string "请求数据错误或包含非电台歌曲"
+// @Failure 500 {object} map[string]string "更新失败"
+// @Security BearerAuth
+// @Router /songs/batch-radio-mode [post]
+func (h *SongHandler) BatchUpdateRadioMode(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req models.BatchUpdateRadioModeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "无效的请求数据", err)
+		return
+	}
+	if len(req.IDs) == 0 {
+		respondError(w, http.StatusBadRequest, "ID 列表不能为空", nil)
+		return
+	}
+
+	updated, err := h.songService.UpdateRadioModeBatch(ctx, req.IDs, req.RadioMode, req.IsVideo)
+	if err != nil {
+		if errors.Is(err, services.ErrInvalidRadioModeBatch) {
+			respondError(w, http.StatusBadRequest, "电台播放模式或歌曲类型无效", err)
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "批量设置电台播放模式失败", err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, models.BatchUpdateRadioModeResponse{Updated: int(updated)})
 }
 
 func detectImageExt(data []byte) string {

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"songloft/internal/contextkeys"
 	"songloft/internal/services/requestidentity"
 )
 
@@ -72,6 +73,10 @@ func SessionFromContext(ctx context.Context) SessionKey {
 		case id.ClientID != "":
 			return SessionKey{ClientID: id.ClientID}
 		}
+	}
+	// 兼容未走 requestidentity 中间件、但直接写入 ClientIDKey 的调用方（含上游测试/内部调用）。
+	if clientID, ok := ctx.Value(contextkeys.ClientIDKey).(string); ok && clientID != "" {
+		return SessionKey{ClientID: clientID}
 	}
 	return SessionKey{ClientID: fmt.Sprintf("anon:%d", anonSeq.Add(1)), anon: true}
 }

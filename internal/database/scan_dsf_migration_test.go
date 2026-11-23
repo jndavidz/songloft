@@ -48,7 +48,7 @@ func TestScanSupportDSFMigration(t *testing.T) {
 			if err := repo.Set(ctx, &models.Config{Key: "scan_config", Value: tc.before}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := provider.Up(ctx); err != nil {
+			if _, err := provider.UpTo(ctx, 39); err != nil {
 				t.Fatalf("upgrade from version 38: %v", err)
 			}
 			// 再执行 Up SQL，验证幂等性而非只验证 goose 跳过已执行版本。
@@ -103,9 +103,81 @@ func TestScanSupportDSFMigration(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("rollback config = %s, want %#v", config.Value, want)
 			}
-			if _, err := provider.Up(ctx); err != nil {
+			if _, err := provider.UpTo(ctx, 39); err != nil {
 				t.Fatalf("reapply after rollback: %v", err)
 			}
 		})
+	}
+}
+
+func TestSongMetadataAndScanFormatsMigration(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.OpenMemoryDB(t)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db.DB(), os.DirFS("migrations"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 50); err != nil {
+		t.Fatal(err)
+	}
+	repo := db.ConfigRepository()
+	const before = `{"supported_formats":["FLAC","WV","aAc"],"auto_scan":true,"scan_interval":17}`
+	if err := repo.Set(ctx, &models.Config{Key: "scan_config", Value: before}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.DB().ExecContext(ctx, "INSERT INTO songs(type, title, file_path) VALUES ('local', 'Existing title', '/music/track.wav')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(ctx, 51); err != nil {
+		t.Fatal(err)
+	}
+	// This test stops at version 46, so read only fields present in that schema.
+	var title string
+	var mask, editedAt int64
+	if err := db.DB().QueryRowContext(ctx, "SELECT title, metadata_override_mask, metadata_edited_at FROM songs WHERE id = ?", id).
+		Scan(&title, &mask, &editedAt); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Existing title" || mask != 0 || editedAt != 0 {
+		t.Fatalf("unexpected migrated song: title=%q, mask=%d, editedAt=%d", title, mask, editedAt)
+	}
+
+	migration, err := os.ReadFile("migrations/0051_song_metadata_and_scan_formats.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upSQL, _, _ := strings.Cut(string(migration), "-- +goose Down")
+	_, configSQL, found := strings.Cut(upSQL, "UPDATE configs")
+	if !found {
+		t.Fatal("missing scan config update")
+	}
+	if _, err := db.DB().ExecContext(ctx, "UPDATE configs"+configSQL); err != nil {
+		t.Fatal(err)
+	}
+	config, err := repo.Get(ctx, "scan_config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		SupportedFormats []string `json:"supported_formats"`
+		AutoScan         bool     `json:"auto_scan"`
+		ScanInterval     int      `json:"scan_interval"`
+	}
+	if err := json.Unmarshal([]byte(config.Value), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.SupportedFormats, []string{"FLAC", "WV", "aAc", "dff"}) || !got.AutoScan || got.ScanInterval != 17 {
+		t.Fatalf("unexpected scan config %s", config.Value)
+	}
+	if _, err := provider.DownTo(ctx, 50); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(ctx, 51); err != nil {
+		t.Fatal(err)
 	}
 }

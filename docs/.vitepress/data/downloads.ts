@@ -1,18 +1,19 @@
 // 落地页「安装选择器」的结构化数据。数据来自仓库 README.md 的下载表。
-// 服务端与 Bundle 资产走主仓库 releases/latest/download，独立客户端走各自 Release。
+// 服务端和 Bundle 资产走主仓库。标准客户端、HarmonyOS 与 Web 资产走各自的 Release。
 
 export type Lang = 'zh' | 'en'
 export interface L { zh: string; en: string }
 export const pick = (l: L, lang: Lang): string => l[lang] ?? l.zh
 
-export const RELEASE_BASE =
-  'https://github.com/songloft-org/songloft/releases/latest/download'
+const BACKEND_RELEASES = 'https://github.com/songloft-org/songloft/releases'
+export const RELEASE_BASE = `${BACKEND_RELEASES}/latest/download`
 
 export interface Asset {
   arch: string
   archLabel: L
   file: string
   url: string
+  devUrl?: string
 }
 export interface OSGroup {
   os: string
@@ -23,7 +24,7 @@ export interface OSGroup {
 export interface Edition {
   id: string
   label: L
-  desc: L
+  desc?: L
   groups: OSGroup[]
 }
 export interface CommandBlock {
@@ -43,7 +44,7 @@ export interface InstallMethod {
   icon: string
   kind: 'download' | 'command' | 'external'
   note?: L
-  noteLink?: ExternalLink
+  noteLinks?: ExternalLink[]
   editions?: Edition[]
   groups?: OSGroup[]
   commands?: CommandBlock[]
@@ -89,6 +90,22 @@ const binaryGroups = (suffix: string): OSGroup[] => [
   },
 ]
 
+const bundleAsset = (arch: string, label: L, file: string): Asset => ({
+  ...a(arch, label, file),
+  devUrl: `${BACKEND_RELEASES}/download/dev/${file}`,
+})
+
+const bundlePlatform = (name: string, assets: Asset[]): OSGroup => ({
+  os: name.toLowerCase(),
+  osLabel: { zh: name, en: name },
+  icon: name === 'macOS' ? 'apple' : name.toLowerCase(),
+  assets,
+})
+
+const androidUniversal = { zh: '通用 APK', en: 'Universal APK' }
+const iosUnsigned = { zh: 'arm64 IPA · 需重签', en: 'arm64 IPA · re-sign required' }
+const x64 = { zh: 'x86_64', en: 'x86_64' }
+
 export const INSTALL: InstallMethod[] = [
   {
     id: 'binary',
@@ -125,10 +142,10 @@ export const INSTALL: InstallMethod[] = [
       zh: 'ARMv7 用户：旧版 Armbian / Debian 的宿主机 libseccomp 可能导致容器启动崩溃。遇到 futexwakeup / SIGSEGV 时，请参阅 FAQ 排查步骤。',
       en: 'ARMv7 users: An outdated host libseccomp on older Armbian / Debian systems may cause the container to crash at startup. If you see futexwakeup / SIGSEGV, see the FAQ troubleshooting steps.',
     },
-    noteLink: {
+    noteLinks: [{
       label: { zh: 'FAQ 排查步骤', en: 'FAQ troubleshooting steps' },
       url: { zh: '/faq#docker-armv7-seccomp', en: '/en/faq#docker-armv7-seccomp' },
-    },
+    }],
     commands: [
       {
         group: { zh: '方式 A · docker run', en: 'Option A · docker run' },
@@ -226,65 +243,75 @@ export const INSTALL: InstallMethod[] = [
   {
     id: 'bundle',
     label: { zh: 'Bundle 版', en: 'Bundle' },
-    tagline: { zh: '内嵌后端 · 免部署服务器', en: 'Embedded backend · no server' },
+    tagline: { zh: '后端 Release 统一发布 · 免部署服务器', en: 'Published by the backend Release · no server' },
     icon: 'package',
     kind: 'download',
     note: {
-      zh: '首次启动在登录页点「使用本地模式」→ 选择音乐目录即可，随时可在设置切换本地/远程。',
-      en: 'On first launch tap "Local mode" on the login page and pick a music folder.',
+      zh: '正式版和 dev 均由后端发布。登录页或设置页可切换本地与远程模式。',
+      en: 'The backend publishes both Stable and dev. Switch between local and remote modes from login or settings.',
     },
-    groups: [
+    noteLinks: [
       {
-        os: 'android',
-        osLabel: { zh: 'Android', en: 'Android' },
-        icon: 'android',
-        assets: [a('arm64', { zh: 'ARM64 + ARMv7', en: 'ARM64 + ARMv7' }, 'songloft-bundled-android-arm64-v8a.apk')],
+        label: { zh: '全部包名与发布记录', en: 'All package names and releases' },
+        url: { zh: '/release-packages', en: '/en/release-packages' },
       },
       {
-        os: 'ios',
-        osLabel: { zh: 'iOS', en: 'iOS' },
-        icon: 'apple',
-        assets: [a('arm64', { zh: 'ARM64', en: 'ARM64' }, 'songloft-bundled-ios-arm64.ipa')],
+        label: { zh: '模式说明', en: 'Bundle mode guide' },
+        url: { zh: '/bundle-mode', en: '/en/bundle-mode' },
+      },
+    ],
+    editions: [
+      {
+        id: 'flutter',
+        label: { zh: 'Flutter Bundle', en: 'Flutter Bundle' },
+        groups: [
+          bundlePlatform('Android', [bundleAsset('universal', androidUniversal, 'songloft-bundled-android.apk')]),
+          bundlePlatform('iOS', [bundleAsset('arm64', iosUnsigned, 'songloft-bundled-ios-nosign.ipa')]),
+          bundlePlatform('Linux', [bundleAsset('x64', x64, 'songloft-bundled-linux-x64.tar.gz')]),
+          bundlePlatform('Windows', [bundleAsset('x64', x64, 'songloft-bundled-windows-x64.zip')]),
+          bundlePlatform('macOS', [bundleAsset('arm64', { zh: 'Apple 芯片', en: 'Apple silicon' }, 'songloft-bundled-macos.zip')]),
+        ],
       },
       {
-        os: 'macos',
-        osLabel: { zh: 'macOS', en: 'macOS' },
-        icon: 'apple',
-        assets: [a('arm64', { zh: 'Apple Silicon', en: 'Apple Silicon' }, 'songloft-bundled-macos-arm64.dmg')],
-      },
-      {
-        os: 'windows',
-        osLabel: { zh: 'Windows', en: 'Windows' },
-        icon: 'windows',
-        assets: [a('amd64', { zh: 'x86_64', en: 'x86_64' }, 'songloft-bundled-windows-x64.zip')],
-      },
-      {
-        os: 'linux',
-        osLabel: { zh: 'Linux', en: 'Linux' },
-        icon: 'linux',
-        assets: [a('amd64', { zh: 'x86_64', en: 'x86_64' }, 'songloft-bundled-linux-x64.tar.gz')],
+        id: 'lynx',
+        label: { zh: 'Lynx Bundle', en: 'Lynx Bundle' },
+        groups: [
+          bundlePlatform('Android', [bundleAsset('universal', androidUniversal, 'songloft-lynx-bundled-android.apk')]),
+          bundlePlatform('iOS', [bundleAsset('arm64', iosUnsigned, 'songloft-lynx-bundled-ios-nosign.ipa')]),
+          bundlePlatform('Windows', [bundleAsset('x64', x64, 'songloft-lynx-bundled-win32-x64.exe')]),
+          bundlePlatform('macOS', [
+            bundleAsset('arm64', { zh: 'Apple 芯片 · DMG', en: 'Apple silicon · DMG' }, 'songloft-lynx-bundled-darwin-arm64.dmg'),
+            bundleAsset('arm64', { zh: 'Apple 芯片 · ZIP', en: 'Apple silicon · ZIP' }, 'songloft-lynx-bundled-darwin-arm64.zip'),
+            bundleAsset('x64', { zh: 'Intel · DMG', en: 'Intel · DMG' }, 'songloft-lynx-bundled-darwin-x64.dmg'),
+            bundleAsset('x64', { zh: 'Intel · ZIP', en: 'Intel · ZIP' }, 'songloft-lynx-bundled-darwin-x64.zip'),
+          ]),
+        ],
       },
     ],
   },
   {
     id: 'flutter',
     label: { zh: 'Flutter 客户端', en: 'Flutter Client' },
-    tagline: { zh: '六端原生 · 后台播放 / 媒体控制', en: 'Native on 6 platforms' },
+    tagline: { zh: '移动端、桌面和 Web', en: 'Mobile, desktop, and Web' },
     icon: 'smartphone',
     kind: 'external',
     note: {
-      zh: 'Windows 用户也可用 Scoop 一键安装 / 更新，见下方命令。',
-      en: 'Windows users can install & update in one line via Scoop — see the commands below.',
+      zh: '标准版 Android 通用 APK 支持 ARM64、ARMv7 和 x86_64。Windows 用户可用下方命令通过 Scoop 安装和更新。',
+      en: 'The standard universal Android APK supports ARM64, ARMv7, and x86_64. Windows users can install and update with the Scoop commands below.',
     },
     external: [
       {
-        label: { zh: '标准版 Releases', en: 'Standalone releases' },
-        url: 'https://github.com/songloft-org/songloft-player/releases/latest',
+        label: { zh: '标准版正式下载', en: 'Stable Standard releases' },
+        url: 'https://github.com/songloft-org/songloft-player-flutter/releases/latest',
         primary: true,
       },
       {
+        label: { zh: '标准版 Android APK（开发版）', en: 'Standard Android APK (dev)' },
+        url: 'https://github.com/songloft-org/songloft-player-flutter/releases/download/dev/songloft-android.apk',
+      },
+      {
         label: { zh: '源码仓库', en: 'Source repo' },
-        url: 'https://github.com/songloft-org/songloft-player',
+        url: 'https://github.com/songloft-org/songloft-player-flutter',
       },
     ],
     commands: [
@@ -294,8 +321,7 @@ export const INSTALL: InstallMethod[] = [
         code:
           'scoop bucket add songloft https://github.com/songloft-org/songloft-scoop\n' +
           'scoop install songloft-player    # Flutter 客户端（GUI，需连接服务器）\n' +
-          'scoop install songloft-server    # 服务端（CLI，仅命令行程序）\n' +
-          'scoop install songloft-bundled   # Bundle 版（服务端 + 客户端一体化）',
+          'scoop install songloft-server    # 服务端（CLI，仅命令行程序）',
       },
       {
         group: { zh: 'Windows · Scoop', en: 'Windows · Scoop' },
@@ -304,27 +330,17 @@ export const INSTALL: InstallMethod[] = [
           'scoop update songloft-player     # 其余同理\n' +
           'scoop uninstall songloft-player  # 加 --purge 一并删除配置数据',
       },
-      {
-        group: { zh: 'Windows · Scoop', en: 'Windows · Scoop' },
-        title: {
-          zh: '⚠️ 注意：songloft-bundled 与 songloft-server、songloft-player 不能同时安装',
-          en: '⚠️ Note: songloft-bundled conflicts with songloft-server and songloft-player',
-        },
-        code:
-          '# songloft-bundled 与 songloft-server、songloft-player 存在文件冲突，不能同时安装\n' +
-          '# songloft-server 与 songloft-player 可以共存',
-      },
     ],
   },
   {
     id: 'lynx',
     label: { zh: 'Lynx 客户端', en: 'Lynx Client' },
-    tagline: { zh: '预览版 · Android / iOS / HarmonyOS / Web', en: 'Preview · Android / iOS / HarmonyOS / Web' },
+    tagline: { zh: 'Android、iOS、Windows、macOS、HarmonyOS 和 Web', en: 'Android, iOS, Windows, macOS, HarmonyOS, and Web' },
     icon: 'smartphone',
     kind: 'external',
     note: {
-      zh: '需连接服务器，无 Bundle 或桌面版。iOS IPA 需自行重签；HarmonyOS 为实验性支持。dev 仅在五包全部成功后更新，首次发版前可能没有正式包。Web 部署需 HTTPS 与 COOP/COEP 响应头，详见安装指南。',
-      en: 'Requires a server; no Bundle or desktop edition. iOS IPA needs re-signing; HarmonyOS is experimental. Dev updates only after all five packages succeed; stable packages may not exist yet. Web hosting needs HTTPS and COOP/COEP headers; see the installation guide.',
+      zh: '标准版连接 Songloft 服务器，Bundle 可启动本地后端。iOS IPA 安装前需要重签，HarmonyOS 为实验性支持，Web 核心流程支持普通 HTTP。',
+      en: 'Standard connects to a Songloft server. Bundle can start a local backend. Re-sign the iOS IPA before installation. HarmonyOS support is experimental, and core Web features work over HTTP.',
     },
     external: [
       {
@@ -335,6 +351,14 @@ export const INSTALL: InstallMethod[] = [
       {
         label: { zh: '正式版本', en: 'Stable releases' },
         url: 'https://github.com/songloft-org/songloft-player-lynx/releases/latest',
+      },
+      {
+        label: { zh: 'Bundle 开发版', en: 'Bundle dev release' },
+        url: 'https://github.com/songloft-org/songloft/releases/tag/dev',
+      },
+      {
+        label: { zh: 'Bundle 正式版', en: 'Bundle stable release' },
+        url: 'https://github.com/songloft-org/songloft/releases/latest',
       },
       {
         label: { zh: '安装指南', en: 'Installation guide' },

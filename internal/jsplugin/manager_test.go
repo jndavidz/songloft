@@ -19,6 +19,51 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func TestManagerSetPortUpdatesExistingBridgeHandlers(t *testing.T) {
+	manager := &Manager{port: "0"}
+	service := &JSService{bridgeHandler: &BridgeHandler{port: "0"}}
+	manager.services.Store("speaker", service)
+
+	manager.SetPort("33807")
+
+	if got := manager.getPort(); got != "33807" {
+		t.Fatalf("manager port = %q, want actual listener port", got)
+	}
+	if got := service.bridgeHandler.hostPort(); got != "33807" {
+		t.Fatalf("existing bridge port = %q, want actual listener port", got)
+	}
+}
+
+func TestManagerPassesHostBasePathToPlugin(t *testing.T) {
+	for _, basePath := range []string{"", "/songloft", "/media/songloft"} {
+		t.Run("basePath="+basePath, func(t *testing.T) {
+			pluginsDir, dataDir, repo, _ := setupTestEnv(t)
+			manager := NewManager(repo, pluginsDir, dataDir, basePath, nil, nil)
+			t.Cleanup(func() { manager.Close() })
+			manager.SetPort("0")
+
+			zipData := createTestPluginZip(t, testManifest("test-host-url"), simpleJSCode)
+			plugin, _, err := manager.Packager().InstallFromUpload(zipData)
+			if err != nil {
+				t.Fatalf("install plugin: %v", err)
+			}
+			if err := manager.LoadPlugin(t.Context(), plugin); err != nil {
+				t.Fatalf("load plugin: %v", err)
+			}
+			service, ok := manager.GetService(plugin.EntryPath)
+			if !ok {
+				t.Fatal("plugin service was not registered")
+			}
+
+			manager.SetPort("33807")
+			want := "http://localhost:33807" + basePath
+			if got := mustHostURL(t, service.bridgeHandler); got != want {
+				t.Fatalf("plugin.getHostUrl() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // --- Test Helpers ---
 
 // createTestPluginZip creates an in-memory .jsplugin.zip containing plugin.json and main.js

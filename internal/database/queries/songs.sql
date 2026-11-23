@@ -10,7 +10,7 @@ SELECT id, type, title, artist, album, duration, file_path, url,
     cue_source_path, cue_track_index, cue_audio_path,
     file_modified_at, track, language, style, is_video,
     cue_start_seconds, cue_end_seconds, fingerprint_attempted_at,
-    fingerprint_error
+    fingerprint_error, disc, rating, radio_mode, metadata_override_mask, metadata_edited_at, radio_detected_mode
 FROM songs WHERE id = ?;
 
 -- name: CreateSong :execlastid
@@ -21,11 +21,11 @@ INSERT INTO songs (
     plugin_entry_path, source_data, dedup_key,
     year, genre, language, style,
     fingerprint, fingerprint_duration,
-    isrc, track,
+    isrc, track, disc,
     cue_source_path, cue_track_index, cue_audio_path,
     file_modified_at, is_video,
-    cue_start_seconds, cue_end_seconds
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    cue_start_seconds, cue_end_seconds, rating, radio_mode
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: UpdateSong :execrows
 UPDATE songs SET
@@ -36,11 +36,15 @@ UPDATE songs SET
     plugin_entry_path = ?, source_data = ?, dedup_key = ?,
     year = ?, genre = ?, language = ?, style = ?,
     fingerprint = ?, fingerprint_duration = ?,
-    isrc = ?, track = ?,
+    isrc = ?, track = ?, disc = ?,
     cue_source_path = ?, cue_track_index = ?, cue_audio_path = ?,
     file_modified_at = ?, is_video = ?,
-    cue_start_seconds = ?, cue_end_seconds = ?
+    cue_start_seconds = ?, cue_end_seconds = ?, rating = ?, radio_mode = ?
 WHERE id = ?;
+
+-- name: UpdateRadioDetectedMode :execrows
+UPDATE songs SET radio_detected_mode = sqlc.arg(mode)
+WHERE id = sqlc.arg(id) AND type = 'radio' AND url = sqlc.arg(url) AND radio_mode = '';
 
 -- name: DeleteSong :execrows
 DELETE FROM songs WHERE id = ?;
@@ -50,6 +54,9 @@ UPDATE songs SET lyric = ?, lyric_source = ?, lyric_remote_url = ? WHERE id = ?;
 
 -- name: UpdateSongCoverURL :execrows
 UPDATE songs SET cover_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;
+
+-- name: UpdateSongRating :execrows
+UPDATE songs SET rating = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;
 
 -- name: UpdateSongDuration :exec
 UPDATE songs SET duration = ?, updated_at = CURRENT_TIMESTAMP
@@ -61,6 +68,14 @@ WHERE id = ?;
 
 -- name: ListLocalSongPaths :many
 SELECT id, file_path, duration, cue_source_path, lyric_source, file_modified_at FROM songs WHERE type = 'local';
+
+-- name: ListIndexedLocalTracks :many
+SELECT id, file_path, title, artist, album FROM songs
+WHERE type = 'local' AND file_path != ''
+ORDER BY file_path, id;
+
+-- name: UpdateSongFileObservation :exec
+UPDATE songs SET file_size = ?, file_modified_at = ? WHERE id = ? AND file_path = ?;
 
 -- name: CountPlaylistsContainingSong :one
 SELECT COUNT(*) FROM playlist_songs WHERE song_id = ?;
@@ -172,7 +187,7 @@ SELECT id, type, title, artist, album, duration, file_path, url,
     cue_source_path, cue_track_index, cue_audio_path,
     file_modified_at, track, language, style, is_video,
     cue_start_seconds, cue_end_seconds, fingerprint_attempted_at,
-    fingerprint_error
+    fingerprint_error, disc, rating, radio_mode, metadata_override_mask, metadata_edited_at, radio_detected_mode
 FROM songs WHERE cache_path != '';
 
 -- name: ListSongsNeedingMetadata :many
@@ -189,23 +204,25 @@ WHERE (
 );
 
 -- name: UpdateSongMetadata :exec
+-- Manual bits follow models.SongMetadataMask values (title, artist, album, picture).
 UPDATE songs SET
     duration    = CASE WHEN duration = 0    AND ? > 0   THEN ? ELSE duration END,
     bit_rate    = CASE WHEN bit_rate = 0    AND ? > 0   THEN ? ELSE bit_rate END,
     sample_rate = CASE WHEN sample_rate = 0 AND ? > 0   THEN ? ELSE sample_rate END,
     format      = CASE WHEN format = ''     AND ? != '' THEN ? ELSE format END,
-    title       = CASE WHEN title = ''      AND ? != '' THEN ? ELSE title END,
-    artist      = CASE WHEN artist = ''     AND ? != '' THEN ? ELSE artist END,
-    album       = CASE WHEN album = ''      AND ? != '' THEN ? ELSE album END,
-    cover_path  = CASE WHEN cover_path = '' AND ? != '' THEN ? ELSE cover_path END,
+    title       = CASE WHEN title = ''      AND ? != '' AND (metadata_override_mask & 1) = 0 THEN ? ELSE title END,
+    artist      = CASE WHEN artist = ''     AND ? != '' AND (metadata_override_mask & 2) = 0 THEN ? ELSE artist END,
+    album       = CASE WHEN album = ''      AND ? != '' AND (metadata_override_mask & 4) = 0 THEN ? ELSE album END,
+    cover_path  = CASE WHEN cover_path = '' AND ? != '' AND (metadata_override_mask & 1024) = 0 THEN ? ELSE cover_path END,
     updated_at  = CURRENT_TIMESTAMP
 WHERE id = ?;
 
 -- name: UpdateSongTagFields :exec
+-- Manual bits follow models.SongMetadataMask values (title, artist, album).
 UPDATE songs SET
-    title  = CASE WHEN ? != '' THEN ? ELSE title END,
-    artist = CASE WHEN ? != '' THEN ? ELSE artist END,
-    album  = CASE WHEN ? != '' THEN ? ELSE album END,
+    title  = CASE WHEN ? != '' AND (metadata_override_mask & 1) = 0 THEN ? ELSE title END,
+    artist = CASE WHEN ? != '' AND (metadata_override_mask & 2) = 0 THEN ? ELSE artist END,
+    album  = CASE WHEN ? != '' AND (metadata_override_mask & 4) = 0 THEN ? ELSE album END,
     updated_at = CURRENT_TIMESTAMP
 WHERE id = ?;
 

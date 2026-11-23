@@ -16,6 +16,7 @@ import (
 
 	"songloft/internal/httputil"
 	"songloft/internal/models"
+	"songloft/internal/services/source"
 )
 
 const (
@@ -69,9 +70,17 @@ type CacheService struct {
 	lruIndex        map[string]time.Time
 	lruMu           sync.RWMutex
 	orchestrator    CacheSongFetcher // 下载编排器(按 song.ID),由 app.go 注入
+	ffprobePath     string           // immutable after construction by App.Init
 	ffmpegPath      atomic.Value     // string；ffmpeg 可执行文件路径,由 app.go 注入（SetFFmpegPath 并发写）
 	// 转码并发统一由进程资源预算（internal/services/resourcebudget）的 cache 分区限，
 	// 本结构不再持有私有信号量。
+
+	// 入库与命中校验共用元数据探测；仅记忆未变化文件的技术参数（upstream source validation，app.go 注入）。
+	validationExtractor *MetadataExtractor
+	validationMetrics   *source.SourceMetrics
+	onInvalidAudio      func(*models.Song)
+	validationMu        sync.Mutex
+	validatedFiles      map[string]cachedAudioInfo
 	// 缓存落盘转码设置（原子字段）：从 CacheConfig 读取，
 	// NewCacheService/UpdateCacheConfig 时同步。cacheTranscodeFormat 为空表示不转码。
 	cacheTranscodeFormat  atomic.Value // string
@@ -99,6 +108,7 @@ func NewCacheService(defaultCacheDir string, configService *ConfigService) *Cach
 		defaultCacheDir: defaultCacheDir,
 		configService:   configService,
 		lruIndex:        make(map[string]time.Time),
+		validatedFiles:  make(map[string]cachedAudioInfo),
 		// download client(无整请求超时);停滞检测交给 downloadExternalToTemp 里的
 		// StallReader,避免慢速大文件被固定超时掐断。(issue #265)
 		downloadClient: httputil.NewDownloadClient(),

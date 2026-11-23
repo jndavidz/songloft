@@ -17,13 +17,13 @@ export const FEATURES: FeatureRow[] = [
     id: 'library',
     title: { zh: '本地音乐，尽在掌握', en: 'Your local library, fully in hand' },
     desc: {
-      zh: '扫描本地目录，自动识别 MP3 / FLAC / WAV / APE / OGG / Opus / M4A / M4B / WMA / DSF（DSD）等音频及 MP4 / MKV / FLV / MPG 等视频格式，提取封面、歌词与元数据。目录变更实时同步，支持定时与手动扫描。',
-      en: 'Scan local folders and auto-detect MP3 / FLAC / WAV / APE / OGG / Opus / M4A / M4B / WMA / DSF (DSD) audio and MP4 / MKV / FLV / MPG video formats — covers, lyrics and metadata included. Changes sync in real time.',
+      zh: '扫描本地目录，自动识别 MP3 / FLAC / WAV / APE / OGG / Opus / M4A / M4B / WMA / DSF（DSD）等音频及 MP4 / MKV / FLV / MPG 等视频格式，提取封面、歌词与元数据。支持手动扫描与可选的定时自动扫描，同步目录变化。',
+      en: 'Scan local folders and auto-detect MP3 / FLAC / WAV / APE / OGG / Opus / M4A / M4B / WMA / DSF (DSD) audio and MP4 / MKV / FLV / MPG video formats — covers, lyrics and metadata included. Sync folder changes with manual scans or optional scheduled scans.',
     },
     bullets: [
-      { zh: '主流格式全支持', en: 'All common formats' },
+      { zh: '组合筛选本地与网络歌曲', en: 'Filter local and remote tracks together' },
       { zh: '封面 / 歌词 / 元数据一键提取', en: 'Covers · lyrics · tags' },
-      { zh: '新增 / 修改 / 删除自动同步', en: 'Auto change sync' },
+      { zh: '手动扫描 · 定时同步目录变化', en: 'Manual · scheduled scans' },
     ],
     image: '/screenshots/library-desktop.png',
     frame: 'browser',
@@ -49,13 +49,13 @@ export const FEATURES: FeatureRow[] = [
     id: 'playlists',
     title: { zh: '歌单随心组织', en: 'Organize with playlists' },
     desc: {
-      zh: '自由创建歌单，本地与网络歌曲统一管理。内置「收藏」「电台收藏」，一键播放整张歌单。',
-      en: 'Create playlists freely and manage local and remote tracks together, with built-in Favorites and one-tap play-all.',
+      zh: '本地与网络歌曲统一管理，歌曲与歌单共用自定义标签。普通歌单独立记住歌曲、播放位置与模式，有声书可继续收听。',
+      en: 'Manage local and remote tracks with shared custom tags for songs and playlists. Normal playlists remember the track, position and mode, with resume listening for audiobooks.',
     },
     bullets: [
-      { zh: '本地 + 网络统一管理', en: 'Local + remote unified' },
-      { zh: '网络电台流一站式播放', en: 'Internet radio streams' },
-      { zh: '一键播放整张歌单', en: 'One-tap play all' },
+      { zh: '共享标签 · 收藏与电台收藏', en: 'Shared tags · music & radio favorites' },
+      { zh: '歌单续播 · 有声书模式', en: 'Playlist resume · audiobooks' },
+      { zh: '大歌单分批加载 · 一键播放', en: 'Batched queues · one-tap playback' },
     ],
     image: '/screenshots/playlist-detail-desktop.png',
     frame: 'browser',
@@ -63,10 +63,10 @@ export const FEATURES: FeatureRow[] = [
   },
   {
     id: 'themes',
-    title: { zh: '明暗随心 · 六端同行', en: 'Light, dark & every platform' },
+    title: { zh: '主题与客户端', en: 'Themes and clients' },
     desc: {
-      zh: '深浅色主题一键切换，跟随系统自动变化。一套 Flutter 客户端覆盖 Android / iOS / macOS / Windows / Linux / Web。',
-      en: 'Switch light and dark themes, or follow the system. One Flutter client runs on Android / iOS / macOS / Windows / Linux / Web.',
+      zh: '切换浅色、深色主题或跟随系统。可选择 Flutter 或 Lynx 客户端，完整版服务器内置 Lynx Web。',
+      en: 'Choose a light or dark theme, or follow the system. Use a Flutter or Lynx client, or open Lynx Web in the full server edition.',
     },
     bullets: [
       { zh: '浅色 / 深色 / 跟随系统', en: 'Light · dark · system' },
@@ -97,12 +97,12 @@ export const FEATURES: FeatureRow[] = [
     id: 'control',
     title: { zh: '掌控每一处细节', en: 'Control every detail' },
     desc: {
-      zh: '多服务器一键切换、本地与远程双模式随时切换；自动扫描配合指纹去重保持曲库干净，播放历史按上下文记忆，远程歌曲可本地缓存，歌单一键导出备份。',
-      en: 'Switch multiple servers and toggle local/remote anytime. Auto-scan with fingerprint dedup keeps your library clean, play history remembers per context, remote tracks cache locally, and playlists export in one click.',
+      zh: 'Flutter 和 Lynx Bundle 可在本地曲库和远程服务器之间切换。服务器可定时扫描、按需计算音频指纹、缓存网络歌曲，以及备份歌单与标签。',
+      en: 'Flutter and Lynx Bundle can switch between a local library and remote servers. The server can run scheduled scans, calculate audio fingerprints on demand, cache remote tracks, and back up playlists and tags.',
     },
     bullets: [
       { zh: '多服务器 · 本地/远程双模式', en: 'Multi-server · local & remote' },
-      { zh: '自动扫描 + 指纹去重', en: 'Auto-scan + fingerprint dedup' },
+      { zh: '可选自动扫描 · 按需指纹查重', en: 'Optional scans · fingerprint duplicate search' },
       { zh: '播放历史 · 本地缓存 · 备份', en: 'History · cache · backup' },
     ],
     image: '/screenshots/settings-desktop.png',

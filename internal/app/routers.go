@@ -54,6 +54,7 @@ func (a *App) setupAPIV1Router() {
 		a.playActivity,
 	)
 	songHandler.SetGetMusicPath(a.scanner.GetMusicPath)
+	songHandler.SetHLSTranscodeService(a.hlsTranscodeService)
 	songHandler.SetPlayBroadcaster(&playEventBroadcastAdapter{m: a.jsPluginManager})
 	songHandler.SetLyricSearcher(a.jsPluginManager)
 	songHandler.SetCoverSearcher(a.jsPluginManager)
@@ -65,8 +66,10 @@ func (a *App) setupAPIV1Router() {
 	thumbCache := services.NewCoverThumbCache(filepath.Dir(a.config.DBPath))
 	songHandler.SetThumbCache(thumbCache)
 	playlistHandler := handlers.NewPlaylistHandler(a.playlistService, a.songService)
+	playlistHandler.SetURLResolver(a.urlResolver)
 	playlistHandler.SetThumbCache(thumbCache)
 	playHistoryHandler := handlers.NewPlayHistoryHandler(a.playHistoryService)
+	progressHandler := handlers.NewPlaylistProgressHandler(services.NewPlaylistProgressService(a.db))
 	themePackHandler := handlers.NewThemePackHandler(a.themePackService, a.configService)
 	configHandler := handlers.NewConfigHandler(a.configService, a.db.JSPluginRepository())
 	scanHandler := handlers.NewScanHandler(a.songService, a.scanner, a.configService)
@@ -162,6 +165,8 @@ func (a *App) setupAPIV1Router() {
 			r.Post("/songs/radio", songHandler.AddRadios)
 			r.Post("/songs/clean", songHandler.CleanInvalidSongs)
 			r.Post("/songs/batch-delete", songHandler.BatchDeleteSongs)
+			r.Post("/songs/batch-rating", songHandler.BatchUpdateSongRating)
+			r.Post("/songs/batch-radio-mode", songHandler.BatchUpdateRadioMode)
 			r.Get("/songs/duplicates", songHandler.GetDuplicates)
 			r.Get("/songs/facets", songHandler.ListSongFacets)
 			r.Get("/songs/folders", songHandler.ListFolders)
@@ -176,6 +181,7 @@ func (a *App) setupAPIV1Router() {
 			r.Put("/songs/{id}/artists", songHandler.SetSongArtists)
 			r.Put("/songs/{id}/lyrics", songHandler.UpdateSongLyrics)
 			r.Put("/songs/{id}/tags", songHandler.WriteTags)
+			r.Put("/songs/{id}/rating", songHandler.UpdateSongRating)
 			r.Post("/songs/organize", songHandler.OrganizeSongs)
 			r.Post("/songs/organize/preview", songHandler.PreviewOrganizeSongs)
 			r.Post("/songs/{id}/activate", songHandler.ActivateSong)
@@ -193,6 +199,7 @@ func (a *App) setupAPIV1Router() {
 			r.Get("/playlists/export", backupHandler.ExportPlaylists)
 			r.Post("/playlists/import", backupHandler.ImportPlaylists)
 			r.Get("/playlists", playlistHandler.ListPlaylists)
+			r.Get("/playlists/favorites/changes", playlistHandler.FavoriteChanges)
 			r.Post("/playlists", playlistHandler.CreatePlaylist)
 			r.Put("/playlists/reorder", playlistHandler.ReorderPlaylists)
 			r.Get("/playlists/{id}", playlistHandler.GetPlaylist)
@@ -212,11 +219,16 @@ func (a *App) setupAPIV1Router() {
 			r.Put("/playlists/{id}/pin", playlistHandler.SetPlaylistPinned)
 			r.Post("/playlists/{id}/touch", playlistHandler.TouchPlaylist)
 			r.Put("/playlists/{id}/sort", playlistHandler.UpdatePlaylistSort)
+			r.Get("/playlists/{id}/playback-progress", progressHandler.Handle)
+			r.Put("/playlists/{id}/playback-progress", progressHandler.Handle)
+			r.Delete("/playlists/{id}/playback-progress", progressHandler.Handle)
 			r.Post("/playlists/{id}/cover", playlistHandler.UploadPlaylistCover)
 			r.Get("/playlists/{id}/cover", playlistHandler.GetPlaylistCover)
 
 			// 自定义标签管理
 			tagHandler := handlers.NewSongTagHandler(a.songTagService, a.songService, a.configService)
+			r.Get("/playlists/{id}/tags", tagHandler.GetPlaylistTags)
+			r.Put("/playlists/{id}/tags", tagHandler.SetPlaylistTags)
 			r.Get("/song-tags", tagHandler.List)
 			r.Post("/song-tags", tagHandler.Create)
 			r.Get("/song-tags/{id}", tagHandler.Get)
@@ -305,6 +317,7 @@ func (a *App) setupAPIV1Router() {
 
 			// 扫描管理模块
 			r.Post("/scan", scanHandler.ScanAndImport)
+			r.Post("/scan/validate", scanHandler.ValidateScan)
 			r.Get("/scan/progress", scanHandler.GetScanProgress)
 			r.Post("/scan/cancel", scanHandler.CancelScan)
 			r.Get("/scan/directories", scanHandler.ListDirectories)
@@ -333,6 +346,11 @@ func (a *App) setupAPIV1Router() {
 			// 仅作字面后缀变体存在,handler 内部按 song.Type 走同一分发逻辑。
 			r.Get("/songs/{id}/play.m3u8", songHandler.GetSongPlay)
 			r.Head("/songs/{id}/play.m3u8", songHandler.GetSongPlay)
+			r.Get("/songs/{id}/play.flv", songHandler.GetSongPlay)
+			r.Head("/songs/{id}/play.flv", songHandler.GetSongPlay)
+			r.Get("/songs/{id}/play.mp3", songHandler.GetSongPlay)
+			r.Head("/songs/{id}/play.mp3", songHandler.GetSongPlay)
+			r.Post("/songs/{id}/hls/sessions", hlsTranscodeHandler.CreateRadio(a.songService))
 
 			// HLS 反向代理端点（hls_proxy_mode=proxy 时启用，由 serveRadio 改写后的 m3u8 内回链触发）
 			r.Get("/songs/{id}/hls/playlist", hlsHandler.HandlePlaylist)
@@ -390,6 +408,7 @@ func (a *App) setupBaseRouter() {
 	))
 
 	// 基础中间件：access log 走 slog，受 /settings/log-level 控制
+	a.router.Use(chi_middleware.RequestID)
 	a.router.Use(chi_middleware.RequestLogger(slogLogFormatter{}))
 
 	// Tracely panic 捕获中间件（在 Recoverer 之前，确保 panic 能被上报）
@@ -414,7 +433,6 @@ func (a *App) setupBaseRouter() {
 	})
 
 	a.router.Use(chi_middleware.Recoverer)
-	a.router.Use(chi_middleware.RequestID)
 
 	// CORS 中间件配置
 	a.router.Use(cors.Handler(cors.Options{

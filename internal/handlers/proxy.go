@@ -25,10 +25,16 @@ const proxyPrivateAllowlistConfigKey = "proxy_private_allowlist"
 
 // RemoteResourceOptions controls the behavior of ServeRemoteResourceWithOptions.
 type RemoteResourceOptions struct {
-	Timeout      time.Duration
-	ErrorStatus  int
-	ErrorMessage string
+	// AllowFallback leaves the response untouched when upstream cannot be used.
+	AllowFallback bool
+	Timeout       time.Duration
+	ErrorStatus   int
+	ErrorMessage  string
+	RejectURL     func(*url.URL) bool // Optional policy for the initial URL and every redirect.
+	OnFailure     func(int)           // Reports upstream missing responses and transport failures on an active request.
 }
+
+var errRemoteResourceURLRejected = errors.New("remote resource URL rejected")
 
 // ProxyHandler 通用资源代理处理器
 // 用于代理外部资源（图片、音频、视频流等），解决浏览器 CORS 限制
@@ -324,6 +330,10 @@ func ServeRemoteResource(w http.ResponseWriter, r *http.Request, resourceURL str
 
 // ServeRemoteResourceWithOptions 通用远程资源代理服务，支持按调用场景配置超时和错误状态。
 func ServeRemoteResourceWithOptions(w http.ResponseWriter, r *http.Request, resourceURL string, opts RemoteResourceOptions) {
+	tryServeRemoteResource(w, r, resourceURL, opts)
+}
+
+func tryServeRemoteResource(w http.ResponseWriter, r *http.Request, resourceURL string, opts RemoteResourceOptions) bool {
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -343,9 +353,17 @@ func ServeRemoteResourceWithOptions(w http.ResponseWriter, r *http.Request, reso
 	// 构建上游请求
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, resourceURL, nil)
 	if err != nil {
-		slog.Warn("remote resource request creation failed", "url", resourceURL, "error", err)
-		respondError(w, http.StatusInternalServerError, errorMessage, nil)
-		return
+		if !opts.AllowFallback {
+			slog.Warn("remote resource request creation failed", "url", resourceURL, "error", err)
+			respondError(w, http.StatusInternalServerError, errorMessage, nil)
+		}
+		return false
+	}
+	if opts.RejectURL != nil && opts.RejectURL(upstreamReq.URL) {
+		if !opts.AllowFallback {
+			respondError(w, errorStatus, errorMessage, nil)
+		}
+		return false
 	}
 
 	// 处理 Basic Auth
@@ -371,14 +389,38 @@ func ServeRemoteResourceWithOptions(w http.ResponseWriter, r *http.Request, reso
 
 	// 发起请求（走全局 HTTP 代理）
 	client := httputil.NewClient(timeout)
+	if opts.RejectURL != nil {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if opts.RejectURL(req.URL) {
+				return errRemoteResourceURLRejected
+			}
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			return nil
+		}
+	}
 
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
-		slog.Warn("remote resource fetch failed", "url", resourceURL, "error", err)
-		respondError(w, errorStatus, errorMessage, nil)
-		return
+		if opts.OnFailure != nil && r.Context().Err() == nil && !errors.Is(err, errRemoteResourceURLRejected) {
+			opts.OnFailure(errorStatus)
+		}
+		if !opts.AllowFallback {
+			if !errors.Is(err, errRemoteResourceURLRejected) {
+				slog.Warn("remote resource fetch failed", "url", resourceURL, "error", err)
+			}
+			respondError(w, errorStatus, errorMessage, nil)
+		}
+		return false
 	}
 	defer resp.Body.Close()
+	if opts.OnFailure != nil && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone) {
+		opts.OnFailure(resp.StatusCode)
+	}
+	if opts.AllowFallback && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusNotModified {
+		return false
+	}
 
 	if resp.StatusCode >= 400 {
 		slog.Warn("remote resource upstream error", "url", upstreamReq.URL.String(), "status", resp.StatusCode)
@@ -394,6 +436,7 @@ func ServeRemoteResourceWithOptions(w http.ResponseWriter, r *http.Request, reso
 	if _, err := io.Copy(w, resp.Body); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Debug("proxy stream copy failed", "error", err)
 	}
+	return true
 }
 
 // ServeRemoteResourceWithCache 流式代理上游音频到客户端，并触发后台缓存。

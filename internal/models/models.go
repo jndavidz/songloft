@@ -106,36 +106,47 @@ type Song struct {
 	FingerprintDuration float64 `json:"fingerprint_duration,omitempty"`                    // 指纹对应音频时长
 	ISRC                string  `json:"isrc,omitempty"`                                    // ISRC(国际标准录音编码)
 	Track               string  `json:"track,omitempty" example:"3/12"`                    // 音轨号，可为 "3" 或 "3/12"（轨号/总数）
+	Disc                string  `json:"disc,omitempty" example:"1/2"`                      // 碟号，可为 "1" 或 "1/2"（碟号/总数）
+	Rating              int     `json:"rating,omitempty" example:"80"`                     // 评级 0-100（0 表示未评级；星级客户端按 20/颗映射，如 80 = 4 星）
 	CueSourcePath       string  `json:"cue_source_path,omitempty"`                         // CUE 来源路径（非空表示 CUE 拆分歌曲）
 	CueTrackIndex       int     `json:"cue_track_index,omitempty"`                         // CUE track 序号 (1-99)
 	CueAudioPath        string  `json:"-"`                                                 // 原始整轨音频路径（内部使用）
 	CueStartSeconds     float64 `json:"-"`                                                 // CUE track 在源音频中的起始秒数
 	CueEndSeconds       float64 `json:"-"`                                                 // CUE track 在源音频中的结束秒数（0 表示到文件末尾）
 
-	AddedAt        time.Time  `json:"added_at" example:"2024-01-01T12:00:00Z"`   // 添加时间
-	UpdatedAt      time.Time  `json:"updated_at" example:"2024-01-01T12:00:00Z"` // 最后更新时间
-	FileModifiedAt *time.Time `json:"file_modified_at,omitempty"`                // 文件修改时间(mtime，本地歌曲扫描时记录；未知为 nil)
+	AddedAt         time.Time  `json:"added_at" example:"2024-01-01T12:00:00Z"`   // 添加时间
+	UpdatedAt       time.Time  `json:"updated_at" example:"2024-01-01T12:00:00Z"` // 最后更新时间
+	FileModifiedAt  *time.Time `json:"file_modified_at,omitempty"`                // 文件修改时间(mtime，本地歌曲扫描时记录；未知为 nil)
+	PlaylistAddedAt *time.Time `json:"playlist_added_at,omitempty"`               // 加入当前歌单的时间，仅歌单成员查询返回
+
+	RadioMode         RadioMode `json:"radio_mode,omitempty"` // 电台手选模式，空值为自动
+	RadioDetectedMode RadioMode `json:"-"`                    // 自动探测结果，随源地址失效
+
+	MetadataOverrideMask SongMetadataMask `json:"-"`
+	MetadataEditedAt     int64            `json:"-"` // 最近一次手动编辑的 Unix 纳秒时间戳
 }
 
 // SongBrief is a lightweight song representation for list display.
 type SongBrief struct {
-	ID       int64   `json:"id"`
-	Title    string  `json:"title"`
-	Artist   string  `json:"artist"`
-	Album    string  `json:"album"`
-	Duration float64 `json:"duration"`
-	CoverURL string  `json:"cover_url"`
+	ID              int64      `json:"id"`
+	Title           string     `json:"title"`
+	Artist          string     `json:"artist"`
+	Album           string     `json:"album"`
+	Duration        float64    `json:"duration"`
+	CoverURL        string     `json:"cover_url"`
+	PlaylistAddedAt *time.Time `json:"playlist_added_at,omitempty"`
 }
 
 // Brief returns a lightweight representation for list display.
 func (s *Song) Brief() SongBrief {
 	return SongBrief{
-		ID:       s.ID,
-		Title:    s.Title,
-		Artist:   s.Artist,
-		Album:    s.Album,
-		Duration: s.Duration,
-		CoverURL: s.CoverURLPath(),
+		ID:              s.ID,
+		Title:           s.Title,
+		Artist:          s.Artist,
+		Album:           s.Album,
+		Duration:        s.Duration,
+		CoverURL:        s.CoverURLPath(),
+		PlaylistAddedAt: s.PlaylistAddedAt,
 	}
 }
 
@@ -144,18 +155,67 @@ func (s *Song) IsPluginSourced() bool {
 	return s.PluginEntryPath != "" && s.SourceData != ""
 }
 
-// IsHLSStream 判断歌曲源头是否为 HLS 播放列表（.m3u8/.m3u）。
-// 仅电台类型且源 URL 后缀匹配时返回 true。
+type RadioMode string
+
+const (
+	RadioModeAuto      RadioMode = ""
+	RadioModeHLS       RadioMode = "hls"
+	RadioModeFLV       RadioMode = "flv"
+	RadioModeAudioOnly RadioMode = "audio_only"
+)
+
+// ValidForSource 校验显式电台模式，自动模式保留已有的音源格式。
+func (m RadioMode) ValidForSource(rawURL string) bool {
+	switch m {
+	case RadioModeAuto:
+		return true
+	case RadioModeHLS, RadioModeFLV, RadioModeAudioOnly:
+		u, err := url.Parse(rawURL)
+		return err == nil && u.Hostname() != "" && (u.Scheme == "http" || u.Scheme == "https") &&
+			(m == RadioModeHLS || (u.User == nil && u.Fragment == "" && len(rawURL) <= 8192))
+	default:
+		return false
+	}
+}
+
+// IsHLSStream 判断电台是否向客户端提供 HLS 播放列表。
 func (s *Song) IsHLSStream() bool {
+	return s.effectiveRadioMode() == RadioModeHLS
+}
+
+// IsFLVStream identifies an HTTP-FLV station by its saved mode or source path.
+func (s *Song) IsFLVStream() bool {
+	return s.effectiveRadioMode() == RadioModeFLV
+}
+
+func (s *Song) effectiveRadioMode() RadioMode {
 	if s.Type != TypeRadio || s.URL == "" {
-		return false
+		return RadioModeAuto
 	}
-	u, err := url.Parse(s.URL)
+	if s.RadioMode != RadioModeAuto {
+		return s.RadioMode
+	}
+	if s.RadioDetectedMode != RadioModeAuto {
+		return s.RadioDetectedMode
+	}
+	return RadioModeFromURL(s.URL)
+}
+
+// RadioModeFromURL identifies the containers with a conventional source suffix.
+func RadioModeFromURL(source string) RadioMode {
+	u, err := url.Parse(source)
 	if err != nil {
-		return false
+		return RadioModeAuto
 	}
-	ext := strings.ToLower(path.Ext(u.Path))
-	return ext == ".m3u8" || ext == ".m3u"
+	switch strings.ToLower(path.Ext(u.Path)) {
+	case ".m3u8", ".m3u":
+		return RadioModeHLS
+	case ".flv":
+		if RadioModeFLV.ValidForSource(source) {
+			return RadioModeFLV
+		}
+	}
+	return RadioModeAuto
 }
 
 // PlaybackURL 返回客户端用的统一播放 URL(所有 type 都用同一形态)。
@@ -173,6 +233,9 @@ func (s *Song) PlaybackURL() string {
 	}
 	if s.IsHLSStream() {
 		return fmt.Sprintf("/api/v1/songs/%d/play.m3u8", s.ID)
+	}
+	if s.IsFLVStream() {
+		return fmt.Sprintf("/api/v1/songs/%d/play.flv", s.ID)
 	}
 	return fmt.Sprintf("/api/v1/songs/%d/play", s.ID)
 }
@@ -323,7 +386,7 @@ func (s *Song) IsRadio() bool {
 
 // CoverURLPath 返回客户端用的统一封面 URL。
 // 有封面(本地或远程)时返回 /api/v1/playlists/{id}/cover 端点,后端自动判断本地/远程
-// 无封面时返回空字符串,避免客户端发起注定 404 的请求
+// 无独立封面但有成员时仍返回端点，由端点按需回退到成员封面。
 //
 // URL 携带 ?v=UpdatedAt 版本号:歌单封面端点缓存头是长 max-age,而 URL 按 ID 固定,
 // 用户替换封面后若 URL 不变,浏览器会一直用旧缓存(表现为封面上传后普通刷新/页面内
@@ -333,7 +396,7 @@ func (p *Playlist) CoverURLPath() string {
 	if p.ID == 0 {
 		return ""
 	}
-	if p.CoverPath == "" && p.CoverURL == "" {
+	if p.CoverPath == "" && p.CoverURL == "" && p.SongCount == 0 {
 		return ""
 	}
 	return fmt.Sprintf("/api/v1/playlists/%d/cover?v=%d", p.ID, p.UpdatedAt.Unix())
@@ -644,6 +707,7 @@ const (
 	PlaylistLabelAutoCreated = "auto_created" // 自动创建歌单标签
 	PlaylistLabelBuiltIn     = "built_in"     // 内置歌单标签（不可删除）
 	PlaylistLabelHidden      = "hidden"       // 隐藏歌单标签
+	PlaylistLabelAudiobook   = "audiobook"    // 有声书歌单标签
 
 	PlaylistModeDirectory = "directory" // 每个文件夹生成独立歌单
 	PlaylistModeTopLevel  = "top_level" // 按一级子目录合并歌单
@@ -654,6 +718,29 @@ const (
 type BatchDeleteSongsRequest struct {
 	IDs         []int64 `json:"ids" example:"1"`              // 要删除的歌曲 ID 列表
 	DeleteFiles bool    `json:"delete_files" example:"false"` // 是否同步删除本地音频文件
+}
+
+// BatchUpdateRatingRequest 批量设置歌曲评级请求
+type BatchUpdateRatingRequest struct {
+	IDs    []int64 `json:"ids" example:"1"`     // 要设置评级的歌曲 ID 列表
+	Rating int     `json:"rating" example:"80"` // 评级值 0-100（0 表示清除评级；星级客户端按 20/颗映射）
+}
+
+// BatchUpdateRatingResponse 批量设置歌曲评级响应
+type BatchUpdateRatingResponse struct {
+	Updated int `json:"updated" example:"2"` // 实际更新的歌曲数量（不存在的 ID 静默跳过）
+}
+
+// BatchUpdateRadioModeRequest 批量设置电台播放模式请求。
+type BatchUpdateRadioModeRequest struct {
+	IDs       []int64   `json:"ids" example:"1"`                                      // 要设置模式的电台 ID 列表
+	RadioMode RadioMode `json:"radio_mode" example:"hls" enums:",hls,flv,audio_only"` // 电台播放模式
+	IsVideo   *bool     `json:"is_video,omitempty" example:"true"`                    // 是否同步设置视频内容，省略时保留原值
+}
+
+// BatchUpdateRadioModeResponse 批量设置电台播放模式响应。
+type BatchUpdateRadioModeResponse struct {
+	Updated int `json:"updated" example:"2"` // 实际更新的电台数量（不存在的 ID 静默跳过）
 }
 
 // BatchDeleteSongsResponse 批量删除歌曲响应
@@ -675,6 +762,7 @@ type BatchDeletePlaylistsResponse struct {
 
 // UpdatePlaylistRequest 更新歌单请求
 type UpdatePlaylistRequest struct {
+	Audiobook   *bool   `json:"audiobook,omitempty"`
 	Name        string  `json:"name" example:"我的最爱"`                  // 歌单名称
 	Description string  `json:"description" example:"收藏的经典歌曲"`        // 歌单描述
 	CoverPath   *string `json:"cover_path,omitempty" example:""`      // 封面图片本地路径（传空字符串清除）

@@ -64,6 +64,13 @@ type SongRepository interface {
 	GetLibraryStats(ctx context.Context) (*database.LibraryStats, error)
 	ListFolders(ctx context.Context, absPrefix, keyword string) ([]database.FolderInfo, error)
 	ListDirectSongs(ctx context.Context, absPrefix, keyword string) ([]*models.Song, error)
+	UpdateRadioDetectedMode(ctx context.Context, id int64, source string, mode models.RadioMode) (bool, error)
+	UpdateFileObservation(ctx context.Context, id int64, path string, size int64, modified time.Time) error
+	CountFacetFiltered(ctx context.Context, field string, f *database.FacetFilter) (int64, error)
+	ListDistinctNamesFiltered(ctx context.Context, field string, filter *database.SongFilter) ([]string, error)
+	UpdateRating(ctx context.Context, id int64, rating int) error
+	UpdateRatingBatch(ctx context.Context, ids []int64, rating int) (int64, error)
+	UpdateRadioModeBatch(ctx context.Context, ids []int64, mode models.RadioMode, isVideo *bool) (int64, error)
 }
 
 // Transactor 提供 UnitOfWork 事务执行入口，
@@ -79,6 +86,8 @@ type PlaylistAutoCreator interface {
 
 // SongService 歌曲服务
 type SongService struct {
+	metadataEditLocks   [64]sync.Mutex
+	localWriteMu        sync.Mutex // serializes local metadata writes with the start of a library scan
 	songs               SongRepository
 	tx                  Transactor
 	metadataExtractor   *MetadataExtractor
@@ -86,6 +95,7 @@ type SongService struct {
 	scanProgressManager *ScanProgressManager
 	configService       *ConfigService
 	playlistAutoCreator PlaylistAutoCreator
+	radioProbe          *RadioSourceProbe
 	// 以下可选依赖由 app.go 通过 Set* 注入，扫描/删除在 goroutine 中读取，用 atomic.Pointer 保证并发安全。
 	cacheService       atomic.Pointer[CacheService]       // 可选;Delete/BatchDelete 时清理 cache 残留
 	fingerprintService atomic.Pointer[FingerprintService] // 可选;扫描完成后自动计算指纹
@@ -566,6 +576,7 @@ type scanExtractResult struct {
 	fileSize         int64
 	fileModTime      time.Time
 	extractionFailed bool
+	coverIncomplete  bool
 }
 
 const (
@@ -1098,9 +1109,8 @@ func (s *SongService) flushScanBatch(ctx context.Context, batch []scanExtractRes
 				if r.metadata.Style != "" {
 					song.Style = r.metadata.Style
 				}
-				if r.metadata.Track != "" {
-					song.Track = r.metadata.Track
-				}
+				song.Track = r.metadata.Track
+				song.Disc = r.metadata.Disc
 				if shouldApplyScanLyric(song, r.metadata.Lyric) {
 					models.ApplyLyricToSong(song, r.metadata.Lyric, r.metadata.LyricSource)
 				}
@@ -1143,6 +1153,7 @@ func (s *SongService) flushScanBatch(ctx context.Context, batch []scanExtractRes
 					FileSize:   r.fileSize,
 					ISRC:       r.metadata.ISRC,
 					Track:      r.metadata.Track,
+					Disc:       r.metadata.Disc,
 					Year:       r.metadata.Year,
 					Genre:      r.metadata.Genre,
 					Language:   r.metadata.Language,
@@ -1273,11 +1284,12 @@ type RemoteSongInput struct {
 
 // RadioInput 批量添加电台的单条输入
 type RadioInput struct {
-	URL      string
-	Title    string
-	Artist   string
-	CoverURL string
-	IsVideo  bool // 是否为视频电台(直播画面)
+	URL       string
+	Title     string
+	Artist    string
+	CoverURL  string
+	IsVideo   bool // 是否为视频电台(直播画面)
+	RadioMode models.RadioMode
 }
 
 // AddRemoteSongs 批量添加网络歌曲
@@ -1330,7 +1342,8 @@ func (s *SongService) AddRadios(ctx context.Context, inputs []RadioInput) ([]*mo
 			URL:       input.URL,
 			CoverURL:  input.CoverURL,
 			IsLive:    true,
-			IsVideo:   input.IsVideo,
+			IsVideo:   input.IsVideo && input.RadioMode != models.RadioModeAudioOnly,
+			RadioMode: input.RadioMode,
 			AddedAt:   now,
 			UpdatedAt: now,
 		}
@@ -1339,6 +1352,7 @@ func (s *SongService) AddRadios(ctx context.Context, inputs []RadioInput) ([]*mo
 	if err := s.songs.BatchCreate(ctx, songs); err != nil {
 		return nil, fmt.Errorf("failed to batch add radios: %w", err)
 	}
+	s.RefreshRadioModes(ctx, songs)
 	return songs, nil
 }
 
@@ -1871,4 +1885,725 @@ func artistInputsFromMetadata(m *Metadata) []models.ArtistInput {
 		inputs = append(inputs, models.ArtistInput{Name: name, Role: models.ArtistRoleAlbumArtist, Position: i})
 	}
 	return inputs
+}
+func (s *SongService) renameLocalSongFile(ctx context.Context, song *models.Song, newTitle string, save func(context.Context, *models.Song) error) (changed bool, err error) {
+	if song.Type != models.TypeLocal {
+		return false, fmt.Errorf("仅支持本地歌曲")
+	}
+	// CUE 拆分歌曲多条记录共享同一音频文件，改名会导致其它轨路径失效。
+	if song.CueSourcePath != "" {
+		return false, fmt.Errorf("CUE 歌曲不支持重命名")
+	}
+	if song.FilePath == "" {
+		return false, fmt.Errorf("歌曲无文件路径")
+	}
+
+	base := sanitizePathComponent(newTitle)
+	if base == "" {
+		return false, fmt.Errorf("标题不适合作为文件名")
+	}
+	base = strings.ReplaceAll(base, "/", "_")
+	// 多歌手信息拼进文件名，避免重名冲突（如 "A & B - 歌曲名.flac"）。
+	// artist 由前端按 " & " 拼好写入 DB，与 JoinDisplayArtists 一致。
+	if a := sanitizePathComponent(song.Artist); a != "" {
+		a = strings.ReplaceAll(a, "/", "_")
+		base = a + " - " + base
+		if len(base) > maxComponentLen {
+			base = base[:maxComponentLen]
+		}
+	}
+
+	oldPath := song.FilePath
+	newPath := filepath.Join(filepath.Dir(oldPath), base+filepath.Ext(oldPath))
+
+	// 同名：无需移动，仅写回 DB（承载 title/artist/album 等其它已改字段）。
+	if filepath.Clean(newPath) == filepath.Clean(oldPath) {
+		if err := save(ctx, song); err != nil {
+			return false, fmt.Errorf("更新数据库失败: %w", err)
+		}
+		return false, nil
+	}
+
+	// 拒绝覆盖已存在的目标文件（fileutil.MoveFile 底层 os.Rename 会静默覆盖）。
+	// 例外：大小写不敏感文件系统（macOS/Windows）上仅改标题大小写时，newPath 会命中原文件本身
+	// （os.Stat 解析到同一 inode），此时并非冲突，应放行让 os.Rename 完成大小写改名。
+	if oldInfo, statErr := os.Stat(oldPath); statErr == nil {
+		if newInfo, err := os.Stat(newPath); err == nil && !os.SameFile(oldInfo, newInfo) {
+			return false, fmt.Errorf("目标文件已存在: %s", filepath.Base(newPath))
+		}
+	} else if fileExists(newPath) {
+		// 源文件 stat 失败（异常），保守地按原逻辑拒绝已存在的目标。
+		return false, fmt.Errorf("目标文件已存在: %s", filepath.Base(newPath))
+	}
+
+	if err := fileutil.MoveFile(oldPath, newPath); err != nil {
+		return false, fmt.Errorf("移动文件失败: %w", err)
+	}
+
+	song.FilePath = newPath
+	if err := save(ctx, song); err != nil {
+		// 回滚文件移动，保持磁盘与 DB 一致。
+		_ = fileutil.MoveFile(newPath, oldPath)
+		song.FilePath = oldPath
+		return false, fmt.Errorf("更新数据库失败: %w", err)
+	}
+
+	return true, nil
+}
+
+func (s *SongService) StoreScrapedLyrics(ctx context.Context, id int64, lyric string) {
+	if _, err := s.updateLyrics(ctx, id, lyric, models.LyricSourceScraped, "", false); err != nil {
+		slog.Debug("save scraped lyrics", "songId", id, "error", err)
+	}
+}
+
+func (s *SongService) ScanAndImportWithMetadataReset(reimport bool, paths []string, resetOverrides bool) error {
+	var resetBefore int64
+	if resetOverrides {
+		if !reimport {
+			return fmt.Errorf("reset_metadata_overrides requires reimport")
+		}
+		resetBefore = time.Now().UnixNano()
+	}
+	s.localWriteMu.Lock()
+	defer s.localWriteMu.Unlock()
+	if !s.scanProgressManager.Start() {
+		return fmt.Errorf("scan already in progress")
+	}
+	go func() {
+		ctx := context.Background()
+		s.scanAndImport(ctx, reimport, paths, resetBefore)
+	}()
+	return nil
+}
+
+func (s *SongService) updateLyrics(ctx context.Context, id int64, lyric, lyricSource, lyricRemoteURL string, manual bool) (FileWriteStatus, error) {
+	lock := &s.metadataEditLocks[uint64(id)%uint64(len(s.metadataEditLocks))]
+	lock.Lock()
+	defer lock.Unlock()
+	if s.tx != nil {
+		song, err := s.songs.GetByID(ctx, id)
+		if err == nil && song != nil && SupportsMetadataOverrides(song) {
+			var updated bool
+			err = s.tx.RunInTx(ctx, func(ctx context.Context, uow *database.UnitOfWork) error {
+				if !manual {
+					current, err := uow.Songs.GetByID(ctx, id)
+					if err != nil {
+						return err
+					}
+					if current.MetadataOverrideMask.Has(models.MetadataOverrideLyrics) {
+						return nil
+					}
+				} else {
+					if lyricSource != models.LyricSourceURL {
+						lyricSource = models.LyricSourceManual
+					}
+					if err := uow.Songs.MarkMetadataOverrides(ctx, id, models.MetadataOverrideLyrics, time.Now().UnixNano()); err != nil {
+						return err
+					}
+				}
+				if err := uow.Songs.UpdateLyrics(ctx, id, lyric, lyricSource, lyricRemoteURL); err != nil {
+					return err
+				}
+				updated = true
+				return nil
+			})
+			if err != nil {
+				return "", err
+			}
+			if !updated || lyricSource == models.LyricSourceURL {
+				return FileWriteUnchanged, nil
+			}
+			song.Lyric, song.LyricSource, song.LyricRemoteURL = lyric, lyricSource, lyricRemoteURL
+			return s.writeTrackedSongTags(ctx, song, []string{tag.FieldLyrics}), nil
+		}
+	}
+
+	if err := s.songs.UpdateLyrics(ctx, id, lyric, lyricSource, lyricRemoteURL); err != nil {
+		return "", err
+	}
+
+	// url 来源不需要回写：歌词在运行时拉取，不缓存到本地文件
+	if lyricSource == models.LyricSourceURL {
+		return FileWriteUnchanged, nil
+	}
+
+	// 只对 type=local 且有 file_path 的歌曲尝试回写
+	song, err := s.songs.GetByID(ctx, id)
+	if err != nil || song == nil {
+		// DB 已写成功，但读不到 song（极小概率），跳过文件回写不报错
+		slog.Warn("UpdateLyrics: refetch song after lyric update failed", "songId", id, "err", err)
+		return FileWriteUnchanged, nil
+	}
+	if song.Type != models.TypeLocal || song.FilePath == "" {
+		return FileWriteUnchanged, nil
+	}
+
+	return WriteSongTags(song.FilePath, song), nil
+}
+
+func (s *SongService) scanAndImport(ctx context.Context, reimport bool, scopeRoots []string, resetBefore int64) {
+	cancelCh := s.scanProgressManager.GetCancelChannel()
+
+	// flushCtx 刻意保留取消前的 ctx，专供 flushScanBatch 写库使用。
+	// 取消时要把已提取的成果落库（见提取循环收尾），若沿用下面派生的可取消 ctx，
+	// 事务会立刻失败、重试三次后全部记为 failed——「取消保留成果」会静默不生效。
+	// 单批写入很短，不随取消中断也不会拖住取消响应。
+	flushCtx := ctx
+
+	// 派生可取消 ctx：用户取消时同步 cancel，使 CUE 切分阶段的 ffmpeg 子进程
+	// （exec.CommandContext）被及时杀掉，而非等其自然结束。
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-cancelCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	scanResult, err := s.scanner.Load().ScanFilesWithCueInDirs(ctx, scopeRoots, func(count int) {
+		s.scanProgressManager.SetDiscoveredFiles(count)
+	})
+	if scanResult != nil {
+		s.scanProgressManager.SetExcludedDirectories(scanResult.ExcludedDirectories)
+	}
+	if err != nil {
+		s.scanProgressManager.Fail(fmt.Errorf("failed to scan files: %w", err))
+		return
+	}
+	files := scanResult.AudioFiles
+
+	select {
+	case <-cancelCh:
+		s.scanProgressManager.SetCancelled()
+		return
+	default:
+	}
+
+	s.scanProgressManager.SetTotalFiles(len(files))
+
+	s.deduplicateLocalSongPaths(ctx)
+
+	existingPaths, err := s.songs.ListLocalPaths(ctx)
+	if err != nil {
+		slog.Warn("ListLocalPaths 查询失败，重试一次", "error", err)
+		time.Sleep(500 * time.Millisecond)
+		existingPaths, err = s.songs.ListLocalPaths(ctx)
+		if err != nil {
+			slog.Error("ListLocalPaths 重试仍然失败，终止扫描", "error", err)
+			s.scanProgressManager.Fail(fmt.Errorf("数据库查询失败: %w", err))
+			return
+		}
+	}
+	if existingPaths == nil {
+		existingPaths = make(map[string]database.LocalPathInfo)
+	}
+
+	toProcess := make([]scanProcessItem, 0, len(files))
+	for _, filePath := range files {
+		select {
+		case <-cancelCh:
+			s.scanProgressManager.SetCancelled()
+			return
+		default:
+		}
+
+		info, exists := existingPaths[filePath]
+
+		// 文件稳定性检测：跳过修改时间在最近 10 秒内的文件，
+		// 避免导入正在拷贝中的不完整文件。
+		var currentModTime time.Time
+		var haveStat bool
+		if stat, err := os.Stat(filePath); err == nil {
+			currentModTime = stat.ModTime()
+			haveStat = true
+			if time.Since(currentModTime) < fileStabilityThreshold {
+				slog.Debug("跳过正在写入的文件", "filePath", filePath)
+				s.scanProgressManager.UpdateProgress(filePath, ProgressUpdateSkipped)
+				continue
+			}
+		}
+
+		// 已存在的记录：duration 齐备、无 sidecar 需求、且 file_modified_at 与磁盘 mtime 一致时才跳过。
+		// mtime 不一致 → 用户可能修改了内嵌 USLT 等元数据，需要重新提取（内嵌歌词由
+		// shouldApplyScanLyric 决定是否覆盖 DB，manual 源受保护）。
+		if exists && !reimport && info.Duration > 0 && !needsSidecarLyricImport(info, filePath, scanResult.LyricDirs) {
+			if !haveStat || fileModTimeMatches(info.FileModifiedAt, currentModTime) {
+				s.scanProgressManager.UpdateProgress(filePath, ProgressUpdateSkipped)
+				continue
+			}
+		}
+
+		item := scanProcessItem{filePath: filePath}
+		if exists {
+			item.existingSongID = info.SongID
+		}
+		toProcess = append(toProcess, item)
+	}
+
+	cleanedCount := s.cleanStaleRecords(ctx, files, existingPaths, scopeRoots)
+	if cleanedCount > 0 {
+		s.scanProgressManager.SetCleanedFiles(cleanedCount)
+	}
+
+	if len(toProcess) == 0 {
+		s.runCueProcessing(ctx, scanResult, files, reimport, scopeRoots)
+		select {
+		case <-cancelCh:
+			s.scanProgressManager.SetCancelled()
+			return
+		default:
+		}
+		if s.configService != nil && s.configService.GetBool("scan_auto_create_playlists", true) {
+			s.runAutoCreatePlaylists(ctx)
+		} else {
+			slog.Info("auto-create playlists disabled, skipping")
+		}
+		s.setLocalSongCount(ctx)
+		s.scanProgressManager.Complete()
+		s.runAutoFingerprint()
+		return
+	}
+
+	inputCh := make(chan scanProcessItem, metadataWorkers*2)
+	resultCh := make(chan scanExtractResult, metadataWorkers*2)
+
+	var wg sync.WaitGroup
+	for i := 0; i < metadataWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for item := range inputCh {
+				select {
+				case <-cancelCh:
+					return
+				default:
+				}
+
+				// 计数只在批次落库后累加，一个目录组定稿前最多 scanDirGroupCap 个文件
+				// 计数不动；这里单独上报当前文件，让前端看到扫描仍在推进。
+				s.scanProgressManager.SetCurrentFile(item.filePath)
+
+				metadata, err := s.safeExtractMetadata(ctx, item.filePath)
+				extractionFailed := err != nil
+				if err != nil {
+					rawName := strings.TrimSuffix(filepath.Base(item.filePath), filepath.Ext(item.filePath))
+					metadata = &Metadata{
+						Title:  tag.FixEncoding([]byte(rawName)),
+						Format: NormalizeFormat(filepath.Ext(item.filePath)),
+					}
+					slog.Warn("doScanAndImport metadata failed", "filePath", item.filePath, "err", err)
+				}
+
+				var coverIncomplete bool
+				if metadata.HasCover && metadata.CoverData != nil {
+					coverPath, err := s.metadataExtractor.SaveCover(0, metadata)
+					if err != nil {
+						coverIncomplete = true
+						slog.Warn("worker保存封面失败", "filePath", item.filePath, "error", err)
+					} else if coverPath != "" {
+						metadata.CoverPath = coverPath
+					}
+					metadata.CoverData = nil
+				} else {
+					// 无内嵌封面时，尝试查找外部封面图片文件
+					dirPath := filepath.Dir(item.filePath)
+					if extPath, err := fileutil.FindExternalCover(dirPath); err == nil && extPath != "" {
+						data, readErr := os.ReadFile(extPath)
+						if readErr != nil {
+							coverIncomplete = true
+							slog.Warn("worker读取外部封面失败", "filePath", item.filePath, "coverFile", extPath, "error", readErr)
+						} else {
+							ext := strings.TrimPrefix(filepath.Ext(extPath), ".")
+							coverPath, saveErr := s.metadataExtractor.SaveCoverData(data, ext)
+							if saveErr != nil {
+								coverIncomplete = true
+								slog.Warn("worker保存外部封面失败", "filePath", item.filePath, "coverFile", extPath, "error", saveErr)
+							} else if coverPath != "" {
+								metadata.CoverPath = coverPath
+							}
+						}
+					}
+				}
+
+				var fileSize int64
+				var fileModTime time.Time
+				if fileInfo, err := s.scanner.Load().GetFileInfo(item.filePath); err == nil {
+					fileSize = fileInfo.Size
+					fileModTime = fileInfo.ModTime
+				}
+
+				select {
+				case resultCh <- scanExtractResult{
+					item:             item,
+					metadata:         metadata,
+					fileSize:         fileSize,
+					fileModTime:      fileModTime,
+					extractionFailed: extractionFailed,
+					coverIncomplete:  coverIncomplete,
+				}:
+				case <-cancelCh:
+					return
+				}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(inputCh)
+		for _, item := range toProcess {
+			select {
+			case inputCh <- item:
+			case <-cancelCh:
+				return
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// 流式入库：按目录分组定稿，攒够一批就写库，不再全库累积后一次性写。
+	// 全量累积会让几万首的曲库在整个提取阶段（数十分钟）里进度恒为 0、
+	// 数据库一条不写，用户只能判定为卡死（songloft-org/songloft#447）。
+	acc := newScanBatchAccumulator(toProcess, scanDirGroupCap)
+	cancelled := false
+	for result := range resultCh {
+		select {
+		case <-cancelCh:
+			cancelled = true
+		default:
+		}
+		// 取消后仍收下已提取的结果：worker 正在退出，这些元数据已经花掉了 IO 与 CPU，
+		// 丢弃等于让用户白干（#447 的用户连续取消两次，每次作废十分钟的提取）。
+		acc.add(result)
+		for batch := acc.takeBatch(dbBatchSize, false); batch != nil; batch = acc.takeBatch(dbBatchSize, false) {
+			s.flushScanBatchWithReset(flushCtx, batch, resetBefore, cancelCh)
+		}
+	}
+
+	// 取消时 pending 永远归不了零，这里把未提取完的目录组也按现有样本定稿冲出来。
+	acc.sealAll()
+	for batch := acc.takeBatch(dbBatchSize, true); batch != nil; batch = acc.takeBatch(dbBatchSize, true) {
+		s.flushScanBatchWithReset(flushCtx, batch, resetBefore, cancelCh)
+	}
+
+	if cancelled {
+		s.scanProgressManager.SetCancelled()
+		return
+	}
+
+	select {
+	case <-cancelCh:
+		s.scanProgressManager.SetCancelled()
+		return
+	default:
+	}
+
+	// CUE 整轨处理
+	s.runCueProcessing(ctx, scanResult, files, reimport, scopeRoots)
+
+	select {
+	case <-cancelCh:
+		s.scanProgressManager.SetCancelled()
+		return
+	default:
+	}
+
+	if s.configService != nil && s.configService.GetBool("scan_auto_create_playlists", true) {
+		s.runAutoCreatePlaylists(ctx)
+	} else {
+		slog.Info("auto-create playlists disabled, skipping")
+	}
+	s.setLocalSongCount(ctx)
+	s.scanProgressManager.Complete()
+	s.runAutoFingerprint()
+}
+
+func (s *SongService) flushScanBatchWithReset(ctx context.Context, batch []scanExtractResult, resetBefore int64, cancelCh <-chan struct{}) {
+	if s.tx == nil {
+		slog.Error("flushScanBatch 缺少事务执行器,跳过批次")
+		for _, r := range batch {
+			s.scanProgressManager.UpdateProgress(r.item.filePath, ProgressUpdateFailed)
+		}
+		return
+	}
+	// 每个 item 的进度结果，事务提交成功后才写入 progress manager
+	itemResults := make([]ProgressUpdateType, len(batch))
+	// 扫描到 SONGLOFT_TAGS 的歌曲，事务成功后批量导入标签
+	var tagImports []scanTagImport
+
+	txFn := func(ctx context.Context, uow *database.UnitOfWork) error {
+		tagImports = tagImports[:0]
+		resetAny := false
+		txRepo := uow.Songs
+		for i, r := range batch {
+			if r.item.existingSongID > 0 {
+				if r.extractionFailed {
+					slog.Warn("元数据提取失败，保留已有记录", "filePath", r.item.filePath)
+					itemResults[i] = ProgressUpdateFailed
+					continue
+				}
+				song, err := txRepo.GetByID(ctx, r.item.existingSongID)
+				if err != nil {
+					slog.Error("获取已有歌曲失败", "err", err, "songId", r.item.existingSongID)
+					itemResults[i] = ProgressUpdateFailed
+					continue
+				}
+				if song.FilePath != r.item.filePath {
+					itemResults[i] = ProgressUpdateFailed
+					continue
+				}
+
+				previous := *song
+				overrides := song.MetadataOverrideMask
+				if !SupportsMetadataOverrides(song) {
+					overrides = 0
+				}
+				song.Title = r.metadata.Title
+				song.Artist = artistDisplay(r.metadata)
+				song.Album = r.metadata.Album
+				song.Duration = r.metadata.Duration
+				song.Format = r.metadata.Format
+				song.BitRate = r.metadata.BitRate
+				song.SampleRate = r.metadata.SampleRate
+				song.IsVideo = r.metadata.IsVideo
+				song.ISRC = r.metadata.ISRC
+				song.Year = r.metadata.Year
+				song.Genre = r.metadata.Genre
+				// 语种/风格多数格式无标准标签，读到才更新，避免重扫抹掉用户手填值
+				if r.metadata.Language != "" {
+					song.Language = r.metadata.Language
+				}
+				if r.metadata.Style != "" {
+					song.Style = r.metadata.Style
+				}
+				song.Track = r.metadata.Track
+				song.Disc = r.metadata.Disc
+				if shouldApplyScanLyric(song, r.metadata.Lyric) {
+					models.ApplyLyricToSong(song, r.metadata.Lyric, r.metadata.LyricSource)
+				}
+				song.FileSize = r.fileSize
+				song.UpdatedAt = time.Now()
+				if !r.fileModTime.IsZero() {
+					mt := r.fileModTime
+					song.FileModifiedAt = &mt
+				}
+
+				if r.metadata.CoverPath != "" {
+					song.CoverPath = r.metadata.CoverPath
+				}
+
+				// 扫描开始后有新编辑时，保留这首歌所有已标记字段。
+				mayReset := resetBefore > 0 && song.MetadataEditedAt < resetBefore && r.metadata.FileMetadataRead
+				select {
+				case <-cancelCh:
+					mayReset = false
+				default:
+				}
+				var reset models.SongMetadataMask
+				if overrides != 0 {
+					for field, bit := range metadataFieldBits {
+						if !overrides.Has(bit) {
+							continue
+						}
+						if mayReset && !(bit == models.MetadataOverridePicture && r.coverIncomplete) {
+							resetMetadataField(song, r.metadata, field)
+							reset |= bit
+						} else {
+							copyMetadataOverride(song, &previous, field)
+						}
+					}
+				}
+				if err := txRepo.Update(ctx, song); err != nil {
+					slog.Error("更新歌曲失败", "err", err, "song", song)
+					itemResults[i] = ProgressUpdateFailed
+					continue
+				}
+				if reset != 0 {
+					resetAny = true
+					if err := txRepo.ClearMetadataOverrides(ctx, song.ID, reset); err != nil {
+						return err
+					}
+					overrides &^= reset
+				}
+				// 歌手手动编辑时保留结构化关联；重置时与文件字段一起恢复。
+				if !overrides.Has(models.MetadataOverrideArtist) {
+					if err := uow.SongArtists.SetSongArtists(ctx, song.ID, artistInputsFromMetadata(r.metadata)); err != nil {
+						if reset != 0 {
+							return err
+						}
+						slog.Warn("写入多值歌手失败，保留旧关联", "err", err, "songId", song.ID)
+					}
+				}
+				if r.metadata.SongloftTags != "" {
+					tagImports = append(tagImports, scanTagImport{songID: song.ID, tags: r.metadata.SongloftTags})
+				}
+				itemResults[i] = ProgressUpdateImported
+			} else {
+				song := &models.Song{
+					Type:       models.TypeLocal,
+					Title:      r.metadata.Title,
+					Artist:     artistDisplay(r.metadata),
+					Album:      r.metadata.Album,
+					Duration:   r.metadata.Duration,
+					FilePath:   r.item.filePath,
+					Format:     r.metadata.Format,
+					BitRate:    r.metadata.BitRate,
+					SampleRate: r.metadata.SampleRate,
+					IsVideo:    r.metadata.IsVideo,
+					FileSize:   r.fileSize,
+					ISRC:       r.metadata.ISRC,
+					Track:      r.metadata.Track,
+					Disc:       r.metadata.Disc,
+					Year:       r.metadata.Year,
+					Genre:      r.metadata.Genre,
+					Language:   r.metadata.Language,
+					Style:      r.metadata.Style,
+					AddedAt:    time.Now(),
+					UpdatedAt:  time.Now(),
+				}
+				if !r.fileModTime.IsZero() {
+					mt := r.fileModTime
+					song.FileModifiedAt = &mt
+				}
+				models.ApplyLyricToSong(song, r.metadata.Lyric, r.metadata.LyricSource)
+
+				if r.metadata.CoverPath != "" {
+					song.CoverPath = r.metadata.CoverPath
+				}
+
+				if err := txRepo.Create(ctx, song); err != nil {
+					slog.Error("创建歌曲失败", "err", err, "song", song)
+					itemResults[i] = ProgressUpdateFailed
+					continue
+				}
+				if err := uow.SongArtists.SetSongArtists(ctx, song.ID, artistInputsFromMetadata(r.metadata)); err != nil {
+					slog.Warn("写入多值歌手失败", "err", err, "songId", song.ID)
+				}
+				if r.metadata.SongloftTags != "" {
+					tagImports = append(tagImports, scanTagImport{songID: song.ID, tags: r.metadata.SongloftTags})
+				}
+				itemResults[i] = ProgressUpdateImported
+			}
+		}
+		if resetAny {
+			select {
+			case <-cancelCh:
+				return errCancelledMetadataReset
+			default:
+			}
+		}
+
+		return nil
+	}
+
+	const maxRetries = 3
+	retryDelays := [maxRetries]time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
+	var err error
+	for attempt := range maxRetries {
+		err = s.tx.RunInTx(ctx, txFn)
+		if errors.Is(err, errCancelledMetadataReset) {
+			resetBefore = 0
+			err = s.tx.RunInTx(ctx, txFn)
+		}
+		if err == nil {
+			for i, r := range batch {
+				s.scanProgressManager.UpdateProgress(r.item.filePath, itemResults[i])
+			}
+			s.importSongloftTags(ctx, tagImports)
+			return
+		}
+		slog.Warn("批次事务执行失败，准备重试", "attempt", attempt+1, "error", err)
+		time.Sleep(retryDelays[attempt])
+	}
+
+	slog.Error("批次事务执行失败，已耗尽重试", "error", err)
+	for _, r := range batch {
+		s.scanProgressManager.UpdateProgress(r.item.filePath, ProgressUpdateFailed)
+	}
+}
+
+var errCancelledMetadataReset = errors.New("metadata reset cancelled")
+
+func (s *SongService) CountFacetFiltered(ctx context.Context, field string, f *database.FacetFilter) (int64, error) {
+	total, err := s.songs.CountFacetFiltered(ctx, field, f)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count filtered facet %q: %w", field, err)
+	}
+	return total, nil
+}
+
+func (s *SongService) ListDistinctNamesFiltered(ctx context.Context, field string, filter *database.SongFilter) ([]string, error) {
+	names, err := s.songs.ListDistinctNamesFiltered(ctx, field, filter)
+	if err != nil {
+		if errors.Is(err, database.ErrNotFound) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("failed to list distinct names %q: %w", field, err)
+	}
+	return names, nil
+}
+
+func (s *SongService) UpdateRating(ctx context.Context, id int64, rating int) error {
+	if rating < 0 || rating > 100 {
+		return fmt.Errorf("rating out of range [0, 100]: %d", rating)
+	}
+	return s.songs.UpdateRating(ctx, id, rating)
+}
+
+func (s *SongService) UpdateRatingBatch(ctx context.Context, ids []int64, rating int) (int64, error) {
+	if rating < 0 || rating > 100 {
+		return 0, fmt.Errorf("rating out of range [0, 100]: %d", rating)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	return s.songs.UpdateRatingBatch(ctx, ids, rating)
+}
+
+func (s *SongService) UpdateRadioModeBatch(ctx context.Context, ids []int64, mode models.RadioMode, isVideo *bool) (int64, error) {
+	switch mode {
+	case models.RadioModeAuto, models.RadioModeHLS, models.RadioModeFLV, models.RadioModeAudioOnly:
+	default:
+		return 0, fmt.Errorf("%w: unsupported mode %q", ErrInvalidRadioModeBatch, mode)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	songs, err := s.songs.ListByIDs(ctx, ids)
+	if err != nil {
+		return 0, fmt.Errorf("list songs for batch radio mode: %w", err)
+	}
+	for _, song := range songs {
+		if song.Type != models.TypeRadio {
+			return 0, fmt.Errorf("%w: song %d is not a radio", ErrInvalidRadioModeBatch, song.ID)
+		}
+		if !mode.ValidForSource(song.URL) {
+			return 0, fmt.Errorf("%w: mode %q is invalid for song %d", ErrInvalidRadioModeBatch, mode, song.ID)
+		}
+	}
+
+	updated, err := s.songs.UpdateRadioModeBatch(ctx, ids, mode, isVideo)
+	if err != nil {
+		return 0, fmt.Errorf("update radio mode batch: %w", err)
+	}
+	if mode == models.RadioModeAuto {
+		for _, song := range songs {
+			song.RadioMode = models.RadioModeAuto
+		}
+		s.RefreshRadioModes(ctx, songs)
+	}
+	return updated, nil
+}
+
+var ErrInvalidRadioModeBatch = errors.New("invalid radio mode batch")
+
+func (s *SongService) SetRadioSourceProbe(probe *RadioSourceProbe) {
+	s.radioProbe = probe
 }

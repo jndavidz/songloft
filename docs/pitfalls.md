@@ -76,7 +76,11 @@ manager/scheduler 的内存 map 键，以及 `plugin_storage.plugin_entry_path` 
 - 视频容器探测：扫描 mp4/mov/m4v/mkv/webm/avi/ts/mpg/mpeg/flv/wmv/rm/rmvb/3gp 等容器时用 ffprobe 探测是否含真实视频轨（排除封面 attached_pic）来置 `songs.is_video`，客户端据此渲染画面 / 选择投屏 mime
 - **本地起服务验证时，music 目录不要放在 `/tmp` 下**：`music_path` 的默认 `exclude_dirs` 含 `tmp`，
   而 `ShouldExcludeDir` 是**按路径任一层级的目录名**匹配的，于是整个 `/tmp/...` 根目录被排除。
-  表现是扫描「成功完成」但 `discovered_files=0`，**不报错、不打 warn**，极易误判为自己的改动坏了
+  历史上表现为扫描「成功完成」但 `discovered_files=0`。现在 `/scan/validate` 返回命中的排除规则，
+  手动扫描所有起点被排除时返回 400，不启动任务；实际遍历剪枝的目录写入进度 `excluded_directories`。
+- 排除扫描与排除自动创建歌单分开：只想避免单曲目录生成大量歌单时，使用 `auto_create_exclude_dirs`，
+  不要把目录放进 `exclude_dirs/exclude_paths`。排除规则不提供临时豁免；名称/路径排除仍保留配置保存后的清理语义。
+- 排除诊断统计的是被剪枝的目录，不能当成歌曲数量，也不为预估数量额外遍历被排除的目录。详见 [#573 扫描排除诊断](issue-573-scan-exclusions.md)。
 
 <a id="scan-batches"></a>
 
@@ -121,7 +125,7 @@ manager/scheduler 的内存 map 键，以及 `plugin_storage.plugin_entry_path` 
 
 - `dsf` 是默认扫描格式；`app.go` 两处回退列表和迁移 `0039_scan_support_dsf.sql` 保持同步，迁移为已有配置幂等追加（大小写无关）。
 - `pkg/tag` 可读取 DSF 元数据与封面；DSD raw 采样率可能是 ffprobe PCM-equivalent 的 8 倍，已有元数据测试处理该差异。
-- 播放沿用 libmpv / ffmpeg；浏览器与不支持 DSD 的 DLNA 设备需显式传 `?format=mp3` 等转码参数，当前 Flutter Web 的 `AudioFormatHelper` 不会为 DSF 自动追加。DSF 不在标签写入矩阵中，写入失败应沿用现有降级处理。
+- 播放沿用 libmpv / ffmpeg；浏览器与不支持 DSD 的 DLNA 设备需显式传 `?format=mp3` 等转码参数，当前 Flutter Web 的 `AudioFormatHelper` 不会为 DSF 自动追加。DSF 的原生写入范围见下节。
 
 <a id="sidecar-lyrics"></a>
 
@@ -149,21 +153,30 @@ manager/scheduler 的内存 map 键，以及 `plugin_storage.plugin_entry_path` 
 
 <a id="tag-writing"></a>
 
-## tag 写入（pkg/tag）
+## 标签读写
 
-- `tag.WriteTag(filePath, opts)` 按扩展名 dispatch，所有格式均使用临时文件 + `os.Rename` 原子写入
-- 支持矩阵：
+`pkg/tag` 按文件内容识别容器。增量写入器在同目录生成临时文件，校验结果并核对源文件状态后原子替换。写入保留未编辑的标签和媒体数据，无法安全改写的布局保留源文件。
 
-| 格式 | 文本字段 | 歌词 | 封面 |
-|------|---------|------|------|
-| MP3 | ID3v2.3 text frames | USLT | APIC |
-| FLAC | Vorbis Comment | LYRICS | PICTURE block |
-| M4A/MP4/M4B/M4V/MOV/3GP | iTunes atoms (©nam 等) | ©lyr | covr |
-| OGG(.ogg/.oga/.opus) | Vorbis Comment | LYRICS | METADATA_BLOCK_PICTURE (base64) |
-| APE | APEv2 text items | Lyrics | Cover Art (Front) (binary item) |
-| WAV | RIFF LIST INFO | ICMT | **不支持**（格式限制） |
-| AIFF/AIF | ID3v2.3 (ID3 chunk) + NAME/AUTH | USLT (ID3 chunk) | APIC (ID3 chunk) |
-- 不支持的格式 → 返回 `ErrUnsupportedWrite`，调用方**必须**降级为日志，**不要**阻塞主流程
+| 格式 | 原生读取 | 原生写回 | Songloft 数据库存储 |
+|---|---|---|---|
+| DSF、ADTS AAC | ID3v2 文本、年份、曲目号/碟号、歌词、封面 | 普通 ID3v2.3/2.4 块中的同类字段 | 全部可编辑字段，包括显式清空 |
+| WavPack | APEv2 文本、年份、曲目号/碟号、歌词、封面 | 文件尾可写 APEv2 项中的同类字段 | 全部可编辑字段 |
+| QuickTime MOV | 旧式 QuickTime 文本、iTunes 元数据、曲目号/碟号、歌词、封面 | 支持的非分片布局中的 iTunes 文本、曲目号/碟号、歌词和封面 | 全部可编辑字段 |
+| WAV | RIFF INFO 文本和曲目号、ID3v2 文本、碟号、歌词、封面 | INFO 标题、艺术家、专辑、年份、流派、曲目号。ID3 保存专辑艺术家、语言、风格、碟号、歌词和封面 | 全部可编辑字段 |
+| DSDIFF DFF | DIIN 标题和艺术家、兼容 ID3 标签、DSD/DST 技术参数 | 能保持索引偏移时写回 DIIN 标题和艺术家 | 全部可编辑字段。专辑、年份、流派、语言、风格、曲目号、碟号、歌词和封面存数据库 |
+| Matroska MKA/MKV | 主音轨文本、年份、曲目号/碟号和歌词、封面附件 | 同类轨道字段。可新增封面或替换支持的封面附件 | 全部可编辑字段。清除带 UID 的现有封面附件走数据库 |
+| WebM | 主音轨文本、年份、曲目号/碟号和歌词 | 同类轨道字段 | 全部可编辑字段。封面存数据库 |
+| ASF WMA/WMV | 内容描述和可映射的扩展字段，包括文件中的正面封面 | 保持头部总长时可替换现有标题、艺术家、专辑/专辑艺术家、年份、流派、语言、风格、曲目号/碟号和歌词 | 全部可编辑字段。封面存数据库 |
+| AVI | RIFF INFO 标题、艺术家、专辑、年份、流派、曲目号和备注 | 兼容的单段 AVI 可写标题、艺术家、专辑、年份、流派和曲目号 | 全部可编辑字段。OpenDML 编辑走数据库 |
+| FLV | AMF0 `onMetaData` 的文本、年份、曲目号/碟号和歌词 | 在编码长度相同时替换已识别的字符串 | 全部可编辑字段。封面、缺失字段及变更长度的文本存数据库 |
+| RealMedia RM/RMVB | CONT 标题、作者、版权、备注 | 在原块空间内写回已有标题和作者 | 全部可编辑字段。其他字段存数据库 |
+| DTS/DTS-HD、MPEG-TS、MPEG-PS | DTS 技术参数，以及 MPEG 文件中的服务、流级描述 | 数据库存储 | 全部可编辑字段。服务名归属服务字段 |
+| MP3、FLAC、M4A/MP4/M4B/M4V/3GP | 文本、曲目号/碟号、歌词、封面 | 支持布局中的增量 ID3、Vorbis Comment 和 iTunes 标签 | 全部可编辑字段，包括显式清空 |
+| Ogg/Opus、APE、AIFF | 既有文本、歌词、封面映射 | 既有 Vorbis Comment、APEv2 和 AIFF 写入器 | 沿用现有编辑行为 |
+
+扩展格式的独立本地文件通过 `PUT /songs/{id}/tags` 在同一事务保存手动值、歌曲的字段位掩码和最近一次手动编辑时间。旧客户端可继续发送非空字段。使用 `clear_fields` 显式清空指定字段，使用 `clear_cover` 清空封面。增量扫描和普通重扫保留手动字段，包括已清空的值。可在「重新导入」下启用「重置手动编辑的元数据」。API 同时发送 `reset_metadata_overrides: true` 和 `reimport: true`，作用于选中的目录。未选择目录时作用于整个音乐根目录。成功读取文件后恢复扫描值并清除对应标记。读取失败或落库前取消时保留标记。扫描开始后编辑过的歌曲，在本轮保留全部手动字段。完整 SQLite 备份包含这些标记，歌单 JSON 沿用现有结构。
+
+新安装和升级均将 AAC、DFF、WavPack 加入扫描格式。默认点播返回兼容的 MP3 并支持 Range，客户端仍可显式选择输出格式。
 
 <a id="fingerprints"></a>
 
@@ -221,10 +234,10 @@ manager/scheduler 的内存 map 键，以及 `plugin_storage.plugin_entry_path` 
   planner 恰好一致（实测 350 / 30000 首均一致）。真要收紧就得给 `applyOrder` 默认排序补 `, id DESC`
   ——那会动所有 `/songs` 分页调用方，属独立 issue。同理 `ListSongIDsOrdered` 与 `GetPlaylistSongsPaginated`
   都只按 `position ASC` 无次级键，仅在同歌单出现重复 position（并发 reorder 中断）时才会错位
-- **客户端起播 = 首曲直起 + 后台环形补齐**：历史条目自带完整 `Song`，先用它当队列**零请求**出声，
+- **分面历史起播 = 首曲直起 + 后台环形补齐**：历史条目自带完整 `Song`，先用它当队列**零请求**出声，
   再后台拉有序 ID 列表（歌单 `GET /playlists/{id}/song-ids`、分面 `GET /songs/ids`）`indexOf` 定位，
   依次补「目标之后」与回卷的「开头…目标之前」。`currentIndex` 全程为 0 不动，
-  不牵连随机模式的 `_playedIndices` / `_preSelectedNextIndex`；歌单与 7 个分面走同一条代码路径
+  不牵连随机模式的 `_playedIndices` / `_preSelectedNextIndex`。歌单使用完整原顺序并映射当前索引，续播独立保存秒数与模式，见[歌单续播](playlist-resume.md)。
 - **只有 `type=play` 落库**：写入挂在既有打点端点 `POST /songs/{id}/played` 的 `context_type`/`context_key`
   参数上（不新开第二条打点通道，客户端零额外请求）。`finish` 是同一首歌的重复写；**`skip` 尤其危险**——
   它上报的是**上一首**歌，此时客户端上下文可能已切到新歌单，会把上一首错记到新上下文名下。
@@ -249,8 +262,15 @@ manager/scheduler 的内存 map 键，以及 `plugin_storage.plugin_entry_path` 
 - 切换时机：源站 Referer/UA 防盗链导致播放失败 / Web 嵌入模式 CORS 阻塞时，开启代理
 - 反代端点：`/api/v1/songs/{id}/hls/playlist?u=<base64url>` 和 `/api/v1/songs/{id}/hls/segment?u=<base64url>`
 - HLS 电台 song.url 强制带 `.m3u8` 后缀（`/api/v1/songs/{id}/play.m3u8`）：ExoPlayer/AVPlayer 按 URL 后缀选 MediaSource，无后缀会落到 ProgressiveMediaSource 导致直播无法播
+- 电台 `radio_mode=hls` 显式声明无后缀的 HLS 入口（含直播取流跳转）；客户端播放路径仍带 `.m3u8`，源地址按原值保存。空值按后缀识别。H.265 等源编码由支持该编码的播放器解码。
+- `radio_mode=flv` 显式声明 HTTP-FLV 电台，包括无后缀的跳转入口。自动模式识别 URL 路径上的 `.flv`。服务端保留入口 URL，通过 `/play.flv` 流式转发原始字节，Web 在支持时本地解封装。
+- 自动模式下，新增、换源及显式切回自动时会探测无已知后缀的 HTTP/HTTPS 源。每批共享 3 秒，最多并行探测 4 个源，每个响应读至多 64 字节。复用直播拉流的源地址和重定向校验。探测值单独保存，源地址或手选模式变更时失效。列表和播放读取已保存结果；已有自动电台可通过批量选择「自动」重新探测。
+- `/play.m3u8` 和 `/play.flv` 要求对应的电台模式。模式不匹配时，GET 和 HEAD 都在拉源或切换播放会话前返回 404。通用 `/play` 仍按歌曲类型和电台模式分流。
+- 电台播放 GET 在拉源前记录 `radio stream requested`，请求结束后通过相同的 `request_id` 关联 `access` 日志。日志只记录 URL 路径，HEAD 和预热请求只使用常规 `access` 日志。
+- `radio_mode=audio_only` 的电台使用 `/play` 并清除 `is_video`。`/api/v1/songs/{id}/play.mp3` 可为电台显式请求 MP3，供音箱仅携带 `access_token`。两条路径经直播转码网关拉流，复用转码私网白名单和共享的 4 个转码槽位，抽取首条音轨输出 MP3。启动失败返回 HTTP 错误，`HEAD` 只返回音频响应头，旧客户端仍可使用 `radio_transcode=mp3`。
+- 无固定长度的 FLV 直播流到达正常 EOF 时，纯音频拉流网关立即重新访问电台入口，在 FFmpeg 编完旧连接中已缓冲的音频时准备好新的上游连接。下一轮转码复用这次拉流，并继续写入同一 HTTP 响应。未及时接手的连接会被回收，预拉失败时立即按正常路径拉取。若重连仍需要等待，按音频帧速率补短暂静音。客户端断开会取消拉流和转码，固定长度的媒体文件正常结束。
 - 改写规则：经典 HLS + LL-HLS 全集（PART/PRELOAD-HINT/RENDITION-REPORT）+ `EXT-X-DATERANGE:X-ASSET-URI`（HLS Interstitials 单 URI）。`X-ASSET-LIST`（JSON 子代理）暂未实现，遇到时原样透传
-- 安全：每次端点入口做"同源校验（scheme+host+port 与 song.URL 严格相等）"作第一道防线，`services.IsHostnameAllowed` 作 SSRF 兜底。**非同源 URL 保持原样不改写**，避免成为开放代理
+- 安全：无签名请求保留同源校验（scheme+host+port 与 `song.URL` 严格相等）；跨源 HTTP(S) 资源从实际播放列表中改写为带 `sig` 的代理链接。HMAC-SHA256 签名绑定歌曲 ID、当前源 URL、端点类型及完整资源 URL，不能篡改或跨歌曲/端点复用。入口及每次重定向均用 `services.IsHostnameAllowed` 拦截私网；私网白名单仍不作用于 HLS。密钥仅在当前进程有效，重启后须重新获取播放列表。
 - player 跨域：改写后的 URL 全部是相对路径（`playlist?u=...` / `segment?u=...`），规避 BASE_PATH 子路径部署问题
 - 上游 4xx/5xx 透传给 player；playlist 体上限 1 MB；首行必须 `#EXTM3U`
 
@@ -258,12 +278,13 @@ manager/scheduler 的内存 map 键，以及 `plugin_storage.plugin_entry_path` 
 
 ## 通用 HTTP Proxy（/settings/http-proxy）
 
-- 业务端点：`GET/PUT /api/v1/settings/http-proxy` 体 `{proxy: string}`，默认 `""`（直连）
-- 仅使用代理感知客户端的后端外发 HTTP 请求经此代理；不能假定任意 `http.Client` 或插件 `fetch` 自动接入。
+- 业务端点 `GET/PUT /api/v1/settings/http-proxy` 使用 `{proxy: string}`，默认 `""` 表示未保存代理地址
+- 使用代理感知客户端的后端外发 HTTP 请求，以及插件运行时的 `fetch` / `songloft.net.httpStream`，均使用此代理；任意新建的 `http.Client` 仍需显式接入。
 - 典型值：`http://192.168.1.1:7890`（支持 HTTP/HTTPS/SOCKS5 代理）
 - loopback 地址（`localhost`/`127.0.0.1`/`::1`）自动跳过代理，避免影响内部请求
 - 与 GitHub 镜像加速（`github_proxy` URL 前缀拼接）**共存**：先拼接镜像前缀再经 HTTP Proxy 转发
 - 实现：`internal/httputil/proxy.go` 的 `globalProxy`（私有 `proxyConfig`）通过 `SetGlobalProxy` / `GetGlobalProxy` 管理；`NewClient`、`NewStreamingClient`、`NewDownloadClient` 分别使用适合普通请求、流与下载的共享 Transport。
+- 插件运行时的普通与跳过 TLS 校验 Transport 均优先使用 `ProxyFromGlobal` 的结果，空设置时由 Go 的 `http.ProxyFromEnvironment` 按协议处理 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`（也支持小写）。网页设置变更无需重载插件。
 - 启动时从 config 表加载已保存的代理地址（`app.go`）；PUT 时即时生效无需重启
 - 接入示例：`jsplugin/registry.go`、`jsplugin/package.go`、`services/upgrade_service.go`、`handlers/jsplugin_registry.go`、`handlers/hls.go`；完整范围以 `httputil.New*Client` 调用点为准。
 - ffmpeg 远程拉流转码路径（`services/radio_transcode.go` 电台转码、`services/url_transcode.go` 转码代理）同样接入：经 `-http_proxy` 传给 ffmpeg。**仅 http/https 代理**，SOCKS5 不支持（ffmpeg `-http_proxy` 限制）
@@ -297,6 +318,7 @@ manager/scheduler 的内存 map 键，以及 `plugin_storage.plugin_entry_path` 
 ## 远程视频 HLS 转码会话（#541）
 
 - 入口：`POST /api/v1/proxy/transcode/hls/sessions`，JSON `{url, audio_bitrate?, user_agent?, referer?}`。`url` 为 HTTP/HTTPS TS、MP4 或普通 HLS 源；不接受 URL 用户凭证。码率为 64/96/128/192/256 kbps，默认 128。需配置的 ffmpeg 及其同目录或 PATH 中的 ffprobe。
+- 无法直放 FLV 的客户端可调用 `POST /api/v1/songs/{id}/hls/sessions`。服务端从该 HTTP-FLV 电台记录读取源，跟随经过校验的重定向并仅接受 FLV 输入。使用下述会话与输出契约。直接播放 `/play.flv` 不创建转码会话。
 - 工具构建必须同时启用 **HLS 输入 demuxer** 和 **crypto 输入协议**；有 HLS 输出 muxer 不代表能读取 m3u8。`ffprobe -hide_banner -demuxers` 应有 `hls`，`ffprobe -hide_banner -protocols` 的 Input 应有 `crypto`（AES-128 HLS）。Docker 基础工具来自 `tools/ffmpeg-builder`；其产物测试覆盖 TS、普通及加密 HLS。Songloft 二进制在线升级不会替换容器内工具，工具修复后需重新构建 Songloft 镜像并拉取、重建容器。
 - 首版固定复制第一条**逐行 H.264** 视频轨、第一条音频转 **AAC-LC / 双声道 / 48kHz**，输出 MPEG-TS HLS。HEVC、隔行视频、缺少音视频轨返回 422；不自动重新编码视频。源的 H.264 profile/level、分辨率及关键帧仍需适合实际播放器，不承诺所有 IPTV 源均可在 Safari 播放。
 - 创建等待首个完整分片就绪，最长 30 秒；成功返回 201 `{id, playlist_url, idle_timeout_seconds:120}`，并设置 `Location`。`playlist_url` 包含部署 `BASE_PATH`、不包含 token。Safari 的 `<video>` 使用该地址时追加 `?access_token=<URL编码的访问token>`；服务端将其透传给相对分片链接。访问 token 到期仍会返回 401；调用方需刷新 token 并更新播放地址，同一 ClientID 可继续使用原会话。若播放器使用 Authorization 头，需自行给每条子请求发送该头。
@@ -443,7 +465,7 @@ handler 无损降级为从头 `ServeFile`）。
 - **`/api/v1/<module>/config` — 模块内配置**：与该模块动作端点强相关的配置保留在模块前缀下，不拆到 `/settings/`。已有 `/cache-manage/config`（与 `stats/clean` 共用 `CacheService`）。判定：孤立或跨模块共享 → `/settings/<name>`；模块内强相关 → `/<module>/config` 或 `/<module>/<sub-name>`。
 - **`/api/v1/configs/{key}` — 通用 KV（仅 admin 编辑器）**：仅供 `config_manager.dart` 这类通用配置编辑器调试。新业务功能**不要直调**：通用 PUT 在 key 不存在时返回 404，且没有强类型、副作用和默认值。业务化封装后通用接口仍可改同一 key，但副作用必须同时挂在 `configHandler.SetOnConfigChanged` 回调（参考 `routers.go` 的 `musicPathChanged`）。
 
-客户端约定：`SettingsApi`（`clients/player/lib/features/settings/data/settings_api.dart`）封装所有 `/settings/*` 调用，业务 Provider 一律走它；`ConfigApi` 只在 `config_manager.dart` 和「列出所有配置」这类 admin UI 中使用。
+客户端约定：`SettingsApi`（`clients/player-flutter/lib/features/settings/data/settings_api.dart`）封装所有 `/settings/*` 调用，业务 Provider 一律走它；`ConfigApi` 只在 `config_manager.dart` 和「列出所有配置」这类 admin UI 中使用。
 
 历史背景：该规范在 2026-06 引入——`hls_proxy_enabled` 默认未预置导致 PUT `/configs/{key}` 返回 404，暴露出 `/configs`、`/settings/*`、`/cache-manage/config` 三种风格并存。最终确定业务端点是用户可见入口的唯一来源，通用 KV 退化为 admin 后门。
 

@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"songloft/internal/mediaexec"
 	"songloft/internal/models"
 	"songloft/internal/services/resourcebudget"
 )
@@ -22,7 +22,7 @@ var ErrUnsupportedTranscodeFormat = errors.New("unsupported transcode format")
 //
 // 这是 I=-16（默认目标响度）时的字面量，保留给测试作默认断言基准。生产代码用
 // CacheService.normalizeLoudnessFilter()——它从 config 读取可自定义的目标响度
-// （songloft-org/songloft-player#38），默认 -16 时与该常量逐字相同。
+// （songloft-org/songloft-player-flutter#38），默认 -16 时与该常量逐字相同。
 //
 // 落盘转码（runFFmpeg）与「均衡产物还没转好时的边转边发」（StreamSeekedMP3 的 Normalize 分支，
 // songloft-org/songloft-plugin-miot#61）共用同一方法：两条路径必须给出同一响度，
@@ -32,7 +32,7 @@ var ErrUnsupportedTranscodeFormat = errors.New("unsupported transcode format")
 // 两遍（linear=true）需先整曲测量，无法用于 pipe 实时流，且会让两条路径动态范围不一致。
 const loudnormFilter = "loudnorm=I=-16:LRA=11:TP=-1.5"
 
-// VolumeNormalizeLoudnessKey 是目标响度（LUFS）的 config key，songloft-org/songloft-player#38。
+// VolumeNormalizeLoudnessKey 是目标响度（LUFS）的 config key，songloft-org/songloft-player-flutter#38。
 // 值为字符串形式的浮点数（如 "-16"、"-14"）；缺失或非法时回落 defaultNormalizeLoudness。
 // 与 volume_normalize（开关）分两个 key 存：开关仍是 bool，响度是独立可选项，向后兼容。
 // 导出：handler 写入需引用同一 key 字符串，避免与 services 读取端漂移。
@@ -57,7 +57,7 @@ func ValidateNormalizeLoudness(v float64) error {
 	return nil
 }
 
-// NormalizeLoudness 读取用户自定义的目标响度（LUFS），songloft-org/songloft-player#38。
+// NormalizeLoudness 读取用户自定义的目标响度（LUFS），songloft-org/songloft-player-flutter#38。
 // nil configService（测试里 &CacheService{} 直接构造）/ 缺失 key / 解析失败 / 越界都回落
 // defaultNormalizeLoudness 或夹到边界，保证默认行为与历史一致、坏配置不崩转码。
 // 读 config 而非持有字段：两条写入入口（/settings/volume-normalize 与 admin /configs/{key}）
@@ -111,6 +111,11 @@ func (c *CacheService) SetFFmpegPath(path string) {
 	} else {
 		c.ffmpegPath.Store("")
 	}
+}
+
+// SetBundledFFprobePath sets the host-supplied probe before starting the HTTP server.
+func (c *CacheService) SetBundledFFprobePath(path string) {
+	c.ffprobePath = path
 }
 
 // ParseBitrate 解析 quality 参数值为 kbps int。
@@ -167,7 +172,7 @@ func (c *CacheService) GetOrTranscode(ctx context.Context, srcPath string, song 
 	}
 
 	// 2. inflight 去重。normFlag 含响度值，保证不同响度的并发转码不共用 inflight 槽
-	// （songloft-org/songloft-player#38）。与 transcodedFileName 的 norm 标记同源。
+	// （songloft-org/songloft-player-flutter#38）。与 transcodedFileName 的 norm 标记同源。
 	normFlag := ""
 	if normalize {
 		normFlag = "_norm" + c.normalizeLoudnessTag()
@@ -345,7 +350,7 @@ func (c *CacheService) runFFmpeg(ctx context.Context, srcPath, dstPath string, s
 	}
 	defer releaseCache()
 
-	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+	cmd := mediaexec.FFmpeg(ctx, ffmpegPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		slog.Warn("ffmpeg failed", "args", args, "output", string(output), "error", err)
@@ -393,6 +398,9 @@ type AudioTrackInfo struct {
 // CacheService 仅持有 ffmpegPath（由 app.go 注入）；ffprobe 通常与 ffmpeg 同目录，
 // 故优先取其同级 ffprobe，其次在 PATH 中查找，最后回退裸名 "ffprobe"。
 func (c *CacheService) resolveFFprobePath() string {
+	if c.ffprobePath != "" {
+		return c.ffprobePath
+	}
 	if fp := c.getFFmpegPath(); fp != "" {
 		dir := filepath.Dir(fp)
 		base := filepath.Base(fp)
@@ -412,7 +420,7 @@ func (c *CacheService) resolveFFprobePath() string {
 // ListAudioTracks 用 ffprobe 探测文件的音频流列表（songloft-org/songloft#298）。
 // 只枚举音频流（-select_streams a），返回的 Index 即 audio-relative 0-based 序号。
 func (c *CacheService) ListAudioTracks(ctx context.Context, filePath string) ([]AudioTrackInfo, error) {
-	cmd := exec.CommandContext(ctx, c.resolveFFprobePath(),
+	cmd := mediaexec.FFprobe(ctx, c.resolveFFprobePath(),
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_streams",

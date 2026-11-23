@@ -11,7 +11,7 @@
 [![GitHub License](https://img.shields.io/github/license/songloft-org/songloft)](https://github.com/songloft-org/songloft)
 [![Docker Image Version](https://img.shields.io/docker/v/songloft/songloft?sort=semver&label=docker%20image)](https://hub.docker.com/r/songloft/songloft)
 [![Docker Pulls](https://img.shields.io/docker/pulls/songloft/songloft)](https://hub.docker.com/r/songloft/songloft)
-[![GitHub Release](https://img.shields.io/github/v/release/songloft-org/songloft)](https://github.com/songloft-org/songloft/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/songloft-org/songloft)](https://github.com/songloft-org/songloft/releases/latest)
 [![Visitors](https://api.visitorbadge.io/api/daily?path=songloft-org%2Fsongloft&label=daily%20visitor&countColor=%232ccce4&style=flat)](https://visitorbadge.io/status?path=songloft-org%2Fsongloft)
 [![Visitors](https://api.visitorbadge.io/api/visitors?path=songloft-org%2Fsongloft&label=total%20visitor&countColor=%232ccce4&style=flat)](https://visitorbadge.io/status?path=songloft-org%2Fsongloft)
 
@@ -23,7 +23,8 @@
 
 <p align="center">
   <a href="https://github.com/songloft-org/songloft">🏠 GitHub</a> •
-  <a href="https://github.com/songloft-org/songloft/releases">📥 Downloads</a> •
+  <a href="https://github.com/songloft-org/songloft/releases/latest">📥 Latest stable</a> •
+  <a href="https://github.com/songloft-org/songloft/releases/tag/dev">Download dev</a> •
   <a href="https://songloft.hanxi.cc">📖 Docs</a> •
   <a href="https://github.com/songloft-org/songloft/issues">💬 Issues</a> •
   <a href="https://github.com/songloft-org/songloft/issues/2">👥 WeChat Group</a> •
@@ -44,15 +45,17 @@
 
 ## ✨ Core Features
 
-- 🎵 **Local music management** — Scans local directories and automatically extracts covers and metadata from MP3/FLAC/WAV/APE/OGG/Opus/M4A/M4B/WMA/AIF/AIFF/MKA/DSF (DSD) and other formats
+- 🎵 **Local music management** — Scans local directories and automatically extracts covers and metadata from MP3/FLAC/WAV/APE/OGG/Opus/M4A/M4B/WMA/AIF/AIFF/MKA/DSF (DSD)/AAC (ADTS)/DFF/WavPack and other formats
 - 🎬 **Video support** — Scans video containers such as MP4/MOV/M4V/MKV/WebM/AVI/TS/MPG/MPEG/FLV/WMV/RM/RMVB/3GP, detects real video tracks, and renders the picture in-app
 - 🧩 **JS plugin system** — Runs on a QuickJS sandbox with a permission model, health checks, and hot reload; freely extend audio sources / metadata / device control and more
-- 📱 **Cross-platform clients** — The Flutter client supports six platforms: Android, iOS, macOS, Windows, Linux, and Web
+- 📱 **Cross-platform clients** — Flutter covers mobile, desktop, and Web. Lynx covers Android, iOS, Windows, macOS, HarmonyOS, and Web
 - 📦 **Bundle local mode** — The client embeds the Go backend, so no server deployment is needed — play your local music directly on your phone or computer
 - 📺 **Kodi plugin client** — Supports big-screen devices like Xbox, Apple TV, Raspberry Pi, and Android TV, optimized for remote control operation for a smooth living-room media experience
 - 🌐 **Web interface** — The full edition embeds Lynx Web with root and subpath deployment support out of the box
-- 🔑 **JWT authentication** — Dual-token mechanism (Access Token + Refresh Token) with multi-device management
-- 📡 **Network songs & radio** — Add network audio URLs and radio streams, transparently cached to the server during playback
+- 🗂️ **Playlist organization and resume** — Shared custom tags for songs and playlists; normal playlists remember the track, millisecond position and playback mode, with [audiobook resume](docs/en/playlist-resume.md)
+- 🔑 **Authentication and device access** — JWT dual-token login with multi-device management; individually revocable permanent access tokens for integrations
+- 📡 **Remote tracks and radio** — Cache remote tracks and play radio in HLS, HTTP-FLV, or audio-only mode. Change playback mode for several stations at once
+- 🎚️ **Library filters and ratings** — Query multiple track types together, such as local and remote. The server supports track ratings, bulk updates, and filtering
 - 🔌 **Full REST API** — Built-in Swagger documentation for easy integration and further development
 - ⚡ **Lightweight and efficient** — Written in Go, CGO-free, with no external dependencies — ideal for low-power devices like NAS and Raspberry Pi
 
@@ -97,7 +100,7 @@ Songloft offers three editions to suit different scenarios:
 |------|------|------|----------|
 | 🌟 **Full** | none | Includes the web frontend, works out of the box | Recommended for first-time users — just open the service address to see the web interface |
 | 📦 **Lite** | `-lite` | Does not include the web frontend, smaller in size | Pairing with the Flutter desktop/mobile client, or decoupled frontend/backend deployment |
-| 📱 **Bundle** | `bundled-` | Flutter client with the Go backend embedded | No server deployment needed — play local music directly on your phone or computer |
+| 📱 **Bundle** | See the client download table | Flutter and Lynx clients include the Go backend | Play local music on your phone or computer without deploying a server |
 
 > 💡 **Recommendation**: For first-time use, download the default **Full** edition — it works out of the box with no extra frontend configuration.
 > Want to use it standalone on your phone or computer without deploying a server? Download the **Bundle** edition.
@@ -134,17 +137,30 @@ Does not include the web frontend, smaller in size:
 | 🪟 Windows | x86_64 | [songloft-windows-amd64-lite.exe](https://github.com/songloft-org/songloft/releases/latest/download/songloft-windows-amd64-lite.exe) |
 | 🪟 Windows | ARM64 | [songloft-windows-arm64-lite.exe](https://github.com/songloft-org/songloft/releases/latest/download/songloft-windows-arm64-lite.exe) |
 
-#### 📱 Bundle Edition (Embedded Backend, No Server Required)
+#### 📱 Client Bundle Local Mode (Embedded Backend, No Server Required)
 
-The client embeds the Go backend — on first launch, click "Use local mode" and select a music directory to get started:
+Flutter Bundle and Lynx Bundle packages are published together in the backend repository Release. Flutter standard and Lynx standard packages remain in their client Releases. Both clients switch between local and remote modes from the login or settings screen. Android and desktop users choose a music directory the first time local mode is enabled; iOS uses the app's Documents directory:
 
-| Platform | Architecture | Download |
-|------|------|--------|
-| 🤖 Android | ARM64 + ARMv7 | [songloft-bundled-android-arm64-v8a.apk](https://github.com/songloft-org/songloft/releases/latest/download/songloft-bundled-android-arm64-v8a.apk) |
-| 🐧 Linux | x86_64 | [songloft-bundled-linux-x64.tar.gz](https://github.com/songloft-org/songloft/releases/latest/download/songloft-bundled-linux-x64.tar.gz) |
-| 🍎 macOS | ARM64 (Apple Silicon) | [songloft-bundled-macos-arm64.dmg](https://github.com/songloft-org/songloft/releases/latest/download/songloft-bundled-macos-arm64.dmg) |
-| 🪟 Windows | x86_64 | [songloft-bundled-windows-x64.zip](https://github.com/songloft-org/songloft/releases/latest/download/songloft-bundled-windows-x64.zip) |
-| 🍎 iOS | ARM64 | [songloft-bundled-ios-arm64.ipa](https://github.com/songloft-org/songloft/releases/latest/download/songloft-bundled-ios-arm64.ipa) |
+- Flutter standard packages are in the [Flutter client Release](https://github.com/songloft-org/songloft-player-flutter/releases/latest). Flutter Bundle packages are in the [backend Release](https://github.com/songloft-org/songloft/releases/latest) or [dev](https://github.com/songloft-org/songloft/releases/tag/dev).
+- Lynx standard packages are in the [Lynx client Release](https://github.com/songloft-org/songloft-player-lynx/releases/latest). Lynx Bundle packages are in the [backend Release](https://github.com/songloft-org/songloft/releases/latest) or [dev](https://github.com/songloft-org/songloft/releases/tag/dev).
+
+| Client and platform | Architecture | Asset under **Assets** |
+| --- | --- | --- |
+| Flutter · Android | ARM64 / ARMv7 / x86_64 | `songloft-bundled-android.apk` |
+| Flutter · iOS | ARM64 (unsigned; re-sign required) | `songloft-bundled-ios-nosign.ipa` |
+| Flutter · Linux | x86_64 | `songloft-bundled-linux-x64.tar.gz` |
+| Flutter · macOS | Apple Silicon | `songloft-bundled-macos.zip` |
+| Flutter · Windows | x86_64 | `songloft-bundled-windows-x64.zip` |
+| Lynx · Android 6.0+ | ARM64 / ARMv7 / x86_64 | `songloft-lynx-bundled-android.apk` |
+| Lynx · iOS | ARM64 (unsigned; re-sign required) | `songloft-lynx-bundled-ios-nosign.ipa` |
+| Lynx · Windows | x86_64 | `songloft-lynx-bundled-win32-x64.exe` |
+| Lynx · macOS | Apple Silicon / Intel | `songloft-lynx-bundled-darwin-arm64.dmg` / `songloft-lynx-bundled-darwin-x64.dmg` / `songloft-lynx-bundled-darwin-arm64.zip` / `songloft-lynx-bundled-darwin-x64.zip` |
+
+See [all package names](docs/en/release-packages.md).
+
+Lynx HarmonyOS and Web remain non-Bundle outputs. The backend Release's `bundle-index.json` records the client SHA, backend SHA, version, build time and SHA-256 for every Bundle asset. See [Bundle Mode](docs/en/bundle-mode.md).
+
+Bundle builds use the multi-platform assets published by `hanxi/ffmpeg-builder`. The workflow resolves a concrete Release for the `dev` or stable channel, validates the manifest's platform, ABI, version, source commit and SHA-256, then reuses that resolution across the whole build matrix. Android and desktop Bundles ship `ffmpeg` and `ffprobe`. The iOS Bundle links FFmpeg into its Go backend and probes and transcodes media inside the app process.
 
 ### 🐳 Docker Images
 
@@ -168,35 +184,32 @@ The client embeds the Go backend — on first launch, click "Use local mode" and
 
 Beyond the web interface, Songloft also offers a more powerful cross-platform Flutter client that supports background playback, local caching, media controls (headphones/lock screen/notification bar), and other capabilities the server web interface cannot provide — covering all six platforms: iOS, Android, macOS, Windows, Linux, and Web.
 
-🔗 **GitHub repository**: [songloft-org/songloft-player](https://github.com/songloft-org/songloft-player)
+🔗 **GitHub repository**: [songloft-org/songloft-player-flutter](https://github.com/songloft-org/songloft-player-flutter)
 
-- **Standard edition** (requires connecting to a server): [songloft-player Releases](https://github.com/songloft-org/songloft-player/releases/latest)
-- **Bundle edition** (embedded backend, no server required): [songloft Releases](https://github.com/songloft-org/songloft/releases/latest) (download the `songloft-bundled-*` files)
+- **Standard edition** (requires a server). The universal Android package `songloft-android.apk` supports ARM64, ARMv7, and x86_64. [Flutter stable release](https://github.com/songloft-org/songloft-player-flutter/releases/latest) · [Dev release](https://github.com/songloft-org/songloft-player-flutter/releases/tag/dev)
+- **Bundle local mode**: download the `songloft-bundled-*` files listed above from the [backend stable Release](https://github.com/songloft-org/songloft/releases/latest) or [dev Release](https://github.com/songloft-org/songloft/releases/tag/dev). Flutter standard packages remain in the Flutter Release.
 
 > 🪟 **Windows users**: Install & update via [Scoop](https://scoop.sh). This bucket provides three apps, pick as needed:
 > ```powershell
 > scoop bucket add songloft https://github.com/songloft-org/songloft-scoop
 > scoop install songloft-player    # Flutter client (GUI, requires connecting to a server)
 > scoop install songloft-server    # Server (CLI only, no GUI)
-> scoop install songloft-bundled   # Bundle edition (server + client all-in-one, no separate server needed)
 > # Update:    scoop update songloft-player  (same for the others)
 > # Uninstall: scoop uninstall songloft-player  (add --purge to also remove config data)
 > ```
-> ⚠️ `songloft-bundled` conflicts with `songloft-server` and `songloft-player` (file conflicts) and **cannot be installed alongside them**; `songloft-server` and `songloft-player` can coexist.
+> `songloft-server` and `songloft-player` can coexist.
 
-> 💡 **How to use the Bundle edition**: On first launch, tap "Use local mode" on the login page → select a music directory → done automatically. You can switch between local/remote mode at any time from the settings page.
+> 💡 When using the **Lite (-lite)** server, we recommend pairing it directly with the Flutter client (no need to deploy a separate web frontend). If you do need a standalone web frontend, refer to the `flutter build web` process in the [songloft-player-flutter](https://github.com/songloft-org/songloft-player-flutter) repository to build it yourself and serve the static files via a reverse proxy such as Nginx.
 
-> 💡 When using the **Lite (-lite)** server, we recommend pairing it directly with the Flutter client (no need to deploy a separate web frontend). If you do need a standalone web frontend, refer to the `flutter build web` process in the [songloft-player](https://github.com/songloft-org/songloft-player) repository to build it yourself and serve the static files via a reverse proxy such as Nginx.
+### 📱 Lynx Client
 
-### 📱 Lynx Client (Preview)
+[Songloft Player (Lynx)](https://github.com/songloft-org/songloft-player-lynx) uses [ReactLynx](https://lynxjs.org/react/) + TypeScript on Android, iOS, HarmonyOS, Web, and Windows/macOS desktop. Playback, library/playlists, lyrics, plugins, themes, multiple servers, Bundle local mode, and in-app desktop updates are implemented. Android, iOS, and desktop packages switch modes from the login and settings screens. Final desktop device acceptance remains open.
 
-[Songloft Player (Lynx)](https://github.com/songloft-org/songloft-player-lynx) uses [ReactLynx](https://lynxjs.org/react/) + TypeScript on Android, iOS, HarmonyOS, and Web. Playback, library/playlists, lyrics, plugins, themes, and multiple servers are implemented. Desktop clients, a bundled local backend, and in-app client update checks are not implemented.
-
-- [Development downloads](https://github.com/songloft-org/songloft-player-lynx/releases/tag/dev): main code pushes build automatically; all five packages must succeed before downloads update.
-- [Stable releases](https://github.com/songloft-org/songloft-player-lynx/releases/latest): published by version tags; a stable package may not exist before the first successful release.
+- [Lynx standard development/stable releases](https://github.com/songloft-org/songloft-player-lynx/releases/tag/dev) · [stable](https://github.com/songloft-org/songloft-player-lynx/releases/latest): Android, iOS, HarmonyOS, Web, and standard desktop packages.
+- [Bundle development/stable releases](https://github.com/songloft-org/songloft/releases/tag/dev) · [stable](https://github.com/songloft-org/songloft/releases/latest): Lynx Bundle and Flutter Bundle packages.
 - [Installation](https://songloft.hanxi.cc/en/player-lynx/installation) · [Build and run](https://songloft.hanxi.cc/en/player-lynx/build-and-run) · [Releasing](https://songloft.hanxi.cc/en/player-lynx/releasing).
 
-Android ships a release-signed APK; iOS an IPA requiring user re-signing; HarmonyOS a signed HAP whose authorized devices depend on its profile; Web standalone/embedded archives. HarmonyOS is experimental. Web needs HTTPS and COOP/COEP headers; subpath deployment is unverified. See [client selection](docs/en/clients.md).
+The backend Release publishes Flutter Bundle, Lynx Bundle, `bundle-index.json`, and client-specific manifests. The Lynx repository's releases provide Standard Android/iOS and desktop packages, a signed HAP whose authorized devices depend on its profile, and Web standalone/embedded archives. HarmonyOS is experimental. Core Web flows support ordinary HTTP and have been verified at the root and under a subpath. Desktop packages build without Windows Authenticode, Apple Developer ID, or notarization. Update manifests use a separate Ed25519 key. See [client selection](docs/en/clients.md) and [Bundle mode](docs/en/bundle-mode.md).
 
 ### 🖥️ Songloft Desktop (Electron Client)
 
@@ -233,6 +246,7 @@ The following third-party clients are independently maintained by community deve
 | [Stream Music (音流)](https://music.aqzscn.cn/) | Android / iOS / macOS / Windows | Cross-platform NAS music player supporting multiple self-hosted music services |
 | [XGPlayer (流云音盒)](https://xgplayer.com/) | HarmonyOS | Lossless music player for HarmonyOS aggregating local, cloud, WebDAV and NAS libraries |
 | [Cloudflow Music (流云音乐)](http://music.lyzo.top/) | iOS | Cloud music player supporting WebDAV, Navidrome and various cloud storage services |
+| [CottonMusic(棉花音乐)](https://music.caij.xyz/en/) | Android / iOS / Windows / macOS | Music Player for Local file, Drive, Navidrome, Subsonic, Emby, Jellyfin, Plex |
 
 > 💡 Third-party clients are maintained by their respective developers and are not directly affiliated with the Songloft project. If you encounter issues, please contact the corresponding client's developer.
 ## 🚀 Quick Start
@@ -584,7 +598,7 @@ The full API documentation (Swagger/OpenAPI format) is available at:
 
 - **Swagger API doc**: [swagger.json](https://github.com/songloft-org/songloft/blob/main/docs/swagger.json)
 - **View Swagger UI online**: [petstore.swagger.io](https://petstore.swagger.io/?url=https://raw.githubusercontent.com/songloft-org/songloft/refs/heads/main/docs/swagger.json)
-- **View locally**: After starting the service, visit `http://localhost:58091/swagger/index.html`
+- **View locally**: Run `make run` or a build with `-tags dev`, then visit `http://localhost:58091/swagger/index.html`; production builds do not serve Swagger UI
 
 ### Main API Overview
 
@@ -592,13 +606,14 @@ The full API documentation (Swagger/OpenAPI format) is available at:
 |--------|------|------|
 | Auth | `/api/v1/auth/*` | Login, refresh token, logout, token management |
 | Songs | `/api/v1/songs/*` | Song CRUD, covers, playback, lyrics |
-| Playlists | `/api/v1/playlists/*` | Playlist CRUD, playlist song management, import/export |
+| Playlists | `/api/v1/playlists/*` | Playlist CRUD, members, shared tags, resume progress, import/export |
+| Tags | `/api/v1/song-tags/*` | Shared tag definitions, song binding and unbinding |
 | JS plugins | `/api/v1/jsplugins/*` | Plugin upload, enable, disable, delete, check for updates |
 | Scan | `/api/v1/scan/*` | Music library scanning |
 | Config | `/api/v1/configs/*` | System configuration management (generic KV) |
 | Settings | `/api/v1/settings/*` | Business feature settings (music directory, HLS proxy, HTTP proxy, auto scan, etc.) |
 | Cache management | `/api/v1/cache-manage/*` | Cache stats, cleanup, configuration |
-| Upgrade | `/api/v1/upgrade/*` | Version check, upgrade (Docker only) |
+| Upgrade | `/api/v1/upgrade/*` | Version check (all deployments), upgrade / rollback (Docker only) |
 | Version | `/api/v1/version` | Version info |
 | Health | `/api/v1/health` | Service health status |
 | Proxy | `/api/v1/proxy` | Resource proxy (for CORS issues) |

@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 	"github.com/hanxi/tag"
 
 	"songloft/internal/httputil"
+	"songloft/internal/mediaexec"
 	"songloft/internal/models"
 )
 
@@ -52,29 +52,31 @@ type RemoteProbeResult struct {
 
 // Metadata 音频元数据
 type Metadata struct {
-	Title        string   // 标题
-	Artist       string   // 艺术家（单值显示串，可能合并多值为无分隔串，优先用 Artists）
-	Artists      []string // 多值艺术家列表（结构化，来自 tag 多值字段；为空时回退 Artist）
-	AlbumArtists []string // 多值专辑艺术家列表
-	Album        string   // 专辑
-	Duration     float64  // 时长（秒）
-	Format       string   // 格式
-	BitRate      int      // 比特率（kbps）
-	SampleRate   int      // 采样率（Hz）
-	HasCover     bool     // 是否有封面
-	Lyric        string   // 歌词内容
-	LyricSource  string   // 歌词来源：file/embedded
-	CoverPath    string   // 封面文件存储路径（分层目录）
-	CoverData    []byte   // 封面图片数据（用于保存）
-	CoverExt     string   // 封面图片扩展名
-	ISRC         string   // ISRC（国际标准录音编码）
-	Track        string   // 音轨号（"3" 或 "3/12"）
-	Year         int      // 发行年份
-	Genre        string   // 流派
-	Language     string   // 语种
-	Style        string   // 风格
-	IsVideo      bool     // 是否含真实视频轨（ffprobe 探测，排除封面 attached_pic）
-	SongloftTags string   // SONGLOFT_TAGS 自定义标签字段（逗号分隔）
+	FileMetadataRead bool     // A container reader successfully read the local file.
+	Title            string   // 标题
+	Artist           string   // 艺术家（单值显示串，可能合并多值为无分隔串，优先用 Artists）
+	Artists          []string // 多值艺术家列表（结构化，来自 tag 多值字段；为空时回退 Artist）
+	AlbumArtists     []string // 多值专辑艺术家列表
+	Album            string   // 专辑
+	Duration         float64  // 时长（秒）
+	Format           string   // 格式
+	BitRate          int      // 比特率（kbps）
+	SampleRate       int      // 采样率（Hz）
+	HasCover         bool     // 是否有封面
+	Lyric            string   // 歌词内容
+	LyricSource      string   // 歌词来源：file/embedded
+	CoverPath        string   // 封面文件存储路径（分层目录）
+	CoverData        []byte   // 封面图片数据（用于保存）
+	CoverExt         string   // 封面图片扩展名
+	ISRC             string   // ISRC（国际标准录音编码）
+	Track            string   // 音轨号（"3" 或 "3/12"）
+	Disc             string   // 碟号（"1" 或 "1/2"）
+	Year             int      // 发行年份
+	Genre            string   // 流派
+	Language         string   // 语种
+	Style            string   // 风格
+	IsVideo          bool     // 是否含真实视频轨（ffprobe 探测，排除封面 attached_pic）
+	SongloftTags     string   // SONGLOFT_TAGS 自定义标签字段（逗号分隔）
 }
 
 // FFProbeOutput ffprobe 输出结构
@@ -104,6 +106,9 @@ type FFProbeStream struct {
 // Unlike exec.LookPath, it avoids the faccessat2 syscall which triggers
 // SIGSYS on platforms with restrictive seccomp filters (e.g., Termux on Android).
 func safeLookPath(name string) (string, error) {
+	if mediaexec.Native && name != "" {
+		return name, nil
+	}
 	exts := pathExts()
 
 	if strings.Contains(name, string(filepath.Separator)) {
@@ -232,16 +237,22 @@ func (m *MetadataExtractor) Extract(ctx context.Context, filePath string) (*Meta
 
 	metadata := &Metadata{}
 
+	var sourceInfo os.FileInfo
+
 	// 优先使用 tag 库提取元数据
 	file, err := os.Open(filePath)
 	if err == nil {
 		defer file.Close()
+		sourceInfo, _ = file.Stat()
 
 		tagMeta, tagErr := tag.ReadFrom(file)
 		if tagErr != nil {
 			slog.Debug("tag 库读取失败，将回退到 ffprobe", "filePath", filePath, "error", tagErr)
 		}
 		if tagErr == nil {
+			metadata.FileMetadataRead = true
+			metadata.BitRate = tagMeta.BitRate()
+			metadata.SampleRate = tagMeta.SampleRate()
 			metadata.Title = tagMeta.Title()
 			metadata.Artist = tagMeta.Artist()
 			metadata.Artists = tagMeta.Artists()
@@ -261,6 +272,7 @@ func (m *MetadataExtractor) Extract(ctx context.Context, filePath string) (*Meta
 			}
 
 			metadata.ISRC = extractISRC(tagMeta.Raw())
+			metadata.Disc = canonicalTrack(tagMeta.Disc())
 			if num, total := tagMeta.Track(); num > 0 {
 				if total > 0 {
 					metadata.Track = strconv.Itoa(num) + "/" + strconv.Itoa(total)
@@ -291,26 +303,26 @@ func (m *MetadataExtractor) Extract(ctx context.Context, filePath string) (*Meta
 	// 仅在 tag 库未能获取时长时，回退到 ffprobe 补充技术参数
 	cfg := m.config.Load()
 	var probe *FFProbeOutput
-	if metadata.Duration == 0 && cfg.FFProbePath != "" {
+	if (metadata.Duration == 0 || metadata.BitRate == 0 || metadata.SampleRate == 0) && cfg.FFProbePath != "" {
 		probeOutput, err := m.runFFProbe(ctx, filePath)
 		if err != nil {
 			slog.Warn("ffprobe failed, continuing without probe data", "filePath", filePath, "err", err)
 		} else {
 			probe = probeOutput
-			if probeOutput.Format.Duration != "" {
+			if metadata.Duration == 0 && probeOutput.Format.Duration != "" {
 				if duration, err := parseDuration(probeOutput.Format.Duration); err == nil {
 					metadata.Duration = duration
 				}
 			}
 
-			if probeOutput.Format.BitRate != "" {
+			if metadata.BitRate == 0 && probeOutput.Format.BitRate != "" {
 				if bitRate, err := parseInteger(probeOutput.Format.BitRate); err == nil {
 					metadata.BitRate = bitRate / 1000
 				}
 			}
 
 			for _, stream := range probeOutput.Streams {
-				if stream.CodecType == "audio" && stream.SampleRate != "" {
+				if metadata.SampleRate == 0 && stream.CodecType == "audio" && stream.SampleRate != "" {
 					if sampleRate, err := parseInteger(stream.SampleRate); err == nil {
 						metadata.SampleRate = sampleRate
 						break
@@ -387,6 +399,16 @@ func (m *MetadataExtractor) Extract(ctx context.Context, filePath string) (*Meta
 		metadata.Format = "wmv"
 	}
 
+	// ADTS AAC 与 MP4 中的 AAC 编码共用旧归一化规则。保留裸流容器标识。
+	if strings.EqualFold(filepath.Ext(filePath), ".aac") {
+		metadata.Format = "aac"
+	}
+
+	// .dts 可能被 ffprobe 识别为 dts 或 dtshd；统一保留曲库的扩展名格式。
+	if strings.EqualFold(filepath.Ext(filePath), ".dts") {
+		metadata.Format = "dts"
+	}
+
 	// 视频轨探测：对可能含视频画面的容器（mp4/mov/mkv/webm/avi/ts 等）用 ffprobe 判定是否含真实视频流。
 	// 注意：含视频轨的 mp4/mov 会被 tag 库成功读取（拿到时长），不会进入上面的 ffprobe 分支，
 	// 故这里必须对视频容器候选独立探测；已探测过（mkv 等无 tag 的容器）则复用 probe，避免重复调用。
@@ -415,6 +437,12 @@ func (m *MetadataExtractor) Extract(ctx context.Context, filePath string) (*Meta
 	if lrc := ReadSidecarLyric(filePath); lrc != "" {
 		metadata.Lyric = lrc
 		metadata.LyricSource = models.LyricSourceFile
+	}
+
+	if metadata.FileMetadataRead {
+		current, err := os.Stat(filePath)
+		metadata.FileMetadataRead = err == nil && sourceInfo != nil && os.SameFile(sourceInfo, current) &&
+			sourceInfo.Size() == current.Size() && sourceInfo.ModTime().Equal(current.ModTime())
 	}
 
 	return metadata, nil
@@ -677,7 +705,7 @@ func (m *MetadataExtractor) runFFProbeOnURL(ctx context.Context, rawURL string, 
 		args = append(args, "-headers", h)
 	}
 	args = append(args, rawURL)
-	cmd := exec.CommandContext(ctx, cfg.FFProbePath, args...)
+	cmd := mediaexec.FFprobe(ctx, cfg.FFProbePath, args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("ffprobe url: %w", err)
@@ -746,7 +774,7 @@ func (m *MetadataExtractor) ExtractCoverFromURL(ctx context.Context, url string,
 		args = append(args, "-headers", h)
 	}
 	args = append(args, "-i", url, "-an", "-vcodec", "copy", "-f", "image2pipe", "pipe:1")
-	cmd := exec.CommandContext(coverCtx, cfg.FFMpegPath, args...)
+	cmd := mediaexec.FFmpeg(coverCtx, cfg.FFMpegPath, args...)
 
 	var buf bytes.Buffer
 	cmd.Stdout = &limitedWriter{w: &buf, limit: maxCoverSize}
@@ -796,7 +824,7 @@ func (m *MetadataExtractor) ExtractCoverFromVideoFile(ctx context.Context, fileP
 		"-vcodec", "mjpeg",
 		"pipe:1",
 	)
-	cmd := exec.CommandContext(frameCtx, cfg.FFMpegPath, args...)
+	cmd := mediaexec.FFmpeg(frameCtx, cfg.FFMpegPath, args...)
 
 	var buf bytes.Buffer
 	cmd.Stdout = &limitedWriter{w: &buf, limit: maxCoverSize}
@@ -955,8 +983,8 @@ func (m *MetadataExtractor) IsFFProbeAvailable() bool {
 }
 
 // buildFFProbeCommandContext 构建带上下文的 ffprobe 命令
-func (m *MetadataExtractor) buildFFProbeCommandContext(ctx context.Context, filePath string) *exec.Cmd {
-	return exec.CommandContext(
+func (m *MetadataExtractor) buildFFProbeCommandContext(ctx context.Context, filePath string) *mediaexec.Command {
+	return mediaexec.FFprobe(
 		ctx,
 		m.config.Load().FFProbePath,
 		"-v", "quiet",

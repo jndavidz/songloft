@@ -51,7 +51,7 @@
     // 随 `songloft-theme` 消息把**真实的** ColorScheme 推来（含用户自定义 ThemePack），
     // 这里写成 documentElement 的**内联**自定义属性覆盖兜底值 —— 内联优先级最高，
     // 连插件自己在 `:root` 里重定义的同名变量也压得住。Dart 侧见
-    // `clients/player/lib/features/home/presentation/render/plugin_color_scheme.dart`。
+    // `clients/player-flutter/lib/features/home/presentation/render/plugin_color_scheme.dart`。
     //
     // **为什么颜色挂在 `songloft-theme` 上而不单开一条消息**：亮暗标记（`data-theme`）
     // 与色值必须**同时**生效。分两条消息就会有一帧「`data-theme=dark` 但变量还是
@@ -622,6 +622,23 @@
     var hostPending = {};
     var hostCallSeq = 0;
 
+    function sendHostMessage(message) {
+        if (isLynxHost()) {
+            var json = JSON.stringify(message);
+            if (window.LynxWebViewBridge && typeof window.LynxWebViewBridge.onMessageReceived === 'function') {
+                window.LynxWebViewBridge.onMessageReceived(json);
+            } else if (window.LynxJSBridge && typeof window.LynxJSBridge.onMessageReceived === 'function') {
+                window.LynxJSBridge.onMessageReceived(json);
+            } else if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeApp) {
+                window.webkit.messageHandlers.nativeApp.postMessage(json);
+            } else {
+                throw new Error('songloft Lynx WebView bridge unavailable');
+            }
+        } else {
+            window.parent.postMessage(message, '*');
+        }
+    }
+
     function invokeViaPostMessage(ns, method, params) {
         return new Promise(function(resolve, reject) {
             var id = 'c' + (++hostCallSeq) + '_' + Date.now();
@@ -630,22 +647,12 @@
                 reject(new Error('songloft host call timeout: ' + ns + '.' + method));
             }, HOST_CALL_TIMEOUT_MS);
             hostPending[id] = { resolve: resolve, reject: reject, timer: timer };
+            if (ns === 'player' && method === 'openVideo') {
+                params = Object.assign({}, params, { __songloftReplyAck: true });
+            }
             var message = { type: 'songloft-host-call', id: id, ns: ns, method: method, params: params || null };
             try {
-                if (isLynxHost()) {
-                    var json = JSON.stringify(message);
-                    if (window.LynxWebViewBridge && typeof window.LynxWebViewBridge.onMessageReceived === 'function') {
-                        window.LynxWebViewBridge.onMessageReceived(json);
-                    } else if (window.LynxJSBridge && typeof window.LynxJSBridge.onMessageReceived === 'function') {
-                        window.LynxJSBridge.onMessageReceived(json);
-                    } else if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeApp) {
-                        window.webkit.messageHandlers.nativeApp.postMessage(json);
-                    } else {
-                        throw new Error('songloft Lynx WebView bridge unavailable');
-                    }
-                } else {
-                    window.parent.postMessage(message, '*');
-                }
+                sendHostMessage(message);
             } catch (error) {
                 clearTimeout(timer);
                 delete hostPending[id];
@@ -659,8 +666,21 @@
         if (!p) return;
         clearTimeout(p.timer);
         delete hostPending[msg.id];
-        if (msg.ok) p.resolve(msg.data);
-        else p.reject(new Error(msg.error || 'songloft host call failed'));
+        if (!msg.ok) {
+            p.reject(new Error(msg.error || 'songloft host call failed'));
+            return;
+        }
+        p.resolve(msg.data);
+        if (msg.acknowledge === true) {
+            Promise.resolve().then(function() {
+                sendHostMessage({
+                    type: 'songloft-host-call',
+                    id: msg.id,
+                    ns: 'lifecycle',
+                    method: 'hostReplyReceived'
+                });
+            }).catch(function(error) { console.error('Could not confirm host reply', error); });
+        }
     }
 
     /**
@@ -695,11 +715,22 @@
 
     var host = {
         isAvailable: isHostAvailable,
-        getInfo: function() { return invokeHost('host', 'getInfo'); }
+        getInfo: function() { return invokeHost('host', 'getInfo'); },
+        openExternalUrl: function(url) {
+            return invokeHost('plugin', 'openUrl', { url: url }).then(function() {});
+        }
     };
 
     var player = {
         getState: function() { return invokeHost('player', 'getState'); },
+        openVideo: function(options) {
+            return invokeHost('player', 'openVideo', options).then(function() {});
+        },
+        getAudioEffects: function() { return invokeHost('player', 'getAudioEffects'); },
+        applyAudioEffects: function(options) { return invokeHost('player', 'applyAudioEffects', options); },
+        clearAudioEffects: function(options) {
+            return invokeHost('player', 'clearAudioEffects', options).then(function() {});
+        },
         setQueue: function(ids, options) {
             options = options || {};
             return invokeHost('player', 'setQueue', {

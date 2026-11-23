@@ -51,10 +51,10 @@ This document is based on the following source files:
 
 The song management module is Songloft's core API, covering song CRUD, playback stream distribution, covers/lyrics, audio tag writing, file organization, and duplicate detection. All endpoints require JWT authentication (`BearerAuth`), with the base path `/api/v1`.
 
-**Song types**: `local` (local files), `remote` (external URL / plugin source), `radio` (online broadcast / live stream).
+**Song types**: `local` (local files), `remote` (external URL / plugin source), and `radio` (online broadcast / live stream). The `type` query accepts comma-separated stored types such as `local,remote`. Clients can combine it with `exclude_playlist_labels=hidden,audiobook` to omit hidden and audiobook-playlist songs. Type values are query filters and are never written into a Song object.
 
 **Song JSON serialization rules** (handled uniformly by `MarshalJSON`):
-- `url` -- Unified to `/api/v1/songs/{id}/play` (HLS radio uses `.../play.m3u8`)
+- `url` -- Regular playback and audio-only radio use `/api/v1/songs/{id}/play`. HLS radio uses `.../play.m3u8`, and HTTP-FLV radio uses `.../play.flv`.
 - `cover_url` -- `/api/v1/songs/{id}/cover` when a cover exists, otherwise empty
 - `lyric_url` -- `/api/v1/songs/{id}/lyric` when lyrics exist, otherwise empty
 - `source_url` -- The original stream address, returned only for remote/radio types
@@ -81,9 +81,13 @@ Gets the song list, supporting filtering by type, keyword search, path-prefix fi
 
 | Parameter | Type | Required | Default | Description |
 |------|------|------|--------|------|
-| `type` | string | No | -- | `local` / `remote` / `radio` |
+| `type` | string | No | -- | Stored types, with comma-separated combinations such as `local,remote` |
 | `keyword` | string | No | -- | Search keyword (matches title, artist, album) |
 | `path_prefix` | string | No | -- | Filter by `file_path` prefix |
+| `exclude_playlist_labels` | string | No | `hidden` | Exclude songs in playlists carrying these labels, comma-separated. Use `none` to include all |
+| `rating` | int | No | -- | Match a rating from 0 to 100 exactly. Both `0` and `-1` select unrated tracks |
+| `min_rating` | int | No | -- | Inclusive minimum rating |
+| `sort` | string | No | -- | Use `rating` to order by rating |
 | `limit` | int | No | `20` | Items per page, upper limit `100000` |
 | `offset` | int | No | `0` | Offset |
 
@@ -97,7 +101,7 @@ Gets the song list, supporting filtering by type, keyword search, path-prefix fi
 
 **Path:** `/api/v1/songs/ids` | **Authentication:** BearerAuth
 
-Shares filter conditions with `/songs` (`type`, `keyword`, `path_prefix`), but returns only IDs. Used for batch operation scenarios such as "select all within the current filter range"; not paginated.
+Shares filter conditions with `/songs` (`type`, `keyword`, `path_prefix`, and `exclude_playlist_labels`), but returns only IDs. Used for batch operation scenarios such as "select all within the current filter range"; not paginated.
 
 **Success response (200):** `{"ids": [1, 2, 3], "total": 3}`
 
@@ -146,6 +150,8 @@ Aggregates the library by a specified dimension, returning the non-empty values 
 | Parameter | Type | Required | Default | Description |
 |------|------|------|--------|------|
 | `field` | string | Yes | -- | Aggregation dimension: `genre` / `artist` / `album` / `language` / `style` / `year` / `decade` (the value for `year`/`decade` is a numeric string; a decade such as `"1990"` means 1990-1999) |
+| `type` | string | No | -- | Stored types, with comma-separated combinations such as `local,remote` |
+| `exclude_playlist_labels` | string | No | `hidden` | Exclude songs in playlists carrying these labels, comma-separated. Use `none` to include all |
 | `keyword` | string | No | -- | Fuzzy search over values |
 | `limit` | int | No | `20` | Page size, upper limit `100000` |
 | `offset` | int | No | `0` | Pagination offset |
@@ -331,6 +337,11 @@ For all remote songs with missing metadata, probes duration, bit rate, sample ra
 
 ---
 
+### 3.9 Ratings and radio mode
+
+- `PUT /api/v1/songs/{id}/rating` accepts `{"rating":80}`. `POST /api/v1/songs/batch-rating` accepts `{"ids":[1,2],"rating":80}`. Ratings are integers from 0 to 100. Use 0 to clear a rating. The batch endpoint skips missing IDs and returns `updated`. Ratings are stored in the database.
+- `POST /api/v1/songs/batch-radio-mode` accepts `{"ids":[1,2],"radio_mode":"hls"}` and an optional `is_video` field. Modes are `""` (detect from URL), `hls`, `flv`, and `audio_only`. Audio-only mode clears the video flag. Missing IDs are skipped. An invalid mode or a non-radio track rejects the entire batch.
+
 ## 4. Lyrics and Tags
 
 **Section source**: `internal/handlers/music.go`, `internal/models/lyric.go`
@@ -515,7 +526,9 @@ Streams audio by song ID, internally dispatching automatically by `song.type`:
 | `remote` (plugin) | Returned after CacheService download caching |
 | `remote` (external link) | Directly proxied and forwarded |
 | `radio` (HLS) | Reverse proxy or 302 (depending on the hls-proxy switch) |
-| `radio` (non-HLS) | Directly proxies the upstream stream |
+| `radio` (HTTP-FLV) | `/play.flv` proxies the original FLV stream. Clients that cannot play FLV can open an HLS session with `POST /api/v1/songs/{id}/hls/sessions` |
+| `radio` (audio-only) | FFmpeg extracts the first audio track and outputs MP3 |
+| `radio` (other streams) | Directly proxies the upstream stream |
 
 **Path parameter:** `id` (int, required)
 
@@ -544,7 +557,7 @@ An HLS-radio-specific alias that shares the handler with `/play`. Ending the URL
 
 **Path:** `/api/v1/songs/{id}/cover` | **Authentication:** BearerAuth
 
-Gets the cover image. Returns the local cover first, and proxies the external `CoverURL` when it does not exist.
+Gets the local cover if available and proxies the external `CoverURL` otherwise. Request a proportional thumbnail of a local cover with `?w=<pixels>`. Covers ignore byte ranges and retain cache validation.
 
 **Path parameter:** `id` (int, required)
 
@@ -558,19 +571,19 @@ Gets the cover image. Returns the local cover first, and proxies the external `C
 
 **Section source**: `internal/handlers/hls.go`
 
-The HLS reverse proxy takes effect after the `hls_proxy` switch is enabled (`PUT /settings/hls-proxy`). Flow: `serveRadio` -> `ServeProxy` fetches the upstream m3u8 and rewrites URIs to local relative paths -> the player calls back `playlist`/`segment` to fetch sub-layer resources. Each entry performs a same-origin check + `IsHostnameAllowed` SSRF protection; non-same-origin URLs are left unchanged.
+The HLS reverse proxy takes effect after the `hls_proxy` switch is enabled (`PUT /settings/hls-proxy`). Flow: `serveRadio` -> `ServeProxy` fetches the upstream m3u8 and rewrites URIs to local relative paths -> the player calls back `playlist`/`segment` to fetch sub-layer resources. Unsigned requests retain the same-origin check (scheme+host+port must exactly match `song.URL`). Cross-origin HTTP(S) resources found in actual playlists are rewritten to proxy links carrying `sig`. HMAC-SHA256 binds the song ID, current source URL, endpoint type, and complete resource URL, preventing tampering or reuse across songs/endpoints. Entry requests and every redirect use `services.IsHostnameAllowed` to block private hosts; the private allowlist still does not apply to HLS. The key lasts for the current process only; refetch the playlist after a restart.
 
 ### 7.1 GET /songs/{id}/hls/playlist -- Proxy Playlist
 
 **Path:** `/api/v1/songs/{id}/hls/playlist` | **Method:** `GET` / `HEAD` | **Authentication:** BearerAuth
 
-Reverse-proxies the HLS sub-layer m3u8. Fetch upstream -> same-origin check -> rewrite URIs -> write back. Upstream errors are passed through; the playlist size limit is 1 MB.
+Reverse-proxies the HLS sub-layer m3u8. Fetch upstream -> origin/signature and host checks -> rewrite URIs -> write back. Upstream errors are passed through; the playlist size limit is 1 MB.
 
-**Parameters:** `id` (path, int) | `u` (query, string, required, base64url-encoded upstream URL) | `access_token` (query, string, optional)
+**Parameters:** `id` (path, int) | `u` (query, string, required, base64url-encoded upstream URL) | `sig` (query, string, required for cross-origin URLs, generated by the server) | `access_token` (query, string, optional)
 
 **Success (200):** Rewritten m3u8 text, `Content-Type: application/vnd.apple.mpegurl`, `Cache-Control: no-store`
 
-**Errors:** `400` Invalid ID / missing u | `403` Non-same-origin / host not allowed | `404` Song does not exist | `502` Upstream unavailable
+**Errors:** `400` Invalid ID / missing u | `403` Missing cross-origin signature / invalid signature / host not allowed | `404` Song does not exist | `502` Upstream unavailable
 
 ---
 
@@ -580,11 +593,11 @@ Reverse-proxies the HLS sub-layer m3u8. Fetch upstream -> same-origin check -> r
 
 Reverse-proxies audio segments/key/init segments. Passes through Range and upstream response headers.
 
-**Parameters:** `id` (path, int) | `u` (query, string, required, base64url-encoded upstream URL) | `access_token` (query, string, optional)
+**Parameters:** `id` (path, int) | `u` (query, string, required, base64url-encoded upstream URL) | `sig` (query, string, required for cross-origin URLs, generated by the server) | `access_token` (query, string, optional)
 
 **Success:** `200` Segment content | `206` Range partial content. `Cache-Control: no-store`
 
-**Errors:** `400` Invalid ID / missing u | `403` Non-same-origin / host not allowed | `404` Song does not exist | `502` Upstream unavailable
+**Errors:** `400` Invalid ID / missing u | `403` Missing cross-origin signature / invalid signature / host not allowed | `404` Song does not exist | `502` Upstream unavailable
 
 ## Additional current interfaces
 
@@ -638,6 +651,8 @@ Get distinct nonempty song or artist names. Requires a Bearer token.
 | Parameter | Location | Type | Required |
 | --- | --- | --- | --- |
 | `field` | query | `string` | true |
+| `type` | query | `string` | false |
+| `exclude_playlist_labels` | query | `string` | false |
 
 Request and response details are defined by the corresponding handler and Swagger.
 
@@ -670,6 +685,8 @@ Get random songs. Requires a Bearer token.
 | `decade` | query | `integer` | false |
 | `exclude_playlist_labels` | query | `string` | false |
 | `limit` | query | `integer` | false |
+
+`type=local,remote` returns local and remote songs. Add `exclude_playlist_labels=hidden,audiobook` when the client should omit hidden and audiobook-playlist songs.
 
 Request and response details are defined by the corresponding handler and Swagger.
 

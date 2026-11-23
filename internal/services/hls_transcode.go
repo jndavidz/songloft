@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -37,10 +38,11 @@ func hlsError(status int, message string) error {
 
 // HLSTranscodeOptions 仅支持第一条 H.264 视频轨复制和第一条音频轨转 AAC-LC。
 type HLSTranscodeOptions struct {
-	URL          string `json:"url" validate:"required" example:"https://example.com/live.m3u8"`
-	AudioBitrate int    `json:"audio_bitrate" example:"128"`
-	UserAgent    string `json:"user_agent"`
-	Referer      string `json:"referer"`
+	URL            string `json:"url" validate:"required" example:"https://example.com/live.m3u8"`
+	AudioBitrate   int    `json:"audio_bitrate" example:"128"`
+	UserAgent      string `json:"user_agent"`
+	Referer        string `json:"referer"`
+	preopenLiveFLV bool
 }
 
 type hlsSession struct {
@@ -60,6 +62,8 @@ type hlsSession struct {
 type HLSTranscodeService struct {
 	cache                                                   *CacheService
 	allowlist                                               func() []string
+	ctx                                                     context.Context
+	cancel                                                  context.CancelFunc
 	root                                                    string
 	mu                                                      sync.Mutex
 	sessions                                                map[string]*hlsSession
@@ -74,7 +78,9 @@ func NewHLSTranscodeService(cache *CacheService, allowlist func() []string) (*HL
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &HLSTranscodeService{cache: cache, allowlist: allowlist, root: root,
+		ctx: ctx, cancel: cancel,
 		sessions: make(map[string]*hlsSession), idleTimeout: HLSIdleTimeout,
 		startupTimeout: 30 * time.Second, stallTimeout: 30 * time.Second,
 		pollInterval: 200 * time.Millisecond, maxBytes: 128 << 20}, nil
@@ -480,4 +486,75 @@ func HLSTranscodeStatus(err error) int {
 		return http.StatusNotFound
 	}
 	return http.StatusInternalServerError
+}
+
+func (s *HLSTranscodeService) CreateFLV(ctx context.Context, owner string, opts HLSTranscodeOptions) (string, error) {
+	return s.create(ctx, owner, opts, "flv")
+}
+
+func (s *HLSTranscodeService) StreamAudio(ctx context.Context, w io.Writer, opts HLSTranscodeOptions) error {
+	if err := validateHLSURL(opts.URL); err != nil {
+		return err
+	}
+	if s.cache == nil || s.cache.getFFmpegPath() == "" {
+		return hlsError(503, "ffmpeg 未配置")
+	}
+	ffmpeg, err := safeLookPath(s.cache.getFFmpegPath())
+	if err != nil {
+		return hlsError(503, "ffmpeg 不可用")
+	}
+	select {
+	case seekStreamSem <- struct{}{}:
+		defer func() { <-seekStreamSem }()
+	default:
+		return hlsError(503, "转码并发已满")
+	}
+	if s.ctx.Err() != nil {
+		return hlsError(503, "转码服务已关闭")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(s.ctx, cancel)
+	defer stop()
+	opts.preopenLiveFLV = true
+	gateway, err := newHLSPullGateway(ctx, opts, s.allowlist)
+	if err != nil {
+		var publicErr *HLSTranscodeError
+		if errors.As(err, &publicErr) {
+			return publicErr
+		}
+		return hlsError(500, "无法初始化直播拉流服务")
+	}
+	defer gateway.Close()
+	args := append([]string{"-nostdin", "-hide_banner", "-loglevel", "error"}, hlsInputArgs("hls,mpegts,mov,flv,mp3,aac,ogg,flac,wav,asf")...)
+	args = append(args, "-rw_timeout", "15000000", "-re", "-i", gateway.URL(opts.URL),
+		"-map", "0:a:0", "-vn", "-c:a", "libmp3lame", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+		"-write_xing", "0", "-id3v2_version", "0", "-f", "mp3", "pipe:1")
+	for resumed := false; ; resumed = true {
+		started := time.Now()
+		eof, err := streamRadio(ctx, w, ffmpeg, args, s.startupTimeout, resumed)
+		if resumed && err != nil {
+			// The response already contains MP3. Never append a JSON startup error.
+			slog.Debug("radio audio restart failed", "status", HLSTranscodeStatus(err))
+			return nil
+		}
+		if errors.Is(err, ErrRadioTranscodeUnavailable) {
+			return gateway.failure("无法从直播源提取音频")
+		}
+		if !eof || !gateway.liveFLV.Load() || (resumed && time.Since(started) < 3*time.Second) {
+			return err
+		}
+		slog.Debug("live FLV input ended, reopening radio entry")
+	}
+}
+
+func hlsInputArgs(formats string) []string {
+	return []string{"-http_proxy", "", "-protocol_whitelist", "http,tcp,crypto", "-format_whitelist", formats}
+}
+
+func (s *HLSTranscodeService) create(ctx context.Context, owner string, opts HLSTranscodeOptions, inputFormats string) (string, error) {
+	// 本地 run 走 HLS Pull Gateway（SSRF 防护）+ resourcebudget 并发控制，
+	// 与 upstream 的 inputFormats+mediaexec 路径不同；FLV 端点复用本地 Create 以保留安全机制。
+	_ = inputFormats
+	return s.Create(ctx, owner, opts)
 }

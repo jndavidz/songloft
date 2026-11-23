@@ -15,8 +15,10 @@ A: **No, it is free, and it does not accept any sponsorship or donations.** Song
 ### Q: How should I download Songloft?
 
 A:
-- **Backend server**: Download the build for your system from [GitHub Releases](https://github.com/songloft-org/songloft/releases). Linux, macOS, and Windows are supported, with both binary and Docker image deployment options.
-- **Flutter client**: Download the prebuilt installers from [Flutter client Releases](https://github.com/songloft-org/songloft-player/releases). Android, iOS, macOS, Windows, Linux, and Web are supported.
+
+- **Backend server, Flutter Bundle, and Lynx Bundle** · [Latest stable](https://github.com/songloft-org/songloft/releases/latest) · [dev](https://github.com/songloft-org/songloft/releases/tag/dev). The server supports Linux, macOS, and Windows and is available as binaries and Docker images.
+- **Flutter Standard** · [Latest stable](https://github.com/songloft-org/songloft-player-flutter/releases/latest) · [dev](https://github.com/songloft-org/songloft-player-flutter/releases/tag/dev).
+- **Lynx Standard** · [Latest stable](https://github.com/songloft-org/songloft-player-lynx/releases/latest) · [dev](https://github.com/songloft-org/songloft-player-lynx/releases/tag/dev). The same releases include HarmonyOS and Web packages.
 
 - **Electron desktop client**: [Songloft Desktop Releases](https://github.com/songloft-org/songloft-desktop/releases/latest), connecting to an existing server.
 - **TV client**: [Songloft TV Releases](https://github.com/songloft-org/songloft-tv/releases/latest), for Android 5.0+ large-screen devices.
@@ -270,6 +272,8 @@ A: Mainstream audio formats are supported: **MP3, FLAC, WAV, APE, OGG, M4A, MP4,
 
 DSF files are scanned by default, including embedded tags and cover art. Upgrading an existing deployment automatically adds `dsf` to the scan format list; rescan to discover the files. Native clients use the existing libmpv playback path; browsers or DLNA devices without DSD support must explicitly request server-side ffmpeg transcoding, for example `GET /api/v1/songs/{id}/play?format=mp3` (`format=flac` is also available, depending on device compatibility). The current Web client does not automatically add a transcoding parameter for DSF. Writing tags, lyrics, or cover art back to DSF files is currently unsupported.
 
+Local `.dts` files are scanned by default. Rescan after upgrading to discover them. Scanning uses ffprobe to read duration and other audio properties and falls back to the filename for the title. Playback uses MP3 by default, downmixing multichannel audio to stereo. Players that support multichannel FLAC can request `GET /api/v1/songs/{id}/play?format=flac`. Update the Docker image to get FFmpeg and ffprobe with DTS input support.
+
 Common **video containers** are also scanned: **MKV, WEBM, AVI, TS** (along with MP4/MOV that carry a picture). During scanning the backend uses ffprobe to detect whether a file has a real video track and marks it as `is_video` (an embedded cover image does not count as video). Such files are common in audiobooks, online courses, and other listening-focused mixed audio/video content:
 
 - The **audio track** can always be played;
@@ -299,8 +303,19 @@ A: Check the following:
 
 A: Some radio source sites use Referer / User-Agent hotlink protection, or are blocked by CORS in Web embedded mode, causing the client's direct stream pull to fail. Turn on the switch under **Settings → HLS Proxy** in the client:
 
-- When enabled, the server fetches and rewrites the `.m3u8` and proxies all segments / keys / init segments, bypassing source-site hotlink protection and browser cross-origin restrictions.
+- When enabled, the server fetches and rewrites `.m3u8` and proxies segments / keys / init segments, including cross-origin CDN resources actually referenced by the playlist. This helps with hotlink protection and browser CORS; unreachable sources or additional source authentication can still cause failures.
+- Private addresses remain blocked, and the resource proxy private allowlist does not apply to HLS. Reopen the stream after a server restart to obtain fresh proxy links.
 - Trade-off: **all segments go through the server's bandwidth**, so mind the traffic cost. Turn it off when not needed (it's off by default, in which case the radio `.m3u8` is pulled directly from the source by the client).
+
+### Q: How do I play a live stream with no `.m3u8` suffix, such as Migu IPTV?
+
+When adding or editing a radio station, keep the original stream URL and select **HLS** under **Radio playback mode**. Enable **Video content** to see the picture. The client decodes H.265 (HEVC), so support depends on the device and browser.
+
+Choose **Audio only** to listen. The server uses FFmpeg to extract the first audio track from HLS, TS, or MP4 and streams it as MP3. If the source multiplexes audio and video in the same segments, the server still downloads those segments.
+
+### Q: How do I resume an audiobook?
+
+A: Enable **Audiobook** while editing a normal playlist, then use **Continue listening** to restore its track, position and playback mode. Tapping a track directly starts it from zero. Other normal playlists also keep independent resume state; radio playlists do not. State is shared within the server instance, and basic playback still works with older servers. See [Playlist resume and audiobooks](playlist-resume.md).
 
 ### Q: How do I scan the music library?
 
@@ -423,4 +438,4 @@ A:
 
 - **GitHub Issues**: [https://github.com/songloft-org/songloft/issues](https://github.com/songloft-org/songloft/issues)
 - **Project homepage**: [https://github.com/songloft-org/songloft](https://github.com/songloft-org/songloft)
-- **Flutter client**: [https://github.com/songloft-org/songloft-player](https://github.com/songloft-org/songloft-player)
+- **Flutter client**: [https://github.com/songloft-org/songloft-player-flutter](https://github.com/songloft-org/songloft-player-flutter)

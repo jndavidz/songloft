@@ -1015,7 +1015,7 @@ const docTemplate = `{
         },
         "/jsplugin-assets/web-core/{path}": {
             "get": {
-                "description": "服务 Lynx 渲染引擎的 Web 端运行时（CSS/JS/WASM），供声明 renderEngine=lynx 的插件在系统 WebView 中使用。",
+                "description": "服务 Lynx 渲染引擎的 Web 端运行时（CSS/JS/WASM），供声明 renderEngine=lynx 的插件在系统 WebView 中使用。优先读取磁盘 web-core 目录，否则读取完整版内嵌资源；两者均无对应文件时返回 404。",
                 "produces": [
                     "application/octet-stream"
                 ],
@@ -1037,7 +1037,7 @@ const docTemplate = `{
                         "description": "资源文件"
                     },
                     "404": {
-                        "description": "资源不存在或 web-core 目录未配置",
+                        "description": "资源不存在或未提供 Web 运行时",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3407,6 +3407,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "integer",
+                        "description": "按共享自定义标签筛选",
+                        "name": "tag_id",
+                        "in": "query"
+                    },
+                    {
                         "type": "string",
                         "default": "hidden",
                         "description": "要排除的标签(逗号分隔), 默认排除 hidden; 传 none 显示全部",
@@ -3462,7 +3468,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "创建一个新的歌单",
+                "description": "创建一个新的歌单。cover_url 不得指向本服务的歌曲或歌单封面接口。",
                 "consumes": [
                     "application/json"
                 ],
@@ -3576,7 +3582,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "导出所有歌单（含曲目关联）为 JSON 文件，响应头携带 Content-Disposition 直接触发浏览器下载",
+                "description": "导出所有歌单、曲目关联和共享标签为 v2 JSON 文件；标签引用使用备份内 ID。响应头携带 Content-Disposition 直接触发浏览器下载。",
                 "produces": [
                     "application/json"
                 ],
@@ -3603,6 +3609,57 @@ const docTemplate = `{
                 }
             }
         },
+        "/playlists/favorites/changes": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "首次不传 cursor 或服务端重启后立即返回 changed=true，客户端刷新歌曲和电台收藏缓存。传入上次 cursor 后最多等待 25 秒；成员写入提交后立即唤醒所有等待者，无变更超时返回 changed=false。cursor 不透明，仅用于缓存失效，不是可重放事件日志。需通过正常认证，断开连接取消等待。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "歌单管理"
+                ],
+                "summary": "等待收藏成员变更",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "上次返回的不透明游标",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "收藏缓存失效通知或等待超时",
+                        "schema": {
+                            "$ref": "#/definitions/services.FavoriteChangesResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "未认证或凭证失效",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "服务端正在关闭",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/playlists/import": {
             "post": {
                 "security": [
@@ -3610,7 +3667,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "从 multipart/form-data 上传的 JSON 备份文件还原歌单。已存在的歌单按名称合并，曲目按内容匹配去重。",
+                "description": "从 multipart/form-data 上传的 v1/v2 JSON 备份还原歌单。已有歌单按名称合并、曲目按内容匹配去重；v2 标签按名称匹配并重映射 ID，保留已有绑定与系统标记。",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -3787,7 +3844,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "更新歌单信息。支持通过 cover_song_id 从指定歌曲复制封面，与 cover_path/cover_url 互斥且优先级更高",
+                "description": "更新歌单信息。支持通过 cover_song_id 从指定歌曲复制封面，与 cover_path/cover_url 互斥且优先级更高。cover_url 不得指向本服务的歌曲或歌单封面接口。",
                 "consumes": [
                     "application/json"
                 ],
@@ -3911,7 +3968,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "返回歌单封面图片文件。可选 query 参数 w：把本地封面等比缩放到该宽度（物理像素，绝不放大、上限 1024）后以 JPEG 返回，用于 Web 端降低 GPU 纹理体积（songloft-org/songloft#309）；缺省或非法时返回原图。缩略仅作用于本地封面，远程代理封面忽略 w。",
+                "description": "无独立封面时回退到前 20 个有封面的成员候选，支持远程与插件相对地址；远程回退共用 5 秒预算，动态成员封面要求缓存重新验证。\n返回歌单封面图片文件。可选 query 参数 w：把本地封面等比缩放到该宽度（物理像素，绝不放大、上限 1024）后以 JPEG 返回，用于 Web 端降低 GPU 纹理体积（songloft-org/songloft#309）；缺省或非法时返回原图。缩略仅作用于本地封面，远程代理封面忽略 w。",
                 "produces": [
                     "image/jpeg"
                 ],
@@ -4095,6 +4152,218 @@ const docTemplate = `{
                 }
             }
         },
+        "/playlists/{id}/playback-progress": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "普通歌单共享歌曲、毫秒位置及模式；GET 无记录返回 version=0；PUT 使用 version 乐观锁，冲突返回 409。省略字段保留原值。DELETE 清除位置并保留模式、递增版本。歌曲移出歌单后 GET 返回 invalid=true。无需依赖播放历史。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "歌单管理"
+                ],
+                "summary": "读取、更新或清除歌单收听进度",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "歌单 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "PUT 的状态及版本",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/models.UpdatePlaylistProgress"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.PlaylistProgress"
+                        }
+                    },
+                    "204": {
+                        "description": "已清除位置"
+                    },
+                    "400": {
+                        "description": "非法位置、模式或非普通歌单",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "歌单不存在",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "其他设备已更新进度",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "保存失败",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "普通歌单共享歌曲、毫秒位置及模式；GET 无记录返回 version=0；PUT 使用 version 乐观锁，冲突返回 409。省略字段保留原值。DELETE 清除位置并保留模式、递增版本。歌曲移出歌单后 GET 返回 invalid=true。无需依赖播放历史。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "歌单管理"
+                ],
+                "summary": "读取、更新或清除歌单收听进度",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "歌单 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "PUT 的状态及版本",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/models.UpdatePlaylistProgress"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.PlaylistProgress"
+                        }
+                    },
+                    "204": {
+                        "description": "已清除位置"
+                    },
+                    "400": {
+                        "description": "非法位置、模式或非普通歌单",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "歌单不存在",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "其他设备已更新进度",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "保存失败",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "普通歌单共享歌曲、毫秒位置及模式；GET 无记录返回 version=0；PUT 使用 version 乐观锁，冲突返回 409。省略字段保留原值。DELETE 清除位置并保留模式、递增版本。歌曲移出歌单后 GET 返回 invalid=true。无需依赖播放历史。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "歌单管理"
+                ],
+                "summary": "读取、更新或清除歌单收听进度",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "歌单 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "PUT 的状态及版本",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/models.UpdatePlaylistProgress"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.PlaylistProgress"
+                        }
+                    },
+                    "204": {
+                        "description": "已清除位置"
+                    },
+                    "400": {
+                        "description": "非法位置、模式或非普通歌单",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "歌单不存在",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "其他设备已更新进度",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "保存失败",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/playlists/{id}/song-ids": {
             "get": {
                 "security": [
@@ -4167,7 +4436,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "获取指定歌单中的歌曲，支持分页、排序和搜索\ntitle 为歌曲名称；title/artist/album 按不区分大小写的拼音字母序排列，忽略首尾空白；中英文混排，多音字使用字典默认读音。先对全部匹配歌曲排序再分页，排序键相同时按歌单 position 同方向排列。",
+                "description": "获取指定歌单中的歌曲，支持分页、排序和搜索\nplaylist_added_at 是歌曲加入当前歌单的时间；added_at 保持曲库入库时间，二者不互相覆盖。\ntitle 为歌曲名称；title/artist/album 按不区分大小写的拼音字母序排列，忽略首尾空白；中英文混排，多音字使用字典默认读音。先对全部匹配歌曲排序再分页，排序键相同时按歌单 position 同方向排列。",
                 "consumes": [
                     "application/json"
                 ],
@@ -4667,6 +4936,126 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "更新失败",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/playlists/{id}/tags": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回共享标签定义，不包含 built_in、hidden 等系统标记；歌单不存在返回 404。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "标签管理"
+                ],
+                "summary": "获取歌单自定义标签",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "歌单 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "自定义标签",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.SongTag"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "无效的 ID",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "歌单不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "原子替换自定义标签，保留系统标记。tag_ids 必填，空数组清空；无效标签整体失败。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "标签管理"
+                ],
+                "summary": "设置歌单自定义标签",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "歌单 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "标签 ID",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PlaylistTagsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新后的标签",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.SongTag"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "请求或标签无效",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "歌单或标签不存在",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5308,7 +5697,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "异步扫描音乐目录并导入新发现的音乐文件到数据库，立即返回，可通过进度接口查询状态。\nreimport=true 时对已入库文件也重新提取元数据；默认 false 走增量（跳过已存在且时长有效的文件）。\npaths 为目录级定向扫描（Issue #262）：省略/为空时扫描整个音乐根目录；非空时只扫描给定目录（含子目录），\n且过期记录清理仅收敛到这些目录之内（不影响其余曲库）。每个目录必须位于音乐根目录之下，否则返回 400。",
+                "description": "异步扫描音乐目录并导入新发现的音乐文件到数据库，立即返回，可通过进度接口查询状态。\nreimport=true 时对已入库文件也重新提取元数据；默认 false 走增量（跳过已存在且时长有效的文件）。\nreset_metadata_overrides=true 仅可与 reimport=true 一起使用。成功读取时在扫描范围内用文件元数据替换手动字段。\npaths 为目录级定向扫描（Issue #262）：省略/为空时扫描整个音乐根目录；非空时只扫描给定目录（含子目录），\n且过期记录清理仅收敛到这些目录之内（不影响其余曲库）。每个目录必须位于音乐根目录之下，否则返回 400。\n始终遵守排除规则。所有扫描起点均被排除时返回 400，不启动任务；部分被排除时在响应和进度中列出原因。",
                 "consumes": [
                     "application/json"
                 ],
@@ -5331,14 +5720,13 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "扫描任务已启动",
+                        "description": "扫描任务已启动，含被排除的扫描起点",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/handlers.ScanStartResponse"
                         }
                     },
                     "400": {
-                        "description": "指定目录不在音乐目录下",
+                        "description": "指定目录不在音乐目录下，或所有扫描起点均被排除",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5691,6 +6079,53 @@ const docTemplate = `{
                         "description": "扫描进度信息",
                         "schema": {
                             "$ref": "#/definitions/services.ScanProgress"
+                        }
+                    }
+                }
+            }
+        },
+        "/scan/validate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "使用与扫描相同的路径校验和排除规则，返回可扫描起点及被排除起点的路径、规则类型（path/name）和规则值。不遍历子目录、不启动扫描、不修改配置。paths 省略或为空时检查音乐根目录。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "扫描管理"
+                ],
+                "summary": "检查扫描目录",
+                "parameters": [
+                    {
+                        "description": "仅使用 paths 字段",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ScanRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "可扫描目录及排除原因；paths 为空表示全部被排除",
+                        "schema": {
+                            "$ref": "#/definitions/services.ScanValidation"
+                        }
+                    },
+                    "400": {
+                        "description": "无效参数或目录不在音乐目录下",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -6109,7 +6544,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "获取全局 HTTP 代理地址。所有后端外发请求（插件下载、注册表拉取、升级检查等）会通过此代理转发。未配置时返回空字符串（直连）。",
+                "description": "获取 Songloft 保存的全局 HTTP 代理地址。未配置时返回空字符串，此时插件后端的 fetch 和 httpStream 可使用进程的代理环境变量。",
                 "produces": [
                     "application/json"
                 ],
@@ -6132,7 +6567,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "设置全局 HTTP 代理地址（如 http://192.168.1.1:7890）。设为空字符串则关闭代理。保存后即时生效，无需重启。",
+                "description": "设置全局 HTTP 代理地址（如 http://192.168.1.1:7890）。设为空字符串会清除保存的地址，此时插件后端的 fetch 和 httpStream 按 HTTP_PROXY、HTTPS_PROXY 和 NO_PROXY 选择代理。保存后即时生效，无需重启。",
                 "consumes": [
                     "application/json"
                 ],
@@ -7601,7 +8036,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "返回标签列表，含每个标签下的歌曲数量和代表封面。支持关键词搜索、排序和分页。",
+                "description": "返回标签列表，含每个标签下的歌曲数量、可见歌单数量和歌曲代表封面。支持关键词搜索、排序和分页。",
                 "produces": [
                     "application/json"
                 ],
@@ -7618,7 +8053,9 @@ const docTemplate = `{
                     },
                     {
                         "enum": [
+                            "id",
                             "song_count",
+                            "playlist_count",
                             "name",
                             "created_at"
                         ],
@@ -8145,13 +8582,8 @@ const docTemplate = `{
                 "summary": "获取歌曲列表",
                 "parameters": [
                     {
-                        "enum": [
-                            "local",
-                            "remote",
-                            "radio"
-                        ],
                         "type": "string",
-                        "description": "歌曲类型",
+                        "description": "歌曲类型，支持 local、remote、radio 的逗号分隔组合；不传表示全部类型",
                         "name": "type",
                         "in": "query"
                     },
@@ -8210,6 +8642,18 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "integer",
+                        "description": "按评级精确过滤（0-100；0=未评级；-1 表示只要未评级歌曲）",
+                        "name": "rating",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "按评级下限过滤（如 60 = 至少 3 星）；与 rating 同时出现时 rating=-1 优先生效",
+                        "name": "min_rating",
+                        "in": "query"
+                    },
+                    {
                         "type": "string",
                         "default": "hidden",
                         "description": "排除属于这些 label 歌单的歌曲(逗号分隔), 默认 hidden; 传 none 显示全部",
@@ -8242,10 +8686,12 @@ const docTemplate = `{
                             "file_modified_at",
                             "year",
                             "genre",
-                            "file_size"
+                            "file_size",
+                            "track",
+                            "rating"
                         ],
                         "type": "string",
-                        "description": "排序字段，缺省 added_at",
+                        "description": "排序字段；指定 album 时缺省 track（碟号、音轨号数字排序），其他情况缺省 added_at；未知轨号排在同碟末尾",
                         "name": "sort",
                         "in": "query"
                     },
@@ -8255,7 +8701,7 @@ const docTemplate = `{
                             "desc"
                         ],
                         "type": "string",
-                        "description": "排序方向，缺省 desc",
+                        "description": "排序方向，track/rating 缺省 asc，其他字段缺省 desc",
                         "name": "order",
                         "in": "query"
                     }
@@ -8266,6 +8712,15 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "歌曲类型参数无效",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "500": {
@@ -8327,6 +8782,120 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "删除失败",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/songs/batch-radio-mode": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "按 ID 列表批量设置电台播放模式。radio_mode 支持空字符串（自动）、hls、flv、audio_only。选择自动会尝试探测无已知后缀的源。is_video 省略时保留各电台原值，仅音频模式始终清除视频内容。不存在的 ID 静默跳过，非电台歌曲或无效模式会拒绝整批更新。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "歌曲管理"
+                ],
+                "summary": "批量设置电台播放模式",
+                "parameters": [
+                    {
+                        "description": "批量电台模式请求",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.BatchUpdateRadioModeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新成功",
+                        "schema": {
+                            "$ref": "#/definitions/models.BatchUpdateRadioModeResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求数据错误或包含非电台歌曲",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "更新失败",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/songs/batch-rating": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "按 ID 列表批量设置评级（0-100；0 表示清除评级）。列表中不存在的 ID 静默跳过，updated 返回实际更新数量。评级仅存数据库，不写入音频文件标签。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "歌曲管理"
+                ],
+                "summary": "批量设置歌曲评级",
+                "parameters": [
+                    {
+                        "description": "批量评级请求",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.BatchUpdateRatingRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功返回 {updated}",
+                        "schema": {
+                            "$ref": "#/definitions/models.BatchUpdateRatingResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求数据错误或评级值超出范围",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "服务器错误",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -8408,7 +8977,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "按指定维度聚合曲库，返回该维度下非空取值、各自的歌曲数量及一首代表歌曲的封面 URL，用于「分类浏览」的卡片网格。\n支持维度：genre(流派)/artist(歌手)/album(专辑)/language(语种)/style(风格)/year(年份)/decade(年代)/tag(标签)。\nyear/decade 的 value 为数字字符串（年代如 \"1990\" 表示 1990-1999）。取到某取值后可用 /songs?\u003cfield\u003e=\u003cvalue\u003e 拉取该分类下歌曲（tag 维度除外——tag 的 value 为标签名，需用 /songs?tag_name=\u003cvalue\u003e 过滤）。\n支持 keyword 模糊搜索取值、limit/offset 分页、sort(count|name)/order 排序；返回 total 为该维度去重取值总数。",
+                "description": "按指定维度聚合曲库，返回该维度下非空取值、各自的歌曲数量及一首代表歌曲的封面 URL，用于「分类浏览」的卡片网格。\n支持维度：genre(流派)/artist(歌手)/album(专辑)/language(语种)/style(风格)/year(年份)/decade(年代)/rating(评级)/tag(标签)。\nyear/decade/rating 的 value 为数字字符串（年代如 \"1990\" 表示 1990-1999；rating 为 20-100 的评级值，未评级歌曲不参与聚合）。取到某取值后可用 /songs?\u003cfield\u003e=\u003cvalue\u003e 拉取该分类下歌曲（tag 维度除外——tag 的 value 为标签名，需用 /songs?tag_name=\u003cvalue\u003e 过滤）。\n支持 keyword 模糊搜索取值、limit/offset 分页、sort(count|name)/order 排序；返回 total 为该维度去重取值总数。",
                 "produces": [
                     "application/json"
                 ],
@@ -8426,6 +8995,7 @@ const docTemplate = `{
                             "style",
                             "year",
                             "decade",
+                            "rating",
                             "tag"
                         ],
                         "type": "string",
@@ -8433,6 +9003,18 @@ const docTemplate = `{
                         "name": "field",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "歌曲类型，支持 local、remote、radio 的逗号分隔组合；不传表示全部类型",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排除属于这些 label 歌单的歌曲(逗号分隔), 默认 hidden; 传 none 显示全部",
+                        "name": "exclude_playlist_labels",
+                        "in": "query"
                     },
                     {
                         "type": "string",
@@ -8482,7 +9064,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "缺少或不支持的 field",
+                        "description": "缺少或不支持的 field，或歌曲类型参数无效",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -8581,7 +9163,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "歌曲类型",
+                        "description": "歌曲类型，支持 local、remote、radio 的逗号分隔组合；不传表示全部类型",
                         "name": "type",
                         "in": "query"
                     },
@@ -8658,10 +9240,11 @@ const docTemplate = `{
                             "file_modified_at",
                             "year",
                             "genre",
-                            "file_size"
+                            "file_size",
+                            "track"
                         ],
                         "type": "string",
-                        "description": "排序字段，缺省 added_at",
+                        "description": "排序字段；指定 album 时缺省 track（碟号、音轨号数字排序），其他情况缺省 added_at；未知轨号排在同碟末尾",
                         "name": "sort",
                         "in": "query"
                     },
@@ -8671,7 +9254,7 @@ const docTemplate = `{
                             "desc"
                         ],
                         "type": "string",
-                        "description": "排序方向，缺省 desc",
+                        "description": "排序方向，track 缺省 asc，其他字段缺省 desc",
                         "name": "order",
                         "in": "query"
                     }
@@ -8682,6 +9265,15 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "歌曲类型参数无效",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "500": {
@@ -8722,6 +9314,18 @@ const docTemplate = `{
                         "name": "field",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "歌曲类型，支持 local、remote、radio 的逗号分隔组合；不传表示全部类型",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排除属于这些 label 歌单的歌曲(逗号分隔), 默认 hidden; 传 none 显示全部",
+                        "name": "exclude_playlist_labels",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -8733,7 +9337,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "缺少或不支持的 field",
+                        "description": "缺少或不支持的 field，或歌曲类型参数无效",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -8868,7 +9472,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "批量添加电台/广播到数据库",
+                "description": "批量添加电台。radio_mode 缺省时自动识别，先按已知 URL 后缀，再在有界时间内探测其他 HTTP/HTTPS 源。hls 和 flv 可显式指定格式。audio_only 从 HTTP/HTTPS HLS、TS、MP4 或 FLV 源实时提取第一条音轨并输出 MP3，需 FFmpeg。",
                 "consumes": [
                     "application/json"
                 ],
@@ -8890,11 +9494,17 @@ const docTemplate = `{
                             "items": {
                                 "type": "object",
                                 "properties": {
+                                    "artist": {
+                                        "type": "string"
+                                    },
                                     "cover_url": {
                                         "type": "string"
                                     },
                                     "is_video": {
                                         "type": "boolean"
+                                    },
+                                    "radio_mode": {
+                                        "type": "string"
                                     },
                                     "title": {
                                         "type": "string"
@@ -8967,7 +9577,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "歌曲类型",
+                        "description": "歌曲类型，支持 local、remote、radio 的逗号分隔组合；不传表示全部类型",
                         "name": "type",
                         "in": "query"
                     },
@@ -9046,6 +9656,15 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "歌曲类型参数无效",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "500": {
@@ -9359,7 +9978,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "更新歌曲信息（仅支持网络歌曲和电台）",
+                "description": "更新网络歌曲或电台。电台可将 radio_mode 设为 hls、flv 或 audio_only（服务端输出 MP3），空字符串恢复自动识别并探测无已知后缀的源，省略则保留手选模式。自动模式换源时重新探测。纯音频模式清除 is_video。cover_url 不得指向本服务的歌曲或歌单封面接口。",
                 "consumes": [
                     "application/json"
                 ],
@@ -9400,6 +10019,9 @@ const docTemplate = `{
                                 },
                                 "is_video": {
                                     "type": "boolean"
+                                },
+                                "radio_mode": {
+                                    "type": "string"
                                 },
                                 "title": {
                                     "type": "string"
@@ -9779,6 +10401,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "503": {
+                        "description": "远程封面并发抓取已满",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -9790,7 +10421,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "HLS 反代开启时，由 ServeProxy 改写后的 m3u8 内回链触发。拉取上游 m3u8 → 同源校验 → 改写 URI → 回写给 player。",
+                "description": "HLS 反代开启时拉取并改写子 m3u8。同源 URL 可直接请求；跨源 URL 必须使用服务端从上游播放列表生成的签名链接。入口及每次重定向均禁止私网地址。",
                 "produces": [
                     "application/vnd.apple.mpegurl"
                 ],
@@ -9812,6 +10443,12 @@ const docTemplate = `{
                         "name": "u",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "服务端生成的资源签名（跨源必填，绑定歌曲及 playlist 端点）",
+                        "name": "sig",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -9831,7 +10468,7 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "非同源 URL 拒绝代理（SSRF 防护）",
+                        "description": "跨源 URL 缺少有效签名、签名无效或目标主机不允许",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -9864,7 +10501,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "由 HandlePlaylist 改写后的相对路径触发，反代音频切片、加密 key、init 段等二进制资源。透传 Range 请求。",
+                "description": "反代播放列表中引用的切片、key、init 段，透传 Range 请求。跨源 URL 必须使用服务端生成且绑定歌曲及 segment 端点的签名链接；入口及每次重定向均禁止私网地址。",
                 "produces": [
                     "application/octet-stream"
                 ],
@@ -9886,6 +10523,12 @@ const docTemplate = `{
                         "name": "u",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "服务端生成的资源签名（跨源必填）",
+                        "name": "sig",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -9911,7 +10554,7 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "非同源 URL 拒绝代理",
+                        "description": "跨源 URL 缺少有效签名、签名无效或目标主机不允许",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -9927,6 +10570,112 @@ const docTemplate = `{
                     },
                     "502": {
                         "description": "上游不可用",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/songs/{id}/hls/sessions": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "从该电台保存的入口拉取 FLV，复制逐行 H.264 视频并输出 AAC-LC 音频及滚动 MPEG-TS 分片。首片就绪后返回会话。会话绑定 JWT ClientID，播放列表包含部署前缀，分片继承播放列表地址的 access_token。共用直播转码的资源上限和删除接口。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "电台与 HLS"
+                ],
+                "summary": "为 HTTP-FLV 电台创建 HLS 播放会话",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "HTTP-FLV 电台 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "首个分片已就绪的会话",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.hlsTranscodeSessionResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "电台 ID 无效",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "未认证",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "源地址不在允许范围内",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "电台不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "电台类型或源媒体不支持",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "上游或转码失败",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "转码工具不可用或并发已满",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "504": {
+                        "description": "启动超时",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -10098,7 +10847,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "按 song.ID 流式返回音频。内部根据 song.type 分发到本地文件 / 缓存下载 / 直链下载 / 电台 302。",
+                "description": "按 song.ID 流式播放。play.m3u8 仅适用于 HLS 电台，返回播放列表或 302。play.flv 仅适用于 HTTP-FLV 电台，返回原始 FLV。两条路径与电台模式不匹配时返回 404。play.mp3 仅用于电台，强制抽取首条音轨并返回 MP3 或转码错误，无需 radio_transcode 参数。配置为 audio_only 的电台通过 play 返回 MP3。无固定长度的 FLV 上游正常断开后，MP3 转码会重新访问电台入口并继续使用同一响应。",
                 "produces": [
                     "application/octet-stream"
                 ],
@@ -10116,7 +10865,13 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "目标转码格式（如 mp3、ogg），用于平台兼容性转码",
+                        "description": "无法发送 Authorization 头时使用的访问 token",
+                        "name": "access_token",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "目标转码格式（如 mp3、ogg），用于平台兼容性转码。本地 .dts、.wv、.aac、.dff 音频默认转为 MP3",
                         "name": "format",
                         "in": "query"
                     },
@@ -10200,16 +10955,194 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "403": {
+                        "description": "纯音频转码的源或其子资源不在允许范围内",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
-                        "description": "歌曲不存在",
+                        "description": "歌曲不存在或不适用播放路径",
                         "schema": {
                             "type": "string"
                         }
                     },
                     "502": {
-                        "description": "音源不可用",
+                        "description": "音源不可用或电台纯音频转码失败",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "纯音频转码工具不可用或并发已满",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "504": {
+                        "description": "纯音频转码启动超时",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/songs/{id}/play.flv": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "按 song.ID 流式播放。play.m3u8 仅适用于 HLS 电台，返回播放列表或 302。play.flv 仅适用于 HTTP-FLV 电台，返回原始 FLV。两条路径与电台模式不匹配时返回 404。play.mp3 仅用于电台，强制抽取首条音轨并返回 MP3 或转码错误，无需 radio_transcode 参数。配置为 audio_only 的电台通过 play 返回 MP3。无固定长度的 FLV 上游正常断开后，MP3 转码会重新访问电台入口并继续使用同一响应。",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "歌曲管理"
+                ],
+                "summary": "流式播放歌曲",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "歌曲 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "无法发送 Authorization 头时使用的访问 token",
+                        "name": "access_token",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "目标转码格式（如 mp3、ogg），用于平台兼容性转码。本地 .dts、.wv、.aac、.dff 音频默认转为 MP3",
+                        "name": "format",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "目标音质码率（128/192/320），不传或不合法值表示原始音质。指定后默认转码为 mp3（除非同时指定了 format）",
+                        "name": "quality",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "抽取指定音频流播放（audio-relative 0-based，对应 ffmpeg -map 0:a:N）。用于 Web 端双音轨（原唱/伴奏 mka）切轨：后端抽出单条音轨，AAC 编码时无损 remux 成 m4a、否则转 mp3。缺省/负数=不抽轨；与 media=video 互斥",
+                        "name": "track",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "传 1 时异步预热缓存/转码，立即返回 202",
+                        "name": "prefetch",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "传 video 时按视频播放：直出原容器（忽略 format/quality 转码，避免 -vn 丢画面），并按容器真实类型返回 Content-Type（如 video/mp4）。用于应用内视频画面渲染与 DLNA 视频投屏",
+                        "name": "media",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "仅电台(HLS)有效。传 direct 时强制 302 直连源站、绕过本机 HLS 反代（即使 /settings/hls-proxy 已开）。原生 player 无 CORS 限制，直连可避免直播切片经反代往返后过期(404)；浏览器不传此参数以继续走反代解决 CORS",
+                        "name": "hls",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "传 1 显式开启、0 显式关闭 EBU R128 音量均衡；不传时由服务端 /settings/volume-normalize 配置决定（默认关闭）。启用后使用 ffmpeg loudnorm=I=-16:LRA=11:TP=-1.5 消除不同音源之间的响度落差。需要重编码，未同时指定 format 时默认转为 mp3。均衡产物有独立缓存（文件名带 norm. 标记）；产物尚未生成时服务端边转边发一条 chunked MP3 流（无 Content-Length、不可 Range、Cache-Control 为 no-store），因此首字节不必等整首转完。media=video 忽略（-vn 会丢画面）；缺 ffmpeg 时优雅降级为原始音频",
+                        "name": "normalize",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "仅电台有效。传目标格式（如 mp3）时，服务端用 ffmpeg 把电台流实时转码为该格式（HLS 与裸流均适用）。用于只支持 MP3、无法解码 AAC/HE-AAC 或不支持 HLS 的音箱。缺 ffmpeg 或坏源时优雅降级为原样代理/302。与 format 分离：电台侧忽略 format，只认此参数",
+                        "name": "radio_transcode",
+                        "in": "query"
+                    },
+                    {
+                        "type": "number",
+                        "description": "从第 N 秒起播。面向不支持 HTTP Range seek 的推流客户端（如小爱音箱经 player_play_url 只会从头拉流）：服务端用 ffmpeg input seek 产出一条以第 N 秒为开头的 chunked MP3 流，因此响应无 Content-Length、不可 Range、Cache-Control 为 no-store；浏览器等支持 Range 的客户端请用 Range 而非此参数。仅本地歌曲与已缓存的网络歌曲有效（电台是直播、未缓存的网络歌曲会阻塞整首下载，均忽略）；media=video 与 HEAD 忽略；缺 ffmpeg / seek 越过时长时优雅降级为从头完整播放",
+                        "name": "seek",
+                        "in": "query"
+                    },
+                    {
+                        "type": "number",
+                        "description": "播放倍速，取值夹到 [0.5, 2.0]（超出该区间需要链式拼接多个 atempo，暂不支持）。服务端用 ffmpeg atempo 滤镜实时变速不变调，产出 chunked MP3 流（同 seek，无 Content-Length、不可 Range）；可与 seek/normalize 组合，由同一条 ffmpeg 一起处理。仅本地歌曲与已缓存的网络歌曲有效；电台、media=video、HEAD 忽略；缺 ffmpeg 或值非法时优雅降级为原速播放",
+                        "name": "speed",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "音频文件",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "202": {
+                        "description": "预拉取已触发",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "302": {
+                        "description": "电台流重定向",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "纯音频转码的源或其子资源不在允许范围内",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "歌曲不存在或不适用播放路径",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "502": {
+                        "description": "音源不可用或电台纯音频转码失败",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "纯音频转码工具不可用或并发已满",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "504": {
+                        "description": "纯音频转码启动超时",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -10222,7 +11155,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "按 song.ID 流式返回音频。内部根据 song.type 分发到本地文件 / 缓存下载 / 直链下载 / 电台 302。",
+                "description": "按 song.ID 流式播放。play.m3u8 仅适用于 HLS 电台，返回播放列表或 302。play.flv 仅适用于 HTTP-FLV 电台，返回原始 FLV。两条路径与电台模式不匹配时返回 404。play.mp3 仅用于电台，强制抽取首条音轨并返回 MP3 或转码错误，无需 radio_transcode 参数。配置为 audio_only 的电台通过 play 返回 MP3。无固定长度的 FLV 上游正常断开后，MP3 转码会重新访问电台入口并继续使用同一响应。",
                 "produces": [
                     "application/octet-stream"
                 ],
@@ -10240,7 +11173,13 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "目标转码格式（如 mp3、ogg），用于平台兼容性转码",
+                        "description": "无法发送 Authorization 头时使用的访问 token",
+                        "name": "access_token",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "目标转码格式（如 mp3、ogg），用于平台兼容性转码。本地 .dts、.wv、.aac、.dff 音频默认转为 MP3",
                         "name": "format",
                         "in": "query"
                     },
@@ -10324,16 +11263,194 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "403": {
+                        "description": "纯音频转码的源或其子资源不在允许范围内",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
-                        "description": "歌曲不存在",
+                        "description": "歌曲不存在或不适用播放路径",
                         "schema": {
                             "type": "string"
                         }
                     },
                     "502": {
-                        "description": "音源不可用",
+                        "description": "音源不可用或电台纯音频转码失败",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "纯音频转码工具不可用或并发已满",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "504": {
+                        "description": "纯音频转码启动超时",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/songs/{id}/play.mp3": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "按 song.ID 流式播放。play.m3u8 仅适用于 HLS 电台，返回播放列表或 302。play.flv 仅适用于 HTTP-FLV 电台，返回原始 FLV。两条路径与电台模式不匹配时返回 404。play.mp3 仅用于电台，强制抽取首条音轨并返回 MP3 或转码错误，无需 radio_transcode 参数。配置为 audio_only 的电台通过 play 返回 MP3。无固定长度的 FLV 上游正常断开后，MP3 转码会重新访问电台入口并继续使用同一响应。",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "歌曲管理"
+                ],
+                "summary": "流式播放歌曲",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "歌曲 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "无法发送 Authorization 头时使用的访问 token",
+                        "name": "access_token",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "目标转码格式（如 mp3、ogg），用于平台兼容性转码。本地 .dts、.wv、.aac、.dff 音频默认转为 MP3",
+                        "name": "format",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "目标音质码率（128/192/320），不传或不合法值表示原始音质。指定后默认转码为 mp3（除非同时指定了 format）",
+                        "name": "quality",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "抽取指定音频流播放（audio-relative 0-based，对应 ffmpeg -map 0:a:N）。用于 Web 端双音轨（原唱/伴奏 mka）切轨：后端抽出单条音轨，AAC 编码时无损 remux 成 m4a、否则转 mp3。缺省/负数=不抽轨；与 media=video 互斥",
+                        "name": "track",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "传 1 时异步预热缓存/转码，立即返回 202",
+                        "name": "prefetch",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "传 video 时按视频播放：直出原容器（忽略 format/quality 转码，避免 -vn 丢画面），并按容器真实类型返回 Content-Type（如 video/mp4）。用于应用内视频画面渲染与 DLNA 视频投屏",
+                        "name": "media",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "仅电台(HLS)有效。传 direct 时强制 302 直连源站、绕过本机 HLS 反代（即使 /settings/hls-proxy 已开）。原生 player 无 CORS 限制，直连可避免直播切片经反代往返后过期(404)；浏览器不传此参数以继续走反代解决 CORS",
+                        "name": "hls",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "传 1 显式开启、0 显式关闭 EBU R128 音量均衡；不传时由服务端 /settings/volume-normalize 配置决定（默认关闭）。启用后使用 ffmpeg loudnorm=I=-16:LRA=11:TP=-1.5 消除不同音源之间的响度落差。需要重编码，未同时指定 format 时默认转为 mp3。均衡产物有独立缓存（文件名带 norm. 标记）；产物尚未生成时服务端边转边发一条 chunked MP3 流（无 Content-Length、不可 Range、Cache-Control 为 no-store），因此首字节不必等整首转完。media=video 忽略（-vn 会丢画面）；缺 ffmpeg 时优雅降级为原始音频",
+                        "name": "normalize",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "仅电台有效。传目标格式（如 mp3）时，服务端用 ffmpeg 把电台流实时转码为该格式（HLS 与裸流均适用）。用于只支持 MP3、无法解码 AAC/HE-AAC 或不支持 HLS 的音箱。缺 ffmpeg 或坏源时优雅降级为原样代理/302。与 format 分离：电台侧忽略 format，只认此参数",
+                        "name": "radio_transcode",
+                        "in": "query"
+                    },
+                    {
+                        "type": "number",
+                        "description": "从第 N 秒起播。面向不支持 HTTP Range seek 的推流客户端（如小爱音箱经 player_play_url 只会从头拉流）：服务端用 ffmpeg input seek 产出一条以第 N 秒为开头的 chunked MP3 流，因此响应无 Content-Length、不可 Range、Cache-Control 为 no-store；浏览器等支持 Range 的客户端请用 Range 而非此参数。仅本地歌曲与已缓存的网络歌曲有效（电台是直播、未缓存的网络歌曲会阻塞整首下载，均忽略）；media=video 与 HEAD 忽略；缺 ffmpeg / seek 越过时长时优雅降级为从头完整播放",
+                        "name": "seek",
+                        "in": "query"
+                    },
+                    {
+                        "type": "number",
+                        "description": "播放倍速，取值夹到 [0.5, 2.0]（超出该区间需要链式拼接多个 atempo，暂不支持）。服务端用 ffmpeg atempo 滤镜实时变速不变调，产出 chunked MP3 流（同 seek，无 Content-Length、不可 Range）；可与 seek/normalize 组合，由同一条 ffmpeg 一起处理。仅本地歌曲与已缓存的网络歌曲有效；电台、media=video、HEAD 忽略；缺 ffmpeg 或值非法时优雅降级为原速播放",
+                        "name": "speed",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "音频文件",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "202": {
+                        "description": "预拉取已触发",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "302": {
+                        "description": "电台流重定向",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "纯音频转码的源或其子资源不在允许范围内",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "歌曲不存在或不适用播放路径",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "502": {
+                        "description": "音源不可用或电台纯音频转码失败",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "纯音频转码工具不可用或并发已满",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "504": {
+                        "description": "纯音频转码启动超时",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -10418,6 +11535,85 @@ const docTemplate = `{
                         "description": "歌曲不存在",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/songs/{id}/rating": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "设置单首歌曲的评级（0-100 整数；0 表示清除评级，未评级歌曲缺省 0）。评级是用户主观标注，仅存数据库，不写入音频文件标签。星级 UI 按 20/颗映射（如 80 = 4 星）。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "歌曲管理"
+                ],
+                "summary": "设置歌曲评级",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "歌曲ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "评级值 0-100，0 表示清除评级",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "rating": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功返回 {id, rating}",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "评级值超出 0-100 范围",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "歌曲不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "服务器错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -10544,7 +11740,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "将元数据写入数据库和本地音频文件标签（仅本地歌曲）。cover_data(base64) 优先于 cover_url。非空字段覆盖，空值保留原值。设置 clear_cover=true 可显式清空封面。rename_file=true 时按 \"{artist} - {title}\" 重命名本地音频文件（保留原目录与扩展名，artist 为空则回退为仅 title，多歌手由 artist 中的 \" \u0026 \" 分隔符体现；仅本地非 CUE 歌曲生效）；标题清理后为空或目标文件名已存在时返回 400，与原文件同名则不移动仅写库。",
+                "description": "将元数据写入数据库和本地音频文件标签（仅本地歌曲）。cover_data(base64) 优先于 cover_url。非空字段覆盖，空值保留原值。设置 clear_cover=true 可显式清空封面。clear_fields 可显式清空指定字段。rename_file=true 时按 \"{artist} - {title}\" 重命名本地音频文件（保留原目录与扩展名，artist 为空则回退为仅 title，多歌手由 artist 中的 \" \u0026 \" 分隔符体现；仅本地非 CUE 歌曲生效）；标题清理后为空或目标文件名已存在时返回 400，与原文件同名则不移动仅写库。",
                 "consumes": [
                     "application/json"
                 ],
@@ -11539,6 +12735,17 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.PlaylistTagsRequest": {
+            "type": "object",
+            "properties": {
+                "tag_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
         "handlers.ScanRequest": {
             "type": "object",
             "properties": {
@@ -11551,6 +12758,23 @@ const docTemplate = `{
                 },
                 "reimport": {
                     "type": "boolean"
+                },
+                "reset_metadata_overrides": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.ScanStartResponse": {
+            "type": "object",
+            "properties": {
+                "excluded_directories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.ExcludedDirectory"
+                    }
+                },
+                "message": {
+                    "type": "string"
                 }
             }
         },
@@ -11566,10 +12790,20 @@ const docTemplate = `{
                 "clear_cover": {
                     "type": "boolean"
                 },
+                "clear_fields": {
+                    "description": "显式清空字段，例如 [\"artist\",\"lyrics\"]。",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "cover_data": {
                     "type": "string"
                 },
                 "cover_url": {
+                    "type": "string"
+                },
+                "disc": {
                     "type": "string"
                 },
                 "genre": {
@@ -12443,6 +13677,81 @@ const docTemplate = `{
                 }
             }
         },
+        "models.BatchUpdateRadioModeRequest": {
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "description": "要设置模式的电台 ID 列表",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    },
+                    "example": [
+                        1
+                    ]
+                },
+                "is_video": {
+                    "description": "是否同步设置视频内容，省略时保留原值",
+                    "type": "boolean",
+                    "example": true
+                },
+                "radio_mode": {
+                    "description": "电台播放模式",
+                    "enum": [
+                        "",
+                        "hls",
+                        "flv",
+                        "audio_only"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.RadioMode"
+                        }
+                    ],
+                    "example": "hls"
+                }
+            }
+        },
+        "models.BatchUpdateRadioModeResponse": {
+            "type": "object",
+            "properties": {
+                "updated": {
+                    "description": "实际更新的电台数量（不存在的 ID 静默跳过）",
+                    "type": "integer",
+                    "example": 2
+                }
+            }
+        },
+        "models.BatchUpdateRatingRequest": {
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "description": "要设置评级的歌曲 ID 列表",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    },
+                    "example": [
+                        1
+                    ]
+                },
+                "rating": {
+                    "description": "评级值 0-100（0 表示清除评级；星级客户端按 20/颗映射）",
+                    "type": "integer",
+                    "example": 80
+                }
+            }
+        },
+        "models.BatchUpdateRatingResponse": {
+            "type": "object",
+            "properties": {
+                "updated": {
+                    "description": "实际更新的歌曲数量（不存在的 ID 静默跳过）",
+                    "type": "integer",
+                    "example": 2
+                }
+            }
+        },
         "models.Config": {
             "type": "object",
             "properties": {
@@ -12786,6 +14095,47 @@ const docTemplate = `{
                 }
             }
         },
+        "models.PlaylistProgress": {
+            "type": "object",
+            "properties": {
+                "completed": {
+                    "type": "boolean"
+                },
+                "invalid": {
+                    "type": "boolean"
+                },
+                "play_mode": {
+                    "type": "string"
+                },
+                "position_ms": {
+                    "type": "integer"
+                },
+                "song": {
+                    "$ref": "#/definitions/models.Song"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.RadioMode": {
+            "type": "string",
+            "enum": [
+                "",
+                "hls",
+                "flv",
+                "audio_only"
+            ],
+            "x-enum-varnames": [
+                "RadioModeAuto",
+                "RadioModeHLS",
+                "RadioModeFLV",
+                "RadioModeAudioOnly"
+            ]
+        },
         "models.RefreshTokenRequest": {
             "type": "object",
             "required": [
@@ -12869,6 +14219,11 @@ const docTemplate = `{
                     "description": "去重 key(由插件定义,典型形态 \"\u003cplatform\u003e:\u003cplatform_id\u003e\");与 PluginEntryPath 组成 UNIQUE",
                     "type": "string"
                 },
+                "disc": {
+                    "description": "碟号，可为 \"1\" 或 \"1/2\"（碟号/总数）",
+                    "type": "string",
+                    "example": "1/2"
+                },
                 "duration": {
                     "description": "播放时长（秒）",
                     "type": "number",
@@ -12938,10 +14293,27 @@ const docTemplate = `{
                     "description": "歌词端点 URL(客户端唯一可见字段,指向 /api/v1/songs/{id}/lyric)",
                     "type": "string"
                 },
+                "playlist_added_at": {
+                    "description": "加入当前歌单的时间，仅歌单成员查询返回",
+                    "type": "string"
+                },
                 "plugin_entry_path": {
                     "description": "音源插件 entryPath(网络歌曲)",
                     "type": "string",
                     "example": "my-source"
+                },
+                "radio_mode": {
+                    "description": "电台手选模式，空值为自动",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.RadioMode"
+                        }
+                    ]
+                },
+                "rating": {
+                    "description": "评级 0-100（0 表示未评级；星级客户端按 20/颗映射，如 80 = 4 星）",
+                    "type": "integer",
+                    "example": 80
                 },
                 "sample_rate": {
                     "description": "采样率（Hz）",
@@ -13036,6 +14408,9 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
+                "playlist_count": {
+                    "type": "integer"
+                },
                 "song_count": {
                     "type": "integer"
                 }
@@ -13129,9 +14504,32 @@ const docTemplate = `{
                 }
             }
         },
+        "models.UpdatePlaylistProgress": {
+            "type": "object",
+            "properties": {
+                "completed": {
+                    "type": "boolean"
+                },
+                "play_mode": {
+                    "type": "string"
+                },
+                "position_ms": {
+                    "type": "integer"
+                },
+                "song_id": {
+                    "type": "integer"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.UpdatePlaylistRequest": {
             "type": "object",
             "properties": {
+                "audiobook": {
+                    "type": "boolean"
+                },
                 "cover_path": {
                     "description": "封面图片本地路径（传空字符串清除）",
                     "type": "string",
@@ -13311,6 +14709,32 @@ const docTemplate = `{
                 }
             }
         },
+        "services.ExcludedDirectory": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string"
+                },
+                "rule": {
+                    "type": "string"
+                },
+                "rule_type": {
+                    "description": "path 或 name",
+                    "type": "string"
+                }
+            }
+        },
+        "services.FavoriteChangesResponse": {
+            "type": "object",
+            "properties": {
+                "changed": {
+                    "type": "boolean"
+                },
+                "cursor": {
+                    "type": "string"
+                }
+            }
+        },
         "services.FingerprintProgress": {
             "type": "object",
             "properties": {
@@ -13460,6 +14884,13 @@ const docTemplate = `{
                     "description": "错误信息",
                     "type": "string"
                 },
+                "excluded_directories": {
+                    "description": "实际因规则跳过的目录",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.ExcludedDirectory"
+                    }
+                },
                 "failed_files": {
                     "description": "失败的文件数",
                     "type": "integer"
@@ -13544,6 +14975,23 @@ const docTemplate = `{
                 "ScanStatusCancelling",
                 "ScanStatusCancelled"
             ]
+        },
+        "services.ScanValidation": {
+            "type": "object",
+            "properties": {
+                "excluded_directories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.ExcludedDirectory"
+                    }
+                },
+                "paths": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
         },
         "services.ThemePackListItem": {
             "type": "object",
@@ -13726,7 +15174,7 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "2.13.9",
+	Version:          "2.13.13",
 	Host:             "localhost:58091",
 	BasePath:         "/api/v1",
 	Schemes:          []string{},

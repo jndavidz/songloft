@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"songloft/internal/httputil"
@@ -25,6 +27,7 @@ import (
 // ffmpeg 禁止 file/https/udp 等输入协议；HLS 的所有 URI 都由此处改写与校验。
 type hlsPullGateway struct {
 	ctx       context.Context
+	cancel    context.CancelFunc
 	server    *http.Server
 	listener  net.Listener
 	client    *http.Client
@@ -34,6 +37,14 @@ type hlsPullGateway struct {
 	base      string
 	mu        sync.Mutex
 	err       error
+	pending   *liveFLVPull
+	liveFLV   atomic.Bool
+}
+
+type liveFLVPull struct {
+	rangeHeader string
+	cancel      context.CancelFunc
+	response    chan *http.Response
 }
 
 func validateHLSURL(raw string) error {
@@ -54,8 +65,21 @@ func newHLSPullGateway(ctx context.Context, opts HLSTranscodeOptions, allowlist 
 		listener.Close()
 		return nil, err
 	}
-	g := &hlsPullGateway{ctx: ctx, listener: listener, opts: opts, allowlist: allowlist,
+	g := &hlsPullGateway{listener: listener, opts: opts, allowlist: allowlist,
 		base: "http://" + listener.Addr().String() + "/" + hex.EncodeToString(key[:]) + "/"}
+	if err := g.initSourceClient(); err != nil {
+		listener.Close()
+		return nil, err
+	}
+	g.ctx, g.cancel = context.WithCancel(ctx)
+	g.server = &http.Server{Handler: http.HandlerFunc(g.serve), ReadHeaderTimeout: 5 * time.Second,
+		BaseContext: func(net.Listener) context.Context { return g.ctx }}
+	go func() { _ = g.server.Serve(listener) }()
+	return g, nil
+}
+
+// initSourceClient also serves short radio probes, which do not need a gateway listener.
+func (g *hlsPullGateway) initSourceClient() error {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil // 不读取环境变量代理；仅使用 Songloft 明确配置的代理。
 	transport.ResponseHeaderTimeout = 15 * time.Second
@@ -66,8 +90,7 @@ func newHLSPullGateway(ctx context.Context, opts HLSTranscodeOptions, allowlist 
 	if proxyRaw := httputil.GetGlobalProxy(); proxyRaw != "" {
 		proxy, err := url.Parse(proxyRaw)
 		if err != nil || (proxy.Scheme != "http" && proxy.Scheme != "https") {
-			listener.Close()
-			return nil, hlsError(503, "直播转码仅支持 HTTP/HTTPS 上游代理")
+			return hlsError(503, "直播转码仅支持 HTTP/HTTPS 上游代理")
 		}
 		transport.Proxy = func(req *http.Request) (*url.URL, error) {
 			if net.ParseIP(req.URL.Hostname()) != nil && net.ParseIP(req.URL.Hostname()).IsLoopback() {
@@ -85,10 +108,7 @@ func newHLSPullGateway(ctx context.Context, opts HLSTranscodeOptions, allowlist 
 		}
 		return g.check(req.Context(), req.URL)
 	}}
-	g.server = &http.Server{Handler: http.HandlerFunc(g.serve), ReadHeaderTimeout: 5 * time.Second,
-		BaseContext: func(net.Listener) context.Context { return ctx }}
-	go func() { _ = g.server.Serve(listener) }()
-	return g, nil
+	return nil
 }
 
 func (g *hlsPullGateway) URL(raw string) string {
@@ -96,7 +116,7 @@ func (g *hlsPullGateway) URL(raw string) string {
 	suffix := "resource.ts"
 	if u, err := url.Parse(raw); err == nil {
 		switch ext := strings.ToLower(path.Ext(u.Path)); ext {
-		case ".m3u8", ".ts", ".mp4", ".m4s", ".aac", ".key":
+		case ".m3u8", ".ts", ".mp4", ".m4s", ".aac", ".key", ".flv":
 			suffix = "resource" + ext
 		}
 	}
@@ -104,6 +124,7 @@ func (g *hlsPullGateway) URL(raw string) string {
 }
 
 func (g *hlsPullGateway) Close() {
+	g.cancel()
 	_ = g.server.Close()
 	g.transport.CloseIdleConnections()
 }
@@ -182,6 +203,80 @@ func (g *hlsPullGateway) dial(ctx context.Context, network, address string) (net
 	return nil, last
 }
 
+// FFmpeg may still be encoding buffered packets after the gateway reads upstream EOF.
+// Open the next connection during that time, using the station entry for a fresh redirect.
+func (g *hlsPullGateway) preopenFLV(req *http.Request) {
+	if g.ctx.Err() != nil {
+		return
+	}
+	g.mu.Lock()
+	if g.pending != nil {
+		g.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(g.ctx)
+	pull := &liveFLVPull{rangeHeader: req.Header.Get("Range"), cancel: cancel, response: make(chan *http.Response)}
+	g.pending = pull
+	g.mu.Unlock()
+
+	slog.Debug("live FLV upstream ended, preparing the next pull")
+	go func() {
+		defer close(pull.response)
+		next := req.Clone(ctx)
+		if err := g.check(ctx, next.URL); err != nil {
+			cancel()
+			return
+		}
+		resp, err := g.client.Do(next)
+		if err != nil {
+			cancel()
+			return
+		}
+		timer := time.NewTimer(10 * time.Second)
+		defer timer.Stop()
+		select {
+		case pull.response <- resp:
+			// The receiving gateway request owns the body and cancellation.
+		case <-timer.C:
+			cancel()
+			resp.Body.Close()
+		case <-ctx.Done():
+			resp.Body.Close()
+		}
+	}()
+}
+
+func (g *hlsPullGateway) takeFLVPull(req *http.Request) (*http.Response, func()) {
+	g.mu.Lock()
+	pull := g.pending
+	g.pending = nil
+	g.mu.Unlock()
+	if pull == nil {
+		return nil, nil
+	}
+	if pull.rangeHeader != req.Header.Get("Range") {
+		pull.cancel()
+		return nil, nil
+	}
+	stop := context.AfterFunc(req.Context(), pull.cancel)
+	release := func() {
+		stop()
+		pull.cancel()
+	}
+	select {
+	case resp := <-pull.response:
+		if resp != nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) {
+			return resp, release
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+	case <-req.Context().Done():
+	}
+	release()
+	return nil, nil
+}
+
 func (g *hlsPullGateway) serve(w http.ResponseWriter, r *http.Request) {
 	prefix := strings.TrimPrefix(g.base, "http://"+g.listener.Addr().String())
 	if !strings.HasPrefix(r.URL.Path, prefix) || (r.Method != "GET" && r.Method != "HEAD") {
@@ -216,7 +311,18 @@ func (g *hlsPullGateway) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Range") != "" {
 		req.Header.Set("Range", r.Header.Get("Range"))
 	}
-	resp, err := g.client.Do(req)
+	root := string(raw) == g.opts.URL
+	var resp *http.Response
+	if root && g.opts.preopenLiveFLV && r.Method == http.MethodGet {
+		var release func()
+		resp, release = g.takeFLVPull(req)
+		if release != nil {
+			defer release()
+		}
+	}
+	if resp == nil {
+		resp, err = g.client.Do(req)
+	}
 	if err != nil {
 		http.Error(w, "upstream unavailable", 502)
 		return
@@ -239,8 +345,13 @@ func (g *hlsPullGateway) serve(w http.ResponseWriter, r *http.Request) {
 	reader := bufio.NewReader(resp.Body)
 	first, _ := reader.Peek(512)
 	first = bytes.TrimSpace(bytes.TrimPrefix(first, []byte{0xef, 0xbb, 0xbf}))
+	isFLV := bytes.HasPrefix(first, []byte("FLV"))
+	liveFLV := isFLV && resp.ContentLength < 0
+	if root {
+		g.liveFLV.Store(liveFLV)
+	}
 	declaredPlaylist := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "mpegurl") || strings.HasSuffix(strings.ToLower(resp.Request.URL.Path), ".m3u8")
-	if bytes.HasPrefix(first, []byte("#EXTM3U")) || declaredPlaylist {
+	if bytes.HasPrefix(first, []byte("#EXTM3U")) || (declaredPlaylist && !isFLV) {
 		data, err := io.ReadAll(io.LimitReader(reader, (1<<20)+1))
 		if err != nil || len(data) > 1<<20 {
 			g.remember(hlsError(502, "直播播放列表过大或读取失败"))
@@ -269,7 +380,10 @@ func (g *hlsPullGateway) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(&flushingWriter{w: w}, reader)
+	_, copyErr := io.Copy(&flushingWriter{w: w}, reader)
+	if copyErr == nil && root && liveFLV && g.opts.preopenLiveFLV && r.Context().Err() == nil {
+		g.preopenFLV(req)
+	}
 }
 
 var hlsPullURI = regexp.MustCompile(`URI="([^"]*)"`)

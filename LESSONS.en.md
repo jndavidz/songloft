@@ -10,6 +10,238 @@ Evidence-backed lessons for the parent and public host contracts; see the [AI wo
 
 ## Entries
 
+### Check host interfaces for plugin compatibility on development builds
+
+- The Music Scraper previously probed a single write method and showed a fixed minimum version when it was missing. Two servers can both report `dev` while exposing different interfaces based on their build sources.
+- Plugin commit `16807dd` checks the required methods and reports what is missing. The same [CI artifact](https://github.com/songloft-org/songloft-plugin-music-scraper/actions/runs/45127785371) was tested on servers built from `9812394` and a worktree based on it with the scraper interfaces. Both reported `dev`. The first listed six missing methods, and the second loaded the directory list.
+- Seen 1× (2026-11-23).
+
+### Verify JSON request bodies through the installed plugin route
+
+- Scope is the Lynx Music Scraper plugin's `onHTTPRequest`, on a server worktree based on `9812394`.
+- Docker Chrome loaded the directory list in the Web fallback. Clicking Start Scraping returned an invalid request body. The host bridge supplied a UTF-8 string while the SDK type declared `Uint8Array | null`. Passing the string to `TextDecoder` failed.
+- Parse `String(req.body ?? '')` according to the runtime contract. After reinstalling the ZIP, directory and preset controls worked at 320, 600, 960 and 1440 logical pixels in Chrome. The plugin POST started the job, reload reconnected to it, and confirmation left two tracks marked as written.
+- Seen 1× (2026-11-23).
+
+### SCAN-FORMAT-001: Test the default playback URL when adding a scan format
+
+- The backend baseline for local DTS support was `01284955a6e1272b2dfb0fb03b2dcadca5f2c831`. [songloft-org/songloft#588](https://github.com/songloft-org/songloft/issues/588)
+- Disabling the migration in isolation led the scanner to discover zero songs from valid DTS fixtures. Restoring only the previous playback behavior made an imported song's default URL return raw DTS. The existing Docker image's ffprobe could not read the same fixture.
+- Add the extension in both the migration and the scan fallback lists, reuse ffprobe for technical metadata, and use the existing compatibility transcode for default playback. Test a scan migration with `UpTo` so later migrations do not alter its expected result. Enable the corresponding demuxer in the slim Docker and Bundle tools.
+- Both `.dts` and `.DTS` files imported. A 5.1 source produced stereo MP3 by default and retained six channels with explicit FLAC. Range and HEAD passed. The backend scanned and streamed DTS and DTS-HD using locally built Linux FFmpeg 8.0.1 tools. Clicking the library entry in Docker Chrome initiated an MP3 response at the default URL and advanced playback.
+- Seen 1× (2026-11-21).
+
+### CI: Start a new release run after changing signing configuration
+
+- [Backend Release](https://github.com/songloft-org/songloft/actions/runs/44754365874) built Bundle test packages and skipped `Create Release` while Lynx desktop and Android signing were missing. After the secrets were added, the docs-only push triggered the documentation site.
+- Run the workflow manually in the repository where signing changed. Verify the publishing job and the target Release assets. See the [Bundle release guide](docs/en/bundle-mode.md#release-triggers-and-signing) for identities and triggers.
+- The [first signed build](https://github.com/songloft-org/songloft/actions/runs/44830577454) hit a Maven Central `429` during Android Gradle dependency resolution. The [next backend run](https://github.com/songloft-org/songloft/actions/runs/44832013772) passed with the same signing configuration and published the Bundle installers and signed manifests.
+- Seen 1× (2026-11-21).
+
+### BUNDLE-FFMPEG-001: Multi-platform assets must bind to one Release identity
+
+- Scope: Flutter/Lynx Bundle builds in the backend Release and assets from `tools/ffmpeg-builder`.
+- Rule: resolve one concrete Release tag for `dev` or stable at build start, validate the manifest source commit, platform, ABI, size, and SHA-256, then give `ffmpeg-resolution.json` to every matrix job. Platform jobs must not download a rolling `latest` file directly.
+- Correct example: the resolution records `release_tag`, `source_commit`, `manifest_sha256`, and each asset digest. Retries reuse the recorded URL and digest.
+- Seen 1× (2026-11-20). [FFmpeg dev CI](https://github.com/hanxi/ffmpeg-builder/actions/runs/44751699585) published assets for ten targets. [Backend CI](https://github.com/songloft-org/songloft/actions/runs/44754365874) verified the same manifest and produced Lynx installers for Android, iOS, Windows, and both macOS architectures. Device installation and playback remain to be verified.
+
+### BUNDLE-FFMPEG-002: Preserve empty input options in the native FFmpeg runner
+
+- Scope: the iOS Bundle FFmpeg runner and its loopback radio and HLS gateway.
+- Evidence: on the backend worktree based on `c6eb437`, the Linux native `TestHLSTranscodeRealFFmpeg` failed when the runner parsed FFmpeg options from a string. The HLS gateway supplied an empty `http_proxy`. Setting the `AVDictionary` directly restored real TS, HLS, AES-128 HLS, and cancellation coverage.
+- Correct example: use `av_dict_set` to pass values verbatim, including an empty proxy and HTTP headers with trailing CRLF, and retain the input protocol and format allowlists.
+- Seen 1× (2026-11-20). Status: verified through the Linux native runner. iOS device acceptance is pending.
+
+### BUNDLE-FFMPEG-003: Compile the native bridge against the release FFmpeg headers
+
+- Scope: the iOS Bundle native bridge and the backend's Linux quality checks.
+- Evidence: `b786eca` compiled locally with FFmpeg 5.1. The newer headers in Release CI run `44745510791` had removed `FF_PROFILE_AAC_LOW`.
+- Rule: use `AV_PROFILE_AAC_LOW` with a conditional compatibility definition for older headers. Keep the native CI tests to catch FFmpeg version differences between local and release environments.
+- Seen 1× (2026-11-20).
+
+### BUNDLE-PORT-001: Synchronize dynamic ports to every URL generator after listening
+
+- Scope: Bundle mobile backends, JS plugin host addresses and internal plugin proxy URLs; [songloft-org/songloft-player-lynx#16](https://github.com/songloft-org/songloft-player-lynx/issues/16), parent baseline `dff636c`, Lynx baseline `c403ea0`.
+- Failure evidence: the report logs show the backend initialized with requested port `0`, the actual listener used `33807`, and the speaker plugin's host bridge still generated `localhost:0`. Ordinary local playback in the same log used the actual `127.0.0.1/play`, isolating the defect to URL generators that captured the port before startup.
+- Rule and fix: after `net.Listen` returns, propagate the actual port to `InternalURLResolver`, the JS plugin manager, and existing bridge handlers before accepting requests. Returning the dynamic port to the client or writing it to configuration is insufficient when another address generator cached the startup value.
+- Validation: added regressions for resolver port updates, manager updates to existing bridge handlers, the host URL, and the mobile listener entry. `make check` and `go test ./internal/app ./internal/services ./internal/jsplugin ./mobile` pass. Lynx Android device and speaker retest remain for the reporter's environment.
+- Seen 1× (2026-11-20). Status: local uncommitted parent-repository fix.
+
+### JSPLUG-003: Include the deployment path in plugin host base URLs
+
+- Scope: JS plugin host bridge, [songloft-org/songloft-plugin-miot#149](https://github.com/songloft-org/songloft-plugin-miot/issues/149), backend fix baseline `4e90470`.
+- Evidence: On Linux amd64, Songloft v2.13.12 (`8c014b3`) and MIoT v2026.11.20.1 deployed under `/songloft` returned 404 for the unprefixed `/api/v1/songs/stats` when opening and refreshing the speaker page in a browser.
+- Correct example: Pass the router's `BasePath` to the bridge handler. Build URLs for `getHostUrl()` and `getNetworkAddresses()` with the same function so plugins can append `/api/v1/…` directly. Cover root, single-level and nested deployment paths as well as dynamically assigned ports.
+- Verification: Both subpath regressions failed before the fix. Afterward, `make check`, targeted race checks and real plugin HTTP requests for all three deployment paths passed. Docker Chrome displayed the playlist control on load and reload, and the plugin response included the all-songs playlist. Playback on a physical speaker remains unverified.
+- Seen 1× (2026-11-20). Status: local uncommitted backend fix.
+
+### PLAY-STREAM-001: Register speaker playback streams and reclaim them on session switches
+
+- Scope: local-song playback, playback-activity sessions, and authentication context; [songloft-org/songloft#584](https://github.com/songloft-org/songloft/issues/584), baseline `7dede0c`.
+- Failure evidence: the report log contains multiple `/songs/{id}/play` requests for the same song. Some stay open for tens of seconds to 19 minutes while the bytes sent remain far below the declared length. The old local `http.ServeFile` path did not register playback activity, and the typed `client_id` key written by authentication differed from the string key read by playback activity, so production requests could not cancel old streams by client session.
+- Rule and fix: authentication middleware and playback activity share one typed context key. Register formal playback as `CatPlay` and reclaim old playback streams when the same session switches songs. Serve local and cached files through a context-aware `ServeContent` wrapper that preserves Range and conditional-request semantics and stops the stream before its next read or write. Keep same-song requests for synchronized playback to multiple speakers, and leave prefetch and transcode entries unaffected.
+- Validation: the isolated baseline failed both the new authentication and local-stream-reclamation regressions, while the fix passed. `make check`, targeted playback/authentication/playback-activity tests, and `CGO_ENABLED=1 go test -race ./internal/services/playactivity ./internal/middleware ./internal/handlers -run 'TestGetSongPlay'` passed. Real speaker output, external mechanical-disk throughput, and Docker deployment remain unverified.
+- Boundary: the complete `go test -race` run reported existing goose global `SetBaseFS` / `SetDialect` races in the parallel subtests of `TestPlaylistCoverRemoteTimeoutStillServesLocalMember`. The log is `/tmp/songloft-584-race-full.log`; the race has no call relationship with this playback change.
+- Seen 1× (2026-11-19). Status: local uncommitted implementation; the reporter's device environment still needs retesting.
+
+### BUNDLE-ANDROID-001: Verify embedded SQLite inside the app sandbox
+
+- Scope: Flutter and Lynx Android x86_64 Bundle builds. Backend commits `8c014b342ea69683293fec729e9396a925b94e66` and `81204e279428db3565f4c33df176a76f7fbf4514` use the same modernc SQLite and libc versions.
+- Evidence: Go libraries taken from the published Flutter 2.13.12 APK and the Lynx candidate APK both terminated on the legacy Linux `lstat` call in the same test app on an Android 14 x86_64 emulator. The library with the Android NDK SQLite driver returned health check HTTP 200 in that host. See `/tmp/songloft-bundle-build.v9dPHY/sqlite-android-harness/{results,crashes}.log`.
+- Rule: Limit the fix to the verified Android x86_64 gomobile path and reuse the existing SQLite files, migrations and sort functions. Record driver selection on the other architectures. Check APK builds and backend startup separately, and verify the complete UI on a device.
+- Seen 1× (2026-11-18).
+
+### RADIO-001: A radio entry point's URL suffix can differ from its media format
+
+- Scope: [songloft-org/songloft#578](https://github.com/songloft-org/songloft/issues/578), radio playback URLs and server-side audio extraction, baseline `81204e279428db3565f4c33df176a76f7fbf4514`.
+- Evidence: The numeric Migu URL redirects twice to an HLS master playlist whose segments carry HEVC and AAC. The baseline add-radio response emitted `/play`, which selects progressive playback in the client. With HLS mode, it emits `/play.m3u8` and the proxied segments decode to HEVC frames. Switching the same station to audio-only yields a single MP3 track. See `/tmp/songloft-578.jCp7cj/{baseline,live}.log`.
+- Rule and example: Persist the playback mode the user selects and keep the original entry URL so its redirects continue to work. Emit a client playback path that reflects the final response format. Use the [live stream gateway](docs/en/pitfalls.md#hls-proxy) for audio extraction and destination validation.
+- Seen 1× (2026-11-18).
+
+### RADIO-002: Start live repackaging based on client playback capability
+
+- Scope: [songloft-org/songloft#579](https://github.com/songloft-org/songloft/issues/579), backend baseline `3184a8b745a4e834c4607ba34bc13caa45601aee` and Lynx baseline `debad6e80f422c9ed092fa3a5e4af21d34426a83`.
+- Evidence: The old FFmpeg allowlist rejected a local FLV before producing any bytes. Allowing FLV produced single-track MP3. The real Huya source worked through the backend with the existing radio user agent, yielding original FLV, H.264 and AAC HLS segments, and single-track MP3. See `/tmp/songloft-579-verify.IUctyN/actual-source.log`.
+- Rule and example: Persist the source container and publish a playback URL that identifies it. Create HLS sessions only for active clients that need compatible output and release them on cancellation. Retry ordinary interruptions on the original path. Use one browser media element for direct playback and fullscreen, and verify playback time, decoded frames, and the number of upstream requests.
+- Playback path follow-up on baseline `00162dd`: GET and HEAD for `/play.m3u8` returned 200 for an HTTP-FLV station, and a mismatched suffix canceled active playback. Both suffixes now validate the station mode before contacting the source or activating playback. The regression checks the 404, upstream request count, and existing playback context. [#579 follow-up](https://github.com/songloft-org/songloft/issues/579#issuecomment-7082650501)
+- Probe auto mode before publishing a playback path. Extensionless FLV and HLS behind a `.php` redirect fixtures verify correct suffixes after creation, a source change, and an explicit switch to auto. Store the user-selected mode and probe result separately, and reject stale writes for a replaced source.
+- Seen 1× (2026-11-19).
+
+### RADIO-003: Reopen the station entry when a live FLV feed ends
+
+- Scope is the [songloft-org/songloft#579 follow-up logs](https://github.com/songloft-org/songloft/issues/579#issuecomment-7056482402), backend baseline `47458a95dae6f8e5560814c6c71dc4267bea62f8`.
+- Evidence: the attachment recorded a playback request of about 123 seconds. The two reported Huya stations ended at roughly 128 and 131 seconds on the local baseline. A controlled FLV fixture showed that the old handler ended the response after opening the redirect entry once.
+- Approach: after a clean EOF, reopen the saved station entry for a fresh redirect within the same MP3 response. Send a bounded amount of silence at the frame rate while waiting for audio. The fixture checks the second entry request, decodability across the MP3 join, EOF for fixed-length media, and playback from the explicit MP3 path with only a query token.
+- Verification: both Huya stations ran for 155 seconds on each of `/play` and `/play.mp3`, with a maximum gap of about 0.30 seconds between reads in the same response. Docker Chrome played a fixture that ends after six seconds through two upstream requests, reaching 9.19 seconds with one playback response and no `waiting` events after startup.
+- Reconnection follow-up: the reporter measured 2.88 and 2.02 seconds of inserted silence within one 362-second response. With backend baseline `bcbd41c`, traces of the two Huya stations found that FFmpeg still emitted buffered audio for about five to six seconds after upstream EOF. The gateway now opens the station entry at EOF and hands that connection to the next encoder. Over 155 seconds per station, the observed silence dropped from 2.016 and 1.728 seconds to 0.576 and 0.288 seconds. Regression tests cover single use of the prepared response, an ordinary retry after a failed early fetch, and cancellation of an unused connection. The improvement remains to be tested on the L17A. [Reporter’s long playback test](https://github.com/songloft-org/songloft/issues/579#issuecomment-7062955987)
+- Later reproduction attempt on baseline `00162dd`: on Linux amd64, the real `StreamAudio` path and FFmpeg served two public Huya stations for 385 seconds each, with three upstream reopenings per station. The longest silence sequences were 48 and 36 frames (1.152 and 0.864 seconds). The 4.03-second case did not recur. Measure inserted audio and HTTP read intervals independently. This test received streams with an HTTP client and sent no audio to a speaker. [Device and server retest report](https://github.com/songloft-org/songloft/issues/579#issuecomment-7082650501)
+- Seen 1× (2026-11-21).
+
+### LYNX-CACHE-001: Reference versioned host scripts directly from the fallback page
+
+- Scope: Lynx plugin fallback pages in Electron and system WebViews, [songloft-org/songloft-plugin-miot#143](https://github.com/songloft-org/songloft-plugin-miot/issues/143), server baseline `b6719811adbf56737ec08f45ec2bcfb636aa209a`.
+- Evidence: the [desktop fix](https://github.com/songloft-org/songloft-desktop/commit/502688952fe0198d9e78dc7acc2c6716f9dde9d2) records that the old unversioned shim was cached for a year and did not set the Lynx bundle URL. The regression test fails with the old Go routes overlaid because the page still uses fixed URLs.
+- Rule and correct example: rewrite the generated shim reference when serving fallback HTML. Version the shim and bridge module by embedded content. Plugins generate their bundle URLs and the host reads the declaration. A browser with an immutable cached response can keep using it without requesting the URL, so changing its response headers alone is insufficient.
+- Verification: Docker Chrome reused an immutable legacy shim fixture, then opened the released MIoT package under a deployment subpath. All three new assets and the plugin API returned 200. Evidence is in `/tmp/songloft-lynx-cache-1yoKQ2/`. The Electron app and native Lynx frames were not exercised.
+- Seen 1× (2026-11-18).
+
+### SCAN-EXCLUDE-001: Explain scan exclusions separately from playlist exclusions
+
+- Scope: targeted scanning, exclusion diagnostics and client scan controls; songloft-org/songloft#573, baseline `4e73b078d86472e0c3409d24a87a6aca2b82380a`.
+- Evidence: the reporter excluded `yt-dlp` from scanning to avoid many one-song folder playlists. Targeted descendants inherited that rule; the old endpoint accepted a job which discovered no songs. Removing the start guard in isolation makes the new regression observe 200 and background work; removing traversal diagnostics loses actual pruned directories.
+- Rule / Done right: share scanner matching to return paths and matching rules. Refuse all-excluded roots; scan mixed roots normally and explain skipped directories. Count pruned directories without walking them to estimate song counts. Preserve exclusions and cleanup without a temporary bypass; use existing `auto_create_exclude_dirs` for automatic-playlist-only exclusions. Real HTTP, positive/negative client tests and verification limits are in the [record](docs/en/issue-573-scan-exclusions.md).
+- Seen 1× (2026-11-17). Status: local implementation and verification complete; the user subsequently authorized commits, pushes and an Issue reply, with delivery tracked in this batch's record. Local fixtures do not establish acceptance on the reporter's Docker instance.
+
+### HTTP-PROXY-001: Independent plugin transports must explicitly use the global proxy
+
+- Scope: QuickJS `fetch`, `songloft.net.httpStream`, and the shared proxy contract; [songloft-org/songloft#575](https://github.com/songloft-org/songloft/issues/575), baseline `8177b2f208d8436f24a97e08a4ae237f372f88c5`.
+- Evidence: the setting endpoint saved the proxy, but the runtime's normal and insecure TLS transports had no `Proxy` function. Four request regression groups failed on the original implementation with zero proxy hits, while the loopback bypass control passed. Checking saved configuration or the plugin store client alone cannot establish that plugin `fetch` uses it.
+- Rule and Done right: both separate TLS pools call `httputil.ProxyFromGlobal` per request, retaining redirects, permissions, and loopback semantics. Switching / clearing the proxy in an existing JS environment and race checks passed. The released lyrics plugin obtained fixture lyrics for exact / fuzzy search through real CONNECT tunnels, while a local custom source still connected directly. See the [verification record](docs/en/issue-575-verification.md).
+- Seen 1× (2026-11-17). Local fix and verification complete; commit, push, and dev build status are tracked in the delivery evidence. The reporter's Docker, mihomo, and live LRCLIB network remain unverified.
+
+### HTTP-PROXY-002: Verify proxy environment fallback in a fresh process
+
+- Scope: plugin backend HTTP requests, [follow-up on songloft-org/songloft#575](https://github.com/songloft-org/songloft/issues/575#issuecomment-7095407548), baseline `0ed7f396be4851081ffd35f6b3e7b8bdcee01ee4`.
+- Evidence: the reporter confirmed that the web setting worked. The original implementation recorded zero hits on the HTTP and HTTPS environment proxies in a fresh-process regression. With fallback enabled, the released lyrics plugin in Docker host networking completed exact and fuzzy searches through the environment's CONNECT proxy. Saving a proxy switched requests immediately. Clearing it restored the fallback.
+- Rule: Go caches the process environment on the first call to `http.ProxyFromEnvironment`. Use a fresh process to set the variables and verify protocol selection, `NO_PROXY`, and application setting precedence so the test is independent of the host proxy and test order.
+- Seen 1× (2026-11-23).
+
+### SCAN-ORDER-001: No-op automatic playlist updates still change ordering through triggers
+
+- Scope: rebuilding automatic playlists and default listing order; [songloft-org/songloft#573](https://github.com/songloft-org/songloft/issues/573), baseline `8177b2f208d8436f24a97e08a4ae237f372f88c5`.
+- Evidence: with real in-memory SQLite and baseline generated queries restored, two regressions exposed timestamp changes reordering legacy playlists with equal positions, and new automatic playlists preceding manual playlists because position defaulted to 0. Removing only the explicit timestamp assignment still fires the database timestamp trigger and does not prevent redundant updates.
+- Rule and Done right: issue no UPDATE when metadata is unchanged. Append automatic playlists transactionally, matching regular creation. Cover both legacy equal-position data and new directories, while verifying membership/actual cover changes and retained custom positions/pins.
+- Validation: both final ordering regressions failed as expected under the baseline-query overlay. The fix passed full `make check`, automatic playlist tests, and a real file-move/scoped-scan/manual-add HTTP scenario; see the [verification record](docs/en/issue-573-verification.md). The original missing-song report remains unreproduced; the ordering fix does not establish full issue resolution.
+- Seen 1× (2026-11-17). Ordering partial fix verified locally; commits, CI, and version availability follow the subsequent #573 replies.
+
+### LICENSE-001: Audit license texts, package metadata, and distributed copies across repositories
+
+- Scope: themes, plugins, toolchain, and client declarations; parent baseline `44309463af527e5aff5273ef7abc74d820b8a6d3`.
+- Evidence: the local 21-repository audit on 2026-11-17 found eight subrepositories without a root LICENSE. Subsonic's README said MIT although `plugin.json` declared Apache-2.0 from its first commit. Seven toolchain packages declared MIT from creation, so their difference from the root README alone did not establish a stale declaration.
+- Rule and Done right: trace loaded assets and packaged files, comparing declarations with full texts. Add the standard Apache-2.0 text to repositories already declaring it; give each npm package the LICENSE matching its own metadata and verify inclusion with `npm pack --dry-run --json --ignore-scripts`. Document the seven MIT exceptions in the toolchain README, preserve third-party licenses, and include LICENSE in the base scaffold template.
+- Validation: all eight root LICENSE files match the parent's text byte for byte; all 12 toolchain npm packages include matching texts. Local evidence, worktree identities, and relevant Not run items: `/tmp/songloft-license-fix-20261117/verification.json`. Commit SHAs, pushes, and automatic workflow results are recorded separately in `delivery.json` in the same directory.
+- Seen 1× (2026-11-17). Local corrections complete; commits, pushes, and automatic workflow checks follow this batch's authorization.
+
+### LYNX-FALLBACK-001: Connect WebView fallback routes to the distributed runtime
+
+- Scope: the shared HTML fallback used when Flutter opens Lynx plugins. Parent baseline `39cc87db2a1b92f0be2d96741dc3a1178a1ea7c3`; Flutter baseline `7fc5a04e4c65dfe54b0df299671bbecd2b4f8478`.
+- Evidence: the existing Docker instance returned 404 for `/api/v1/jsplugin-assets/web-core/static/js/client.js`, while embedded `/web-core/static/js/client.js` returned 200. The old route only searched standalone disk directories. An isolated fallback page on Android 14/API 34 x86_64 with system WebView 113.0.5672.136 reproduced the blank screen and undefined `lynx-view`. Reusing embedded assets made the official miot 2026.11.16.2 package display device, playlist, and settings controls and issue business API requests.
+- Rule and Done right: inject the embedded web-core FS into the plugin manager during application assembly, then serve JS/CSS/WASM through plugin asset routes. Preserve complete disk overrides without mixing runtime versions. Fixed filenames use `no-cache`, rather than a year of immutable caching across upgrades. A development environment with a manually copied web-core does not prove the released image works.
+- Validation: `make check`, Swagger generation, and resource/path/MIME regressions passed. An isolated disk-only implementation made all four resource cases fail with 404 and restored the blank Android page. Evidence: `/tmp/songloft-flutter-lynx-20261117/`, including `check.log`, `assets-before.log`, `webview-{before,inspect-final}.log`, `before-webview.png`, and `android-webview.png`. Final worktree identity: `worktree-final.json`.
+- Boundaries: system WebView screenshots use a minimal Android host; an actual ADB tap opened settings (`android-settings.png`). The full Flutter debug build was deliberately stopped during Gradle dependency resolution without producing an APK (`flutter-debug-build.log`). Full Flutter package interaction, physical phones, speaker audio, and iOS/macOS/Windows are Not run. Lite and older builds embedding Flutter still require a standalone web-core directory. The user's Docker was not replaced. Commit, push, and CI for the same SHA are checked separately; stable releases and deployment require separate acceptance.
+- Seen 1× (2026-11-17). Server fix and system WebView comparison verified.
+
+### CI-004: Pin the build-system baseline for Flutter Linux releases
+
+- Scope: standalone Flutter Linux and backend Linux Bundle jobs; parent baseline `3db91f69c1c00eecf04f630ba425df91c6fb5544`, Flutter `cebc894cde359a0d366c23d9a3acc75ade7832f2`.
+- Evidence: `ubuntu-latest` in the [failed Linux job](https://github.com/songloft-org/songloft/actions/runs/43882625312/job/133353770838) had moved to Ubuntu 26.04. With `libayatana-appindicator3-dev 0.5.94-1build1`, `app_indicator_new` in `tray_manager_plugin.cc:118` failed under `-Werror,-Wdeprecated-declarations`. The previous successful release used Ubuntu 24.04.
+- Rule and Done right: pin both Linux release jobs to `ubuntu-24.04`, preserving the compiler warning policy and distribution compatibility baseline. Fixing only the standalone job leaves Bundle builds exposed to latest-image drift. Only runner selection changes.
+- Validation: actionlint v1.7.12 passed for both workflows; original log `/tmp/songloft-release-2.13.11-20261116/linux-baseline.log`. Actual Linux release builds are checked separately. Not run: desktop installation and tray interaction; runtime code was unchanged.
+- Remote acceptance: the `v2.13.11` [Flutter Linux job](https://github.com/songloft-org/songloft-player-flutter/actions/runs/43887627188/job/133369948089) (source `7fc5a04`) and [Linux Bundle job](https://github.com/songloft-org/songloft/actions/runs/43892661200/job/133389054723) (source `da5d0da`) both actually used Ubuntu 24.04 and built successfully. All four standalone tar.gz/DEB/RPM/AppImage packages are present. Both complete stable-release workflows passed; published versions, commit identifiers, and asset inventories were read back successfully. Logs: `/tmp/songloft-release-2.13.11-20261116/{flutter,backend}-linux-fixed.log`.
+- Seen 1× (2026-11-16). Actual pinned-baseline builds and stable publication accepted; desktop installation and tray interaction remain Not run.
+
+### LYNX-FOCUS-001: scroll-view focus delegation can retarget long-form clicks
+
+- Scope: shared Lynx HTML fallback and nested Web plugin frames, baseline `e2bfea9b1b2ccce65176f27e9fa0968dbc14acd9` plus worktree.
+- Evidence: pointerdown hit the advanced heading, then scroll-view delegatesFocus selected its first password input and reset scroll; mouseup/click hit an ancestor. Waiting or changing domain blur did not fix it. Removing the host guard caused the new regression to fail in an isolated negative check.
+- Rule and Done right: prevent default delegated focus for non-editor mouse presses and blur the current editor; preserve native editor input paths. Synchronize both server/client shim copies and exercise long forms in actual nested frames and fallback. Evidence: miot `docs/en/lynx-migration.md`; all three shim checks pass. Native touch acceptance remains Not run.
+- Same-day cover check: the user’s older Docker bridge lacks resourceUrl, leaving all 30 rendered rows without covers. The host update is committed with explicit authorization and retains direct image requests instead of a slower backend/Base64 compatibility relay. UI/plugin source updates cannot replace host updates; record the host actually running in verification.
+- Seen 1× (2026-11-16). Host commits explicitly authorized in this round; release/device boundaries are in delivery records.
+
+### ALBUM-001: Interpret track/disc order consistently before pagination
+
+- Scope: album lists, ID queues, scanning and tag contracts; songloft-org/songloft#571, baseline `7180df38176ca7b44c1a7d8cf2b3ec269d35ac7d`.
+- Evidence: HTTP defaulted to addition time and Lynx explicitly requested that sort; storing a track number does not make queries sort by it. Restoring the old sorting mechanism fails numeric 1/2/10, multi-disc, pagination and ID regressions.
+- Rule / done right: complete-song and ID queries share numeric disc/track ordering before LIMIT/OFFSET; inspect explicit client parameters and queue-completion requests. Migration only adds the field; existing disc tags require reimport. Tag rewriting preserves disc values omitted by older callers. Real SQLite, six-format tags, scanning/reimport and browser list/playback queue evidence: [verification](docs/en/issue-571-verification.md).
+- Seen 1× (2026-11-16). Status: implementation and local verification complete; final commits, pushes and CI are in the #571 delivery reply. No stable release or device acceptance.
+
+### CACHE-001: remote cache admission and hits must share source validation
+
+- Scope: external downloads, streamed proxy finalization, remote cache hits and plugin fallback; songloft-org/songloft#570, baseline `6b3f38c923cf15358a1e7156c6290cac9d43b8c2`.
+- Evidence: HTTP 200 plus valid audio does not prove a full song was returned. Real 10-second MP3 files persist through both HTTP 200 and 206 under the old-behavior overlay, while playback also bypasses validation through `song.CachePath`. Restoring the old bypasses fails 13 subcases; healthy-audio controls pass.
+- Rule and Done right: call the existing `source.Validate` at the shared move boundary and validate hits; evict invalid originals and derivatives and clear the database path. Bind memoized technical metadata to file identity, size and mtime; evaluate current thresholds and expected duration on every hit. Cancellation must not invalidate files. Report plugin validation failures to health metrics and start the existing deduplicated fallback. Real SQLite, HTTP, alternate-source persistence and three race-test repetitions pass; see the [verification record](docs/en/issue-570-verification.md).
+- Boundary: background whole-file validation cannot retract an already-streamed initial prompt. Plain URLs have no cross-plugin alternatives; player retries after all sources fail remain separate. macOS/OrbStack arm64, live NetEase sources and Xiaomi speaker: Not run.
+- Seen 1× (2026-11-15). Status: local implementation and validation complete; commit, CI and version availability follow the delivery reply on #570.
+
+### HLS-001: Cross-origin CDN resources need verifiable proxy authorization
+
+- Scope: HLS radio playlists, child playlists, segments/keys/init resources, and redirects; songloft-org/songloft#567, baseline `6115afb969ff1f4b7ced0fbe39d223350adb9e5c`.
+- Evidence: an isolated overlay of the old implementation fails regressions for cross-origin child playlists, segments/keys, and different ports. Proxying only same-origin resources leaves the player connecting directly to CDNs. The reporter did not provide the live source URL; local fixture verification is not acceptance of that deployment.
+- Rule and Done right: generate HMAC signatures for cross-origin HTTP(S) references found in actual playlists, binding the song ID, current source URL, endpoint type, and complete target URL. Unsigned requests retain origin checks; signatures never bypass private-host checks. Check hosts on entry and every redirect; resolve relative references against the final redirected URL. Three isolated overlays removing signature, entry private-host, or redirect checks are each caught by HTTP regressions. See the [verification record](docs/en/issue-567-verification.md).
+- Same-event real-source follow-up: live `currentTime` may start at a nonzero offset, so exceeding a fixed threshold does not prove playback. Here the initial time was already about 54 seconds with zero decoded frames. Correct verification samples both advancing media time and decoded frames: CCTV-1 progressed from 56.883789 to 58.927471 seconds and from 30 to 81 frames; real segment direct/proxy SHA-256 values also matched. See the verification record above.
+- Seen 1× (2026-11-14). Status: implementation and local verification complete; see the subsequent #567 delivery record for commit, push, CI, and version availability.
+
+### EVENT-001: Membership events must derive from committed rows
+
+- Scope: playlist service, QuickJS events and SDK, songloft-org/songloft#563; baseline `c686994c13cb4a6611a29ef410b3f13236516158`.
+- Rule: batch notifications must use actual IDs from committed chunks, never input lists or pre-rollback counts. Whole-playlist replacement emits only the committed membership difference. Enqueue each operation as a batch so member count alone cannot overflow the actor queue. Idle subscription identity only triggers wakeup; a new VM must register again under current permissions.
+- Evidence and Done right: with the old batch method restored through a Go overlay, a real SQLite foreign-key failure reported 501 additions while only 500 committed. Removing notification produced a missing add event; removing reload validation retained a revoked subscription. Fixed service, HTTP, QuickJS lifecycle and larger-than-queue batch delivery checks are documented in the [verification record](docs/en/issue-563-verification.md).
+- Same-event follow-up: membership time stays separate from library time; atomic replacement preserves retained rows. Restoring clear/recreate fails the real SQLite timestamp regression. Post-commit favorite invalidations wake long polls; shutdown releases waiters before HTTP draining. Client lessons live in their repositories.
+- Seen 1× (2026-11-11). Status: new-feature mechanism validation and reproduction of an existing count defect; pre-commit validation is recorded; commits, pushes and SDK publication follow this batch delivery record.
+
+### COVER-001: Dynamic artwork candidates must not share expired contexts or modification times
+
+- Scope: playlist remote/local artwork fallback, songloft-org/songloft#562.
+- Rule: the total remote budget only limits network attempts, never subsequent local candidates. After a dynamic endpoint changes its candidate, the previous file's Last-Modified cannot validate the new file. Thumbnail ETags must include file identity.
+- Evidence and Done right: real HTTP timeout regressions added during review returned 404 on both paths before the fix. Switching to a member image with an older modification time incorrectly returned 304. Separating the remote context, continuing local fallback and removing date validation for dynamic candidates makes all cases pass. Logs: `/tmp/songloft-562-review-{before,covers}.log`; see the [verification record](docs/en/issue-562-verification.md).
+- Seen 1× (2026-11-11). Status: found and fixed in local review; uncommitted and unreleased.
+
+### COVER-002: Reject local artwork endpoint references before fetching artwork
+
+- Scope: remote song and playlist artwork, baseline `00162dd`. [#579 report](https://github.com/songloft-org/songloft/issues/579#issuecomment-7082650501)
+- Evidence and implementation: before the fix, the controlled HTTP fixture received cover requests through relative references, same-instance absolute references, and redirects. Reject known local artwork references at save time and check again before the initial fetch and each redirect. Apply a non-queueing concurrency limit to remote artwork. Tests assert zero outbound requests for rejected targets and verify plugin artwork and local playlist fallback.
+- Same-incident timeout follow-up: two visits to the same failed artwork URL initially took about five seconds each. A bounded 30-second failure cache made the second visit return immediately. Ten distinct failed URLs took about five seconds in parallel and an image that responded in 1.5 seconds still loaded. Keep the initial request budget for these cases.
+- Seen 1× (2026-11-23).
+
+### TAG-001: Serialize JSON tag references with definition deletion
+
+- Scope: shared playlist tags, songloft-org/songloft#562.
+- Same-review follow-up: deletion must also invalidate client playlist metadata and binding caches. Flutter's actual delete interaction and a Lynx QueryClient regression both retain stale `tag:1` before the fix and pass after invalidation. This does not add another independent event.
+- Same-review count audit: individual/batch playlist deletion and hiding/restoring must refresh visible-playlist counts in the tag catalog. Cache regressions for all four operations fail before the fix in both clients. Logs: `/tmp/songloft-562-review-counts-*-before.log`.
+- Rule: ordinary INTEGER PRIMARY KEY values can be reused. JSON references have no foreign-key protection: serialize deletion, cleanup and binding validation/writes in UnitOfWork. Metadata writes must not restore references from stale objects.
+- Evidence and correct implementation: removing cleanup through a Go overlay fails the ID-reuse/stale-write regression, retaining `tag:1`. The actual code passes rollback, system-label, hidden-count and cross-instance backup checks. See [verification](docs/en/issue-562-verification.md).
+- Seen 1× (2026-11-11). Local, uncommitted and unreleased; a mechanism regression check, not a new production incident.
+
 ### MOBILE-001: Configure a writable temporary directory before initializing an embedded mobile backend
 
 - Scope: `mobile.Start` and services using Go's default temporary directory; songloft-org/songloft#559, baseline `f1c4936d5a6dda299dd26cc3178beb61d5e71dce`.
@@ -89,7 +321,7 @@ Evidence-backed lessons for the parent and public host contracts; see the [AI wo
 - Scope: home favorites cards, client menus and server playlist visibility, songloft-org/songloft#532.
 - Failure evidence: on 2026-10-21, the [initial reply](https://github.com/songloft-org/songloft/issues/532#issuecomment-6308512268) applied an ordinary playlist's hide action to built-in Favorites / Radio favorites. Actual Web screenshots showed only pinning in the Favorites menu; Flutter/Lynx menus and `/playlists/{id}/visibility` explicitly protect built-in playlists. A [correction with screenshots](https://github.com/songloft-org/songloft/issues/532#issuecomment-6309354674) was published.
 - Rule: check object identity guards, the actual menu and backend restrictions before explaining an operation. An ordinary object's call path does not establish availability for built-in objects. Trace consumers of `hidden` when designing home display: song queries exclude songs in hidden playlists by default, so home-card visibility needs a separate preference.
-- Done right: after user approval, both clients gained independent home display switches stored locally per server and account. Identification uses built-in IDs plus `built_in`; membership and labels do not change. Tests, actual browser checks and Not run items are recorded in [Flutter](clients/player/docs/en/issue-532.md) and [Lynx](clients/player-lynx/docs/en/project/issue-532.md), bound to their worktrees without claiming native-device or released-version validation.
+- Done right: after user approval, both clients gained independent home display switches stored locally per server and account. Identification uses built-in IDs plus `built_in`; membership and labels do not change. Tests, actual browser checks and Not run items are recorded in [Flutter](clients/player-flutter/docs/en/issue-532.md) and [Lynx](clients/player-lynx/docs/en/project/issue-532.md), bound to their worktrees without claiming native-device or released-version validation.
 - Seen 1× (2026-10-21). Status: lesson; implementation and validation complete. Commit, CI and version status follow the #532 reply and delivery validation record.
 
 ### JSPLUG-002: SDK methods can exist while the host transport remains unavailable
@@ -191,7 +423,7 @@ Both clients pass Chinese/English 390px browser checks for name order in both di
 ### RELEASE-001: Cross-repo releases must push child tags first, land gitlinks second, and release the parent last
 
 - Scope: `scripts/release-all.sh`, the unified `bump-version.sh` contract across three repos, and parent gitlink commits.
-- Rule: the parent bump script requires a clean worktree, so both submodule pointers must land in a dedicated commit first; that commit must be pathspec-limited (`git commit -m ... -- clients/player clients/player-lynx`) or staged/unrelated changes get swept in. Chain parsing depends on the fixed contract "last stdout line = v<version>, logs on stderr".
+- Rule: the parent bump script requires a clean worktree, so both submodule pointers must land in a dedicated commit first; that commit must be pathspec-limited (`git commit -m ... -- clients/player-flutter clients/player-lynx`) or staged/unrelated changes get swept in. Chain parsing depends on the fixed contract "last stdout line = v<version>, logs on stderr".
 - Evidence: on 2026-10-15, baseline `9d008b8`. The three legacy scripts differed (Flutter allowed tag overwrite, the parent had no preflight) and could not be orchestrated safely. After aligning all three to the Lynx strict contract, `scripts/tests/release-all.test.mjs` (local bare remotes + stubs) locks the ordering, dirty-tree abort, stop-on-failure, dry-run zero writes, and gitlink isolation; `scripts/tests/bump-version.test.mjs` covers preflight and the `--no-push` local path. Lynx's existing `pnpm run test:release` passes 77 tests.
 - Done right: real-repo `--dry-run` verified all three plan outputs and the preflight (a dirty submodule is rejected before any release script runs). Pushing tags triggers each CI and is a separate release action; this entry does not establish the real publication chain.
 - Same-day interaction evidence: the orchestrator at `190c32c1768a88678edea3de5b1b94c40108c95d` captures stdout, while Lynx `0de993ff272ee29df96c8401b46df56256646438` wrote plans/prompts there and returned 0 on Enter cancellation, allowing later steps to proceed. All 5 new Lynx stream/cancellation checks and 9 orchestrator version-output checks failed against the original implementations. This worktree moves Lynx prompts to stderr, returns 1 on cancellation, and validates all three returned versions. All 31 parent script tests and 81 Lynx release-tool tests pass; a PTY with actual command substitution verifies Enter cancellation and yes creating only a local release. Logs: `/tmp/songloft-release-{all-before,lynx-before,parent-suite,lynx-suite}.log`; terminal evidence: `/tmp/songloft-release-terminal-result.json`. Same-day Seen remains unchanged. No actual release was run in this task.
@@ -206,6 +438,28 @@ Both clients pass Chinese/English 390px browser checks for name order in both di
 - Not run: full backend tests, platform builds, and remote workflow execution; this task changes only release scripts and documentation, and the worktree remains uncommitted/unpushed.
 - Seen 1× (2026-10-15). Status: lesson.
 
+### RELEASE-003: Exclude release rehearsal checkouts when generating Swagger
+
+- Scope: backend `make swagger` and its caller `scripts/bump-version.sh`.
+- Evidence: on 2026-11-21 at backend baseline `6899aaf`, `swag init` recursively scanned full rehearsal checkouts under `tmp/agent-*/` and reported `cannot find models.ErrorResponse` during the release. Generation succeeded at the same baseline in an isolated checkout and the release continued at tag `v2.13.13` (`57a9f6b`).
+- Done right: run the release command from a clean checkout when rehearsal copies are present in the workspace. Running `swag init --exclude tmp -o <output-directory>` in the original workspace generated `docs.go`, `swagger.json`, and `swagger.yaml` that matched the release tag byte for byte.
+- Seen 1× (2026-11-21). Status: lesson.
+
+### BACKUP-001: Check both client validation directions when upgrading backup versions
+
+- Scope: shared playlist backup contract and Lynx Web data management; parent baseline `2326b38`, Lynx `1de4735`.
+- Evidence: the server exports `BackupVersion = 2` and accepts v1/v2; Lynx `data-transfer.ts` accepts only v1 in `validateBackup`, used for import files and export responses. Node 22.17.1 transpiled and ran the actual `jsonMultipart` and `PlaylistBackupApi.exportBackup` with fixture transport: both v1 paths pass, both v2 paths throw `invalid_json`. Evidence: `/tmp/songloft-doc-sync-backup-probe.{cjs,json}`; this is not browser or live-server end-to-end validation.
+- Rule and Done right: check server export/import, client pre-upload validation and post-download validation when upgrading a format. Map cross-instance tags by name; do not manually change version numbers. At the user's request, validation now accepts v1/v2. Three v2 regressions fail on old code; all 28 focused checks pass after the fix. A real Web download was imported across two temporary backends: tag ID 1 remapped to 2 with correct song/playlist references. v1 succeeds; v3 is rejected before upload. Evidence: `/tmp/songloft-backup-v2/roundtrip.json`; full checks: [client verification](https://github.com/songloft-org/songloft-player-lynx/blob/main/docs/en/project/backup-v2.md).
+- Seen 1× (2026-11-15). Status: compatibility repair and actual browser acceptance complete, uncommitted/unreleased; this follow-up does not increment Seen.
+
+### BACKEND-001: Wait for HTTP listener registration before parent-exit cleanup
+
+- Scope: the desktop Bundle child process and `internal/app.App.Start`.
+- Evidence: source review on 2026-11-18 found that parent-stdin EOF can arrive before `App.Start` creates the `http.Server`. If the exit goroutine calls `Shutdown` first, it closes the database and `Start` may then begin listening, leaving an unusable orphan service.
+- Rule and fix: begin reading the parent pipe before app initialization, but defer exit cleanup until the HTTP server has registered its listener and entered `Accept`. `StartWithReady` and `readyListener` put the signal after the server tracks the listener; the existing `Start` contract remains intact.
+- Done right: Go source is gofmt-formatted, and the EOF → ready callback → `Shutdown` order can be reviewed in source. Not run: Go tests, build, or a host-crash/startup race process check.
+- Seen 1× (2026-11-18). Status: lesson; cross-platform process verification remains for final acceptance.
+
 ## Entry Format
 
 ```text
@@ -217,3 +471,11 @@ Done right: successful example and evidence; pending if unavailable
 Seen N× (YYYY-MM-DD, YYYY-MM-DD)
 Status: lesson / promotion candidate / promoted (authoritative destination)
 ```
+
+
+### LYNX-001: Verify the complete native-plugin Web fallback chain
+
+- Scope: Lynx SDK, generated fallback entry and server assets; parent baseline `4df1e97b3a7874d08d1d74ce799baa9295b512b4`.
+- Evidence (2026-11-15): bili native/Web builds passed while the real Chromium 121 fallback remained blank due to the injected plugin base, relative Worker URLs, a missing bridge module and srcdoc initialization under COEP. An isolated comparison without fallback COEP loaded the bundle and real plugin APIs. See the plugin's `VERIFICATION.md` and `/tmp/songloft-bili-verification/`.
+- Rule / Done right: install the bridge before loading an absolute bundle URL; serve its module through shared assets, retain deployment prefixes and revalidate unversioned bridge files. Verify native frames and HTML fallback separately through rendering, GET/POST and persistence. Ordinary WebView plugins retain COEP; document the Lynx fallback exception and isolated cross-origin embedding limitation.
+- Seen 1× (2026-11-15). Status: working-tree fixes, not committed or published. Flutter devices and authenticated Bilibili import/download remain unverified.

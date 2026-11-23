@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 
 	"songloft/internal/httputil"
+	"songloft/internal/mediaexec"
 	"songloft/internal/services/resourcebudget"
 )
 
@@ -151,4 +153,118 @@ func (cw *capWriter) Write(p []byte) (int, error) {
 	}
 	cw.remaining -= len(p)
 	return cw.w.Write(p)
+}
+
+func streamRadio(ctx context.Context, w io.Writer, ffmpegPath string, args []string, startupTimeout time.Duration, bridgeSilence bool) (bool, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := mediaexec.FFmpeg(ctx, ffmpegPath, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return false, fmt.Errorf("%w: stdout pipe: %v", ErrRadioTranscodeUnavailable, err)
+	}
+	// stderr 收集有限长度用于诊断；不用 CombinedOutput 因为 stdout 要流式转发。
+	var stderr bytes.Buffer
+	cmd.Stderr = &capWriter{w: &stderr, remaining: 4096}
+
+	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		return false, fmt.Errorf("%w: start: %v", ErrRadioTranscodeUnavailable, err)
+	}
+
+	var deadline *time.Timer
+	if startupTimeout > 0 {
+		deadline = time.AfterFunc(startupTimeout, cancel)
+		defer deadline.Stop()
+	}
+	reader := bufio.NewReaderSize(stdout, 64*1024)
+	// 预读第一字节：只有确认 ffmpeg 真的产出了音频，才提交响应头/首字节。
+	// 若在任何字节之前就 EOF/失败（坏源、鉴权失败、编码器不支持容器等），返回
+	// ErrRadioTranscodeUnavailable 让调用方降级为原样代理——此时尚未写出任何字节。
+	var first []byte
+	if bridgeSilence {
+		var err error
+		first, err = peekRadioWithSilence(ctx, cancel, &flushingWriter{w: w}, reader)
+		if err != nil {
+			_ = cmd.Wait()
+			return false, err
+		}
+	} else {
+		first, _ = reader.Peek(1)
+	}
+	if deadline != nil && !deadline.Stop() {
+		cancel()
+		_ = cmd.Wait()
+		return false, hlsError(http.StatusGatewayTimeout, "电台纯音频转码启动超时")
+	}
+	if len(first) == 0 {
+		_ = cmd.Wait()
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = "no output"
+		}
+		return false, fmt.Errorf("%w: %s", ErrRadioTranscodeUnavailable, msg)
+	}
+
+	// 已确认有音频输出：从此刻起本函数拥有响应，流式转发直到结束或断开。
+	_, copyErr := io.Copy(&flushingWriter{w: w}, reader)
+	canceled := ctx.Err() != nil
+	if copyErr != nil {
+		cancel()
+	}
+	waitErr := cmd.Wait()
+
+	// ctx 取消（客户端断开）是正常收尾，不当作错误。
+	if canceled {
+		return false, nil
+	}
+	if copyErr != nil {
+		return false, copyErr
+	}
+	if ctx.Err() == nil && waitErr != nil {
+		log := slog.Default()
+		if startupTimeout == 0 {
+			// Only the legacy command uses stderr for diagnostics. The gateway input
+			// address contains an encoded upstream URL and must not be logged.
+			log = log.With("stderr", strings.TrimSpace(stderr.String()))
+		}
+		log.Warn("radio transcode ffmpeg exited with error", "error", waitErr)
+	}
+	return waitErr == nil && ctx.Err() == nil, nil
+}
+
+func peekRadioWithSilence(ctx context.Context, cancel context.CancelFunc, w io.Writer, reader *bufio.Reader) ([]byte, error) {
+	ready := make(chan []byte, 1)
+	go func() {
+		first, _ := reader.Peek(1)
+		ready <- first
+	}()
+
+	// At 128 kbps and 48 kHz, each MPEG-1 Layer III frame is 384 bytes and lasts
+	// 24 ms. Zero side information and main data encode silence in this format.
+	const frameSize, framesPerTick = 384, 12
+	var frames [frameSize * framesPerTick]byte
+	for frame := 0; frame < len(frames); frame += frameSize {
+		copy(frames[frame:], []byte{0xff, 0xfb, 0x94, 0x04})
+	}
+
+	// Keep the client's buffer fed during a short reconnect. Leave a longer outage
+	// to the normal startup timeout, with only one goroutine writing to the response.
+	ticker := time.NewTicker(framesPerTick * 24 * time.Millisecond)
+	defer ticker.Stop()
+	for range 20 {
+		select {
+		case first := <-ready:
+			return first, nil
+		case <-ctx.Done():
+			return <-ready, nil
+		case <-ticker.C:
+			if _, err := w.Write(frames[:]); err != nil {
+				cancel()
+				<-ready
+				return nil, err
+			}
+		}
+	}
+	return <-ready, nil
 }

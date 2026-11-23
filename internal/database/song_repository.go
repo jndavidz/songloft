@@ -110,6 +110,87 @@ func (r *SongRepository) UpdateCoverURL(ctx context.Context, id int64, coverURL 
 	return nil
 }
 
+// UpdateRating 更新单首歌曲的评级（0-100；0 表示未评级）。歌曲不存在返回 ErrNotFound。
+func (r *SongRepository) UpdateRating(ctx context.Context, id int64, rating int) error {
+	rows, err := r.queries.UpdateSongRating(ctx, sqlc.UpdateSongRatingParams{
+		Rating: int64(rating),
+		ID:     id,
+	})
+	if err != nil {
+		return fmt.Errorf("update song rating %d: %w", id, err)
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateRatingBatch 批量更新歌曲评级，返回实际更新的行数。
+// squirrel 动态 IN 列表（变长 ID），与 List/Count 的动态 SQL 范式一致。
+func (r *SongRepository) UpdateRatingBatch(ctx context.Context, ids []int64, rating int) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	sb := sq.Update("songs").
+		Set("rating", rating).
+		Set("updated_at", "CURRENT_TIMESTAMP").
+		Where(sq.Eq{"id": ids})
+	query, args, err := sb.ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("build batch rating sql: %w", err)
+	}
+	result, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch update rating: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("batch rating rows affected: %w", err)
+	}
+	return rows, nil
+}
+
+// UpdateRadioModeBatch 批量更新电台播放模式，返回实际更新行数。
+// 调用方负责在写入前校验歌曲类型和模式对源地址的适用性。
+func (r *SongRepository) UpdateRadioModeBatch(ctx context.Context, ids []int64, mode models.RadioMode, isVideo *bool) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	update := sq.Update("songs").
+		Set("radio_mode", string(mode)).
+		Set("updated_at", "CURRENT_TIMESTAMP").
+		Where(sq.And{
+			sq.Eq{"id": ids},
+			sq.Eq{"type": models.TypeRadio},
+		})
+	if mode == models.RadioModeAudioOnly {
+		update = update.Set("is_video", false)
+	} else if isVideo != nil {
+		update = update.Set("is_video", *isVideo)
+	}
+
+	query, args, err := update.ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("build batch radio mode sql: %w", err)
+	}
+	result, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch update radio mode: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("batch radio mode rows affected: %w", err)
+	}
+	return rows, nil
+}
+
+// UpdateRadioDetectedMode ignores results for a station whose source or manual mode changed.
+func (r *SongRepository) UpdateRadioDetectedMode(ctx context.Context, id int64, source string, mode models.RadioMode) (bool, error) {
+	rows, err := r.queries.UpdateRadioDetectedMode(ctx, sqlc.UpdateRadioDetectedModeParams{ID: id, Url: source, Mode: string(mode)})
+	return rows > 0, err
+}
+
 // UpdateDuration 仅在原 duration 为 0 时回填时长。
 func (r *SongRepository) UpdateDuration(ctx context.Context, id int64, duration float64) error {
 	if err := r.queries.UpdateSongDuration(ctx, sqlc.UpdateSongDurationParams{
@@ -411,7 +492,7 @@ func (r *SongRepository) List(ctx context.Context, filter *SongFilter) ([]*model
 	}
 	sb := songSelectBuilder()
 	sb = applySongFilter(sb, filter)
-	sb = applyOrder(sb, filter.OrderBy, filter.Order, "added_at DESC", songOrderWhitelist, "")
+	sb = applySongOrder(sb, filter)
 	sb = applyPagination(sb, filter.Limit, filter.Offset)
 
 	query, args, err := sb.ToSql()
@@ -484,7 +565,7 @@ func (r *SongRepository) ListIDs(ctx context.Context, filter *SongFilter) ([]int
 	}
 	sb := sq.Select("id").From("songs")
 	sb = applySongFilter(sb, filter)
-	sb = applyOrder(sb, filter.OrderBy, filter.Order, "added_at DESC", songOrderWhitelist, "")
+	sb = applySongOrder(sb, filter)
 
 	query, args, err := sb.ToSql()
 	if err != nil {
@@ -638,16 +719,17 @@ func songSelectBuilder() sq.SelectBuilder {
 		"added_at", "updated_at",
 		"year", "genre", "language", "style",
 		"fingerprint", "fingerprint_duration",
-		"isrc", "track",
+		"isrc", "track", "disc",
 		"cue_source_path", "cue_track_index", "cue_audio_path",
 		"file_modified_at", "is_video",
 		"cue_start_seconds", "cue_end_seconds",
+		"rating", "radio_mode", "radio_detected_mode",
 	).From("songs")
 }
 
 func applySongFilter(sb sq.SelectBuilder, filter *SongFilter) sq.SelectBuilder {
 	if filter.Type != "" {
-		sb = sb.Where(sq.Eq{"type": filter.Type})
+		sb = applySongTypeFilter(sb, "type", filter.Type)
 	}
 	if filter.Keyword != "" {
 		kw := "%" + filter.Keyword + "%"
@@ -695,18 +777,44 @@ func applySongFilter(sb sq.SelectBuilder, filter *SongFilter) sq.SelectBuilder {
 	if filter.TagID > 0 {
 		sb = sb.Where("id IN (SELECT song_id FROM song_tag_links WHERE tag_id = ?)", filter.TagID)
 	}
+	// 评级过滤：MinRating 为「≥ 下限」，ExactRating 非 nil 为精确匹配（含 0=未评级）
+	if filter.MinRating > 0 {
+		sb = sb.Where(sq.GtOrEq{"rating": filter.MinRating})
+	}
+	if filter.ExactRating != nil {
+		sb = sb.Where(sq.Eq{"rating": *filter.ExactRating})
+	}
 	// 按自定义标签名模糊匹配
 	if filter.TagName != "" {
 		sb = sb.Where(`id IN (SELECT l.song_id FROM song_tag_links l JOIN song_tags t ON l.tag_id = t.id WHERE t.name LIKE ?)`, "%"+filter.TagName+"%")
 	}
-	// 排除属于「带指定 label 的歌单」的歌曲：只要歌在任一匹配歌单里就被过滤掉。
-	for _, label := range filter.ExcludePlaylistLabels {
-		sb = sb.Where(`id NOT IN (
+	return applySongPlaylistLabelExclusions(sb, "id", filter.ExcludePlaylistLabels)
+}
+
+// applySongPlaylistLabelExclusions removes songs that belong to any playlist
+// carrying one of the requested labels.
+func applySongPlaylistLabelExclusions(sb sq.SelectBuilder, idColumn string, labels []string) sq.SelectBuilder {
+	for _, label := range labels {
+		sb = sb.Where(fmt.Sprintf(`%s NOT IN (
 			SELECT ps.song_id FROM playlist_songs ps
 			JOIN playlists p ON p.id = ps.playlist_id
-			WHERE EXISTS (SELECT 1 FROM json_each(p.labels) WHERE value = ?))`, label)
+			WHERE EXISTS (SELECT 1 FROM json_each(p.labels) WHERE value = ?))`, idColumn), label)
 	}
 	return sb
+}
+
+// applySongTypeFilter applies the public comma-separated song type filter.
+// Invalid values are left to the HTTP handler's validation and produce no rows
+// when a repository caller bypasses that validation.
+func applySongTypeFilter(sb sq.SelectBuilder, typeColumn, songTypes string) sq.SelectBuilder {
+	types, err := ParseSongTypes(songTypes)
+	if err != nil {
+		return sb.Where(sq.Expr("1 = 0"))
+	}
+	if len(types) == 0 {
+		return sb
+	}
+	return sb.Where(sq.Eq{typeColumn: types})
 }
 
 // escapeLikeLiteral 转义 LIKE 表达式中的通配符 % _ \，用于把字符串当字面量匹配。
@@ -718,11 +826,11 @@ func escapeLikeLiteral(s string) string {
 
 func scanSongRow(scanner interface {
 	Scan(dest ...any) error
-}) (*models.Song, error) {
+}, extra ...any) (*models.Song, error) {
 	s := &models.Song{}
 	var fileModifiedAt sql.NullTime
 	var isVideo int64
-	if err := scanner.Scan(
+	dest := []any{
 		&s.ID, &s.Type, &s.Title, &s.Artist, &s.Album, &s.Duration,
 		&s.FilePath, &s.URL, &s.CoverPath, &s.CoverURL,
 		&s.Lyric, &s.LyricSource, &s.LyricRemoteURL, &s.FileSize,
@@ -731,11 +839,13 @@ func scanSongRow(scanner interface {
 		&s.AddedAt, &s.UpdatedAt,
 		&s.Year, &s.Genre, &s.Language, &s.Style,
 		&s.Fingerprint, &s.FingerprintDuration,
-		&s.ISRC, &s.Track,
+		&s.ISRC, &s.Track, &s.Disc,
 		&s.CueSourcePath, &s.CueTrackIndex, &s.CueAudioPath,
 		&fileModifiedAt, &isVideo,
 		&s.CueStartSeconds, &s.CueEndSeconds,
-	); err != nil {
+		&s.Rating, &s.RadioMode, &s.RadioDetectedMode,
+	}
+	if err := scanner.Scan(append(dest, extra...)...); err != nil {
 		return nil, fmt.Errorf("scan song: %w", err)
 	}
 	if fileModifiedAt.Valid {
@@ -748,45 +858,51 @@ func scanSongRow(scanner interface {
 
 func songRowToModel(row sqlc.Song) *models.Song {
 	return &models.Song{
-		ID:                  row.ID,
-		Type:                row.Type,
-		Title:               row.Title,
-		Artist:              row.Artist,
-		Album:               row.Album,
-		Year:                int(row.Year),
-		Genre:               row.Genre,
-		Language:            row.Language,
-		Style:               row.Style,
-		Duration:            row.Duration,
-		FilePath:            row.FilePath,
-		CachePath:           row.CachePath,
-		URL:                 row.Url,
-		CoverPath:           row.CoverPath,
-		CoverURL:            row.CoverUrl,
-		Lyric:               row.Lyric,
-		LyricSource:         row.LyricSource,
-		LyricRemoteURL:      row.LyricRemoteUrl,
-		FileSize:            row.FileSize,
-		Format:              row.Format,
-		BitRate:             int(row.BitRate),
-		SampleRate:          int(row.SampleRate),
-		IsLive:              row.IsLive != 0,
-		IsVideo:             row.IsVideo != 0,
-		PluginEntryPath:     row.PluginEntryPath,
-		SourceData:          row.SourceData,
-		DedupKey:            row.DedupKey,
-		Fingerprint:         row.Fingerprint,
-		FingerprintDuration: row.FingerprintDuration,
-		ISRC:                row.Isrc,
-		Track:               row.Track,
-		CueSourcePath:       row.CueSourcePath,
-		CueTrackIndex:       int(row.CueTrackIndex),
-		CueAudioPath:        row.CueAudioPath,
-		CueStartSeconds:     row.CueStartSeconds,
-		CueEndSeconds:       row.CueEndSeconds,
-		AddedAt:             row.AddedAt,
-		UpdatedAt:           row.UpdatedAt,
-		FileModifiedAt:      nullTimeToPtr(row.FileModifiedAt),
+		ID:                   row.ID,
+		Type:                 row.Type,
+		Title:                row.Title,
+		Artist:               row.Artist,
+		Album:                row.Album,
+		Year:                 int(row.Year),
+		Genre:                row.Genre,
+		Language:             row.Language,
+		Style:                row.Style,
+		Duration:             row.Duration,
+		FilePath:             row.FilePath,
+		CachePath:            row.CachePath,
+		URL:                  row.Url,
+		CoverPath:            row.CoverPath,
+		CoverURL:             row.CoverUrl,
+		Lyric:                row.Lyric,
+		LyricSource:          row.LyricSource,
+		LyricRemoteURL:       row.LyricRemoteUrl,
+		FileSize:             row.FileSize,
+		Format:               row.Format,
+		BitRate:              int(row.BitRate),
+		SampleRate:           int(row.SampleRate),
+		IsLive:               row.IsLive != 0,
+		IsVideo:              row.IsVideo != 0,
+		RadioMode:            models.RadioMode(row.RadioMode),
+		RadioDetectedMode:    models.RadioMode(row.RadioDetectedMode),
+		PluginEntryPath:      row.PluginEntryPath,
+		SourceData:           row.SourceData,
+		DedupKey:             row.DedupKey,
+		Fingerprint:          row.Fingerprint,
+		FingerprintDuration:  row.FingerprintDuration,
+		ISRC:                 row.Isrc,
+		Track:                row.Track,
+		Disc:                 row.Disc,
+		CueSourcePath:        row.CueSourcePath,
+		CueTrackIndex:        int(row.CueTrackIndex),
+		CueAudioPath:         row.CueAudioPath,
+		CueStartSeconds:      row.CueStartSeconds,
+		CueEndSeconds:        row.CueEndSeconds,
+		Rating:               int(row.Rating),
+		AddedAt:              row.AddedAt,
+		UpdatedAt:            row.UpdatedAt,
+		FileModifiedAt:       nullTimeToPtr(row.FileModifiedAt),
+		MetadataOverrideMask: models.SongMetadataMask(row.MetadataOverrideMask),
+		MetadataEditedAt:     row.MetadataEditedAt,
 	}
 }
 
@@ -838,11 +954,14 @@ func songCreateParams(s *models.Song) sqlc.CreateSongParams {
 		FingerprintDuration: s.FingerprintDuration,
 		Isrc:                s.ISRC,
 		Track:               s.Track,
+		Disc:                s.Disc,
 		CueSourcePath:       s.CueSourcePath,
 		CueTrackIndex:       int64(s.CueTrackIndex),
 		CueAudioPath:        s.CueAudioPath,
 		CueStartSeconds:     s.CueStartSeconds,
 		CueEndSeconds:       s.CueEndSeconds,
+		Rating:              int64(s.Rating),
+		RadioMode:           string(s.RadioMode),
 		FileModifiedAt:      nullTimeFromPtr(s.FileModifiedAt),
 	}
 }
@@ -878,11 +997,14 @@ func songUpdateParams(s *models.Song) sqlc.UpdateSongParams {
 		FingerprintDuration: s.FingerprintDuration,
 		Isrc:                s.ISRC,
 		Track:               s.Track,
+		Disc:                s.Disc,
 		CueSourcePath:       s.CueSourcePath,
 		CueTrackIndex:       int64(s.CueTrackIndex),
 		CueAudioPath:        s.CueAudioPath,
 		CueStartSeconds:     s.CueStartSeconds,
 		CueEndSeconds:       s.CueEndSeconds,
+		Rating:              int64(s.Rating),
+		RadioMode:           string(s.RadioMode),
 		FileModifiedAt:      nullTimeFromPtr(s.FileModifiedAt),
 		ID:                  s.ID,
 	}
@@ -1150,6 +1272,12 @@ func buildFacetSelect(field string, f *FacetFilter) (sq.SelectBuilder, error) {
 		"COUNT(*) AS count",
 		"MAX(CASE WHEN cover_path != '' OR cover_url != '' THEN id END) AS cover_song_id",
 	).From("songs").Where(facetBaseCond(field, col))
+	if f != nil && f.Type != "" {
+		sb = applySongTypeFilter(sb, "type", f.Type)
+	}
+	if f != nil {
+		sb = applySongPlaylistLabelExclusions(sb, "id", f.ExcludePlaylistLabels)
+	}
 
 	if f != nil && f.Keyword != "" {
 		sb = sb.Where(sq.Expr("CAST("+col+" AS TEXT) LIKE ?", "%"+f.Keyword+"%"))
@@ -1180,6 +1308,12 @@ func buildTagFacetSelect(f *FacetFilter) sq.SelectBuilder {
 		// t.name 是固定列（非用户输入），用 sq.Like 防 SQL 注入同列维度范式。
 		sb = sb.Where(sq.Like{"t.name": "%" + f.Keyword + "%"})
 	}
+	if f != nil && f.Type != "" {
+		sb = applySongTypeFilter(sb, "s.type", f.Type)
+	}
+	if f != nil {
+		sb = applySongPlaylistLabelExclusions(sb, "s.id", f.ExcludePlaylistLabels)
+	}
 	sb = sb.GroupBy("t.id", "t.name")
 	sb = applyFacetOrder(sb, f)
 	if f != nil {
@@ -1203,6 +1337,12 @@ func buildArtistFacetSelect(f *FacetFilter) sq.SelectBuilder {
 		Where(sq.Eq{"sa.role": models.ArtistRoleArtist})
 	if f != nil && f.Keyword != "" {
 		sb = sb.Where(sq.Like{"a.name": "%" + f.Keyword + "%"})
+	}
+	if f != nil && f.Type != "" {
+		sb = applySongTypeFilter(sb, "s.type", f.Type)
+	}
+	if f != nil {
+		sb = applySongPlaylistLabelExclusions(sb, "s.id", f.ExcludePlaylistLabels)
 	}
 	sb = sb.GroupBy("a.id", "a.name")
 	sb = applyFacetOrder(sb, f)
@@ -1255,14 +1395,29 @@ func (r *SongRepository) ListFacet(ctx context.Context, field string, f *FacetFi
 
 // CountFacet 返回某维度去重取值的总数（用于前端分页判断），与 ListFacet 共享 keyword 过滤。
 func (r *SongRepository) CountFacet(ctx context.Context, field, keyword string) (int64, error) {
+	return r.CountFacetFiltered(ctx, field, &FacetFilter{Keyword: keyword})
+}
+
+// CountFacetFiltered returns the number of distinct facet values matching f.
+func (r *SongRepository) CountFacetFiltered(ctx context.Context, field string, f *FacetFilter) (int64, error) {
+	if f == nil {
+		f = &FacetFilter{}
+	}
 	var inner sq.SelectBuilder
 	if field == songFacetTagField {
 		// tag：去重标签数（仅计至少挂了一首歌的标签）。内连接排除空标签。
 		inner = sq.Select("1").
 			From("song_tags t").
 			Join("song_tag_links l ON t.id = l.tag_id")
-		if keyword != "" {
-			inner = inner.Where(sq.Like{"t.name": "%" + keyword + "%"})
+		if f.Type != "" || len(f.ExcludePlaylistLabels) > 0 {
+			inner = inner.Join("songs s ON s.id = l.song_id")
+			if f.Type != "" {
+				inner = applySongTypeFilter(inner, "s.type", f.Type)
+			}
+		}
+		inner = applySongPlaylistLabelExclusions(inner, "s.id", f.ExcludePlaylistLabels)
+		if f.Keyword != "" {
+			inner = inner.Where(sq.Like{"t.name": "%" + f.Keyword + "%"})
 		}
 		inner = inner.GroupBy("t.id")
 	} else if field == songFacetArtistField {
@@ -1271,8 +1426,15 @@ func (r *SongRepository) CountFacet(ctx context.Context, field, keyword string) 
 			From("song_artists sa").
 			Join("artists a ON a.id = sa.artist_id").
 			Where(sq.Eq{"sa.role": models.ArtistRoleArtist})
-		if keyword != "" {
-			inner = inner.Where(sq.Like{"a.name": "%" + keyword + "%"})
+		if f.Type != "" || len(f.ExcludePlaylistLabels) > 0 {
+			inner = inner.Join("songs s ON s.id = sa.song_id")
+			if f.Type != "" {
+				inner = applySongTypeFilter(inner, "s.type", f.Type)
+			}
+		}
+		inner = applySongPlaylistLabelExclusions(inner, "s.id", f.ExcludePlaylistLabels)
+		if f.Keyword != "" {
+			inner = inner.Where(sq.Like{"a.name": "%" + f.Keyword + "%"})
 		}
 		inner = inner.GroupBy("a.id")
 	} else {
@@ -1281,8 +1443,12 @@ func (r *SongRepository) CountFacet(ctx context.Context, field, keyword string) 
 			return 0, ErrNotFound
 		}
 		inner = sq.Select("1").From("songs").Where(facetBaseCond(field, col))
-		if keyword != "" {
-			inner = inner.Where(sq.Expr("CAST("+col+" AS TEXT) LIKE ?", "%"+keyword+"%"))
+		if f.Type != "" {
+			inner = applySongTypeFilter(inner, "type", f.Type)
+		}
+		inner = applySongPlaylistLabelExclusions(inner, "id", f.ExcludePlaylistLabels)
+		if f.Keyword != "" {
+			inner = inner.Where(sq.Expr("CAST("+col+" AS TEXT) LIKE ?", "%"+f.Keyword+"%"))
 		}
 		inner = inner.GroupBy(col)
 	}
@@ -1302,15 +1468,27 @@ func (r *SongRepository) CountFacet(ctx context.Context, field, keyword string) 
 // 不分页、不带计数与封面，供第三方客户端一次性拉取曲库歌名/歌手名做本地搜索匹配。
 // 未知 field 返回 ErrNotFound，交由 handler 转 400。
 func (r *SongRepository) ListDistinctNames(ctx context.Context, field string) ([]string, error) {
+	return r.ListDistinctNamesFiltered(ctx, field, nil)
+}
+
+// ListDistinctNamesFiltered returns distinct names matching the optional song
+// type and playlist-label filters.
+func (r *SongRepository) ListDistinctNamesFiltered(ctx context.Context, field string, filter *SongFilter) ([]string, error) {
 	// artist 维度走 song_artists 关联表：返回逐个参与歌手（多值已拆开），而非
 	// songs.artist 整串去重。仅 role='artist'。
 	if field == "artist" {
-		query, args, err := sq.Select("DISTINCT a.name").
+		artistQuery := sq.Select("DISTINCT a.name").
 			From("song_artists sa").
 			Join("artists a ON a.id = sa.artist_id").
-			Where(sq.Eq{"sa.role": models.ArtistRoleArtist}).
-			OrderBy("a.name COLLATE NOCASE ASC").
-			ToSql()
+			Join("songs s ON s.id = sa.song_id").
+			Where(sq.Eq{"sa.role": models.ArtistRoleArtist})
+		if filter != nil && filter.Type != "" {
+			artistQuery = applySongTypeFilter(artistQuery, "s.type", filter.Type)
+		}
+		if filter != nil {
+			artistQuery = applySongPlaylistLabelExclusions(artistQuery, "s.id", filter.ExcludePlaylistLabels)
+		}
+		query, args, err := artistQuery.OrderBy("a.name COLLATE NOCASE ASC").ToSql()
 		if err != nil {
 			return nil, fmt.Errorf("build distinct artist sql: %w", err)
 		}
@@ -1342,6 +1520,12 @@ func (r *SongRepository) ListDistinctNames(ctx context.Context, field string) ([
 		From("songs").
 		Where(sq.NotEq{col: ""}).
 		OrderBy(col + " ASC")
+	if filter != nil && filter.Type != "" {
+		sb = applySongTypeFilter(sb, "type", filter.Type)
+	}
+	if filter != nil {
+		sb = applySongPlaylistLabelExclusions(sb, "id", filter.ExcludePlaylistLabels)
+	}
 
 	query, args, err := sb.ToSql()
 	if err != nil {
@@ -1564,4 +1748,15 @@ func (r *SongRepository) ListDirectSongs(ctx context.Context, absPrefix, keyword
 		songs = append(songs, song)
 	}
 	return songs, rows.Err()
+}
+
+// ListIndexedLocalTracks lists the paths and display fields of indexed local tracks.
+func (r *SongRepository) ListIndexedLocalTracks(ctx context.Context) ([]sqlc.ListIndexedLocalTracksRow, error) {
+	return r.queries.ListIndexedLocalTracks(ctx)
+}
+
+func (r *SongRepository) UpdateFileObservation(ctx context.Context, id int64, path string, size int64, modified time.Time) error {
+	return r.queries.UpdateSongFileObservation(ctx, sqlc.UpdateSongFileObservationParams{
+		ID: id, FilePath: path, FileSize: size, FileModifiedAt: nullTimeFromPtr(&modified),
+	})
 }

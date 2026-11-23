@@ -252,8 +252,7 @@ static/              # Static assets directory (optional)
 | `license` | string | No | License |
 | `entryPath` | string | Yes | Route prefix (lowercase letters + digits + hyphens, e.g. `my-plugin`) |
 | `main` | string | Yes | Entry file path (must end in `.js`) |
-| `minHostVersion` | string | No | Minimum host version. Install, update and load fail closed when the host is older; `dev` builds satisfy any requirement |
-| `capabilities` | string[] | No | Required host execution capabilities (`music-source`, `lyrics-provider`, `cover-provider`, `page`, `command`, `inter-plugin`). Declaring an unsupported capability fails install/update/load closed; omitted means no requirement |
+| `minHostVersion` | string | No | Minimum host version requirement |
 | `permissions` | string[] | Yes | Permission list (may be an empty array `[]`) |
 | `renderEngine` | string | No | Engine the client uses to render the plugin UI: `webview` / `lynx`; missing or empty string means `webview`. See [renderEngine — Declaring the Rendering Engine](#renderengine--declaring-the-rendering-engine) |
 | `updateUrl` | string | No | Remote update check URL |
@@ -301,6 +300,8 @@ Prerequisites for declaring `lynx`:
 - Install `@songloft/lynx-plugin-sdk` as the host communication SDK (replaces `@songloft/client-sdk` used in WebView)
 - Set `"staticHash": false` in `plugin.json` (prevents bundle files from being renamed)
 
+The server compresses full GET `.bundle` responses according to the client's `Accept-Encoding`, reducing first-load transfer size. Range responses and HEAD preserve original byte lengths; conditional caching still returns 304. Plugins should render the page shell before asynchronously loading configuration and business data so the first view does not wait for the network.
+
 Build output structure:
 
 ```
@@ -313,6 +314,26 @@ static/
 **Host communication**: Lynx plugins do NOT use `window.SongloftPlugin` / `@songloft/client-sdk` (those are WebView-only). Instead, use `@songloft/lynx-plugin-sdk`'s `invokeHost` / `onPlayerState` / `onThemeChange` APIs, which communicate via the `NativeModules.SongloftPluginBridge` native bridge.
 
 **Fallback mechanism**: Clients that don't support Lynx (e.g. Flutter-based builds) open `index.html`, which bootstraps web-core to load `.web.bundle` in a WebView — functionally equivalent, just without native performance benefits.
+
+The server versions the bridge script and module URLs by embedded content. Plugins can declare their own Web bundle URL on the fallback page’s bridge script tag with `data-songloft-lynx-bundle`, for example `static/main.web.bundle?v=<content-hash>`. Relative URLs resolve against the plugin page’s `<base>`. When omitted, the shim uses the original fixed URL.
+
+**Toolchain 2.22.0+ does this automatically**: when `songloft-plugin build` flattens `main.web.bundle`, it computes the first 16 hexadecimal digits of the bundle’s SHA-256 and declares the versioned URL on the generated fallback page. If the plugin ships its own `static/index.html`, it still wins (the build overlays the plugin’s `static/` directory over the generated page), and the declaration format is unchanged. The versioned URL requires an updated server whose `lynx-plugin-bridge-shim` reads the declaration.
+
+**Static asset caching**
+
+- The server versions the host files it ships by actual content. Give plugin-owned JavaScript, CSS, images, and fonts content-hashed filenames or URLs during the build and update their references at the same time. Identical contents can reuse cached responses, and changed contents get a new URL.
+- The builder injects content hashes into the filenames of JS, CSS, images, and fonts under `static/` and rewrites their references (disable with `staticHash: false` in the manifest). The Lynx `main.web.bundle` / `main.lynx.bundle` keep fixed filenames for compatibility with older hosts and clients that load the fixed entry directly; their cache version comes from the fallback page declaration (see above). MIoT and Bili originally generated a versioned `static/index.html` with custom scripts; this behavior is built into the toolchain since 2.22.0, so the custom scripts can be dropped after upgrading the dependency.
+- Check that the HTML declaration in the final ZIP matches the packaged bundle hash. Then open the fallback page under a deployment subpath and confirm that the browser requests the new URL. Clients with a year-long cached response can keep using the old bytes even after the server changes the headers for that URL.
+
+
+Use `apiGet<T>('/api/...')` `apiPost<T>(path, body)`, `apiPut<T>(path, body)` and `apiDelete<T>(path)` from `@songloft/lynx-plugin-sdk`. The `plugin.apiRequest` bridge binds requests to the current frame's plugin. The host handles authentication and server base paths without exposing tokens. GET/POST/PUT/DELETE JSON requests have a 60-second host deadline and a 65-second bridge deadline; failures throw. Absolute URLs, encoded route paths and traversal are rejected. Update the Lynx host or the server-provided Web fallback shim before using these APIs.
+
+`PluginSocket('/status/ws?...')` opens a text socket scoped to the current plugin, exposing `readyState`, `onopen/onmessage/onerror/onclose`, `send` and `close`. The host constructs the authenticated URL, limits each frame to eight sockets and cleans them up when released. Plugins supply relative paths, never server URLs or Tokens. Events use `pluginSocket` (`{id,type,data?}`); business routes must preserve consistent HTTP/WS prefixes. Close business connections while hidden and reconcile state on resume.
+
+Complex plugins implement layered back handling through `plugin.navigationState` / `plugin.navigationResult` and `navigationBack` pushes. Preserve session and request ids; stale replies must not consume a new page's back event. External links use `plugin.openUrl` (HTTP/HTTPS only); song covers use `plugin.resourceUrl` (host song-cover endpoints only). These capabilities need the matching updated host; do not substitute handwritten global APIs for the SDK.
+
+
+Web fallback loads its runtime through `/api/v1/jsplugin-assets/web-core/*`. Full servers automatically reuse `web-core/` from the embedded Lynx Web frontend; no extra copy is needed. Lite builds and older builds embedding Flutter Web still require a disk directory, searched in order: `data/web-core/`, `web-core/` in the working directory, then `web-core/` beside the executable. A disk directory overrides the entire runtime without mixing embedded files. Fixed filenames use `no-cache` so upgrades revalidate them. The generated entry configures the bridge before loading an absolute bundle URL. Lynx HTML fallback omits COEP to support web-core srcdoc initialization in Chromium 121; ordinary WebView plugins retain `credentialless`. Cross-origin embedding of this HTML fallback from an isolated host is outside this change's supported configurations. Lynx hosts load native/Web bundles directly and do not use this HTML entry.
 
 ---
 
@@ -441,6 +462,8 @@ All APIs are accessed through the global `songloft` object.
 ### HTTP Requests (Global fetch)
 
 Use the standard global `fetch` function to make HTTP requests (provided by a runtime polyfill, returns a Promise). **No permission declaration required.**
+
+The host runtime's `fetch` and `songloft.net.httpStream` give priority to Songloft's global HTTP proxy setting (`/settings/http-proxy`). Changes take effect for subsequent requests without restarting or reloading plugins. When the setting is empty, the runtime uses the process's `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` variables, including lowercase forms. Loopback destinations connect directly. This rule applies to plugin backend requests. Page-side `fetch` is handled by the browser.
 
 ```javascript
 // GET
@@ -631,15 +654,45 @@ async function playlistsExample() {
 ```
 
 
+Playlist member results (including `brief: true`) also contain `playlist_added_at`, the RFC 3339 value of `playlist_songs.added_at`. `Song.added_at` remains library ingestion time. The same song may have different join times in different playlists; ordinary song details omit this field. Sorting and retained members in atomic replacement preserve join times; removing and adding again records a new time.
+
 ### Atomic playlist sync and deferred metadata probing
 
 Hosts containing #558 support provide `await songloft.playlists.replaceSongs(playlistId, songIds)` (`playlists.write`). Regular playlists only: membership and order are replaced within one UnitOfWork transaction. An empty array clears membership. Missing, duplicate or incompatible IDs are rejected, and any write failure rolls back. Built-in playlists cannot use this whole-membership replacement API; existing add/remove/reorder methods are unaffected.
 
 Directory sync may call `await songloft.songs.create(inputs, { probeMetadata: false })` (`songs.write`) to import records without background audio probing. Omitting this option preserves automatic metadata completion. It does not download files or change playback resolution. If the atomic method is missing on older hosts, stop sync and request an upgrade instead of falling back to clear-then-add.
 
+### songloft.events — Playlist membership changes
+
+Hosts containing #563 support provide `onPlaylistSongsChange(handler)` / `offPlaylistSongsChange()`, both returning Promises. Subscription requires `playlists.read` (or `playlists.*`). Each plugin has one handler; registering again replaces it. This server-side QuickJS subscription works independently of an open settings WebView.
+
+```javascript
+async function onInit() {
+    if (!songloft.events.onPlaylistSongsChange) {
+        throw new Error('Upgrade the host to subscribe to playlist membership changes');
+    }
+    await songloft.events.onPlaylistSongsChange(async function(event) {
+        if (event.playlistId !== 1) return; // Built-in Favorites
+        // event.type === 'add' means love; 'remove' means unlove.
+        // Use event.song.title / artist with the third-party sync API.
+        console.log(event.type, event.song.title, event.song.artist);
+    });
+}
+```
+
+Event fields: `playlistId`, `songId`, `type: 'add' | 'remove'`, `timestamp` (Unix milliseconds at commit notification time), and a `song: { id, title, artist }` metadata snapshot. The snapshot remains usable if orphan cleanup deletes the song after removal.
+
+Notifications cover membership additions/removals through the playlist service, including client HTTP requests and plugin `playlists.addSongs/removeSongs/replaceSongs`, for Favorites (id=1), Radio Favorites (id=2), and regular playlists. Batch adds notify only actual insertions; duplicates and skipped entries emit nothing. If an earlier chunk commits and a later chunk fails, committed additions are still notified. Whole-playlist replacement notifies only the committed membership difference. Rollbacks, sorting, and reordering identical membership emit nothing. Cascading cleanup when deleting playlists/library songs, backup restoration, and internal membership replacement during local conversion are outside this event's scope.
+
+Handlers may use async/await. Dispatch runs asynchronously through bounded queues, so writes do not wait for plugin network requests. Sequential writes are delivered in notification submission order; concurrent writes have no global transaction ordering guarantee. Events are neither persisted nor replayed. Full queues, plugin failures, or server restarts may lose notifications, so sync plugins should retain periodic reconciliation.
+
+Idle eviction preserves subscription identity and the next change wakes the plugin. Restore the handler in `onInit`, using a stored feature flag if needed. Explicit `await songloft.events.offPlaylistSongsChange()` or disabling the plugin cancels the subscription; do not unsubscribe in `onDeinit` if you need idle wakeup. Reloading rechecks current permissions. QuickJS events do not directly push to WebViews. Updated Flutter/Lynx clients wait on authenticated `GET /api/v1/playlists/favorites/changes?cursor=...` requests. Initial connection, reconnection and server restart reconcile current favorites. Committed song/radio favorite changes immediately wake waiting requests and refresh heart icons and built-in playlist caches. The server holds unchanged requests for up to 25 seconds; clients do not periodically scan the complete favorite set. Backgrounding or session changes stop the subscription; resuming reconciles again. Older hosts returning 404 disable the automatic subscription. Plugin pages may keep using `favorite.refresh` for older-client compatibility; QuickJS does not need the client bridge.
+
 ### songloft.tags — Tag Operations
 
 Requires permission: `tags.read` (read) or `tags.write` (modify); or the wildcard sugar `tags.*`.
+
+Hosts containing #562 share tag definitions across songs and playlists. `song_count` counts songs; `playlist_count` counts visible playlists. Playlist relationships live in existing `labels` as `tag:<id>` and preserve system markers. Use the tag API for relationships; metadata edits preserve current bindings. Deleting a tag clears both kinds of relationships in one transaction.
 
 ```javascript
 async function tagsExample() {
@@ -666,16 +719,16 @@ async function tagsExample() {
     var newTag = await songloft.tags.create({ name: "My Tag", color: "#ff6600" });
 
     // Update a tag
-    await songloft.tags.update({ id: 1, name: "New Name", color: "#00cc00" });
+    await songloft.tags.update(1, { name: "New Name", color: "#00cc00" });
 
     // Delete a tag
     await songloft.tags.delete(1);
 
     // Batch-bind songs to a tag (returns { bound: <actual count> })
-    var result = await songloft.tags.bindSongs({ tagId: 1, songIds: [10, 20, 30] });
+    var result = await songloft.tags.bindSongs(1, [10, 20, 30]);
 
     // Batch-unbind songs (returns { unbound: <actual count> })
-    var result2 = await songloft.tags.unbindSongs({ tagId: 1, songIds: [10, 20] });
+    var result2 = await songloft.tags.unbindSongs(1, [10, 20]);
 }
 ```
 
@@ -686,11 +739,14 @@ async function tagsExample() {
 | `list(options?)` | `tags.read` | `{ keyword?, orderBy?, order?, limit?, offset? }` | Tag[] |
 | `getById(id)` | `tags.read` | `id: number` | Tag |
 | `getSongTags(songId)` | `tags.read` | `songId: number` | Tag[] |
+| `getPlaylistTags(playlistId)` | `tags.read` | `playlistId: number` | Tag[] |
+| `bindPlaylists(tagId, playlistIds)` | `tags.write` | `number, number[]` | `{ bound: number }` |
+| `unbindPlaylists(tagId, playlistIds)` | `tags.write` | `number, number[]` | `{ unbound: number }` |
 | `create(options)` | `tags.write` | `{ name: string, color: string }` | Tag |
-| `update(options)` | `tags.write` | `{ id: number, name: string, color: string }` | void |
+| `update(id, fields)` | `tags.write` | `number, { name?: string, color?: string }` | void |
 | `delete(id)` | `tags.write` | `id: number` | void |
-| `bindSongs(options)` | `tags.write` | `{ tagId: number, songIds: number[] }` | `{ bound: number }` |
-| `unbindSongs(options)` | `tags.write` | `{ tagId: number, songIds: number[] }` | `{ unbound: number }` |
+| `bindSongs(tagId, songIds)` | `tags.write` | `number, number[]` | `{ bound: number }` |
+| `unbindSongs(tagId, songIds)` | `tags.write` | `number, number[]` | `{ unbound: number }` |
 
 ### songloft.comm — Inter-Plugin Communication
 
@@ -735,7 +791,7 @@ async function pluginInfoExample() {
     // Get the plugin's JWT Token (for accessing host APIs, such as authenticated resources like music files and covers)
     var token = await songloft.plugin.getToken();
 
-    // Get the base URL of the host service (e.g. http://192.168.1.100:58091)
+    // Get the base URL of the host service (e.g. http://localhost:58091/songloft)
     var hostUrl = await songloft.plugin.getHostUrl();
 }
 ```
@@ -746,18 +802,14 @@ async function pluginInfoExample() {
 async function getMusicUrl(songId) {
     var host = await songloft.plugin.getHostUrl();
     var token = await songloft.plugin.getToken();
-    return host + "/music/" + encodedPath + "?access_token=" + token;
+    return host + "/api/v1/songs/" + songId + "/play?access_token=" + token;
 }
 ```
 
 **Method reference:**
-- `getToken()` — returns the current short-lived plugin credential (about one hour) for protected host APIs. Credentials are issued per plugin, scoped by `permissions`, and re-issued by the host before expiry; plugins do not need to cache or refresh them
-- `getHostUrl()` — returns the base URL of the host service, used to build complete API or resource addresses
-
-> A plugin credential can only reach the data plane (songs/playlists/tags/proxy) and its own
-> `/api/v1/jsplugin/{entryPath}/*`. Settings, configs, scanning, upgrade and plugin-management
-> endpoints have no matching scope and are never reachable. Updating, disabling, uninstalling a
-> plugin or an administrator revocation invalidates old credentials immediately; a host restart does too.
+- `getToken()` — returns the currently valid JWT access_token string, usable for accessing the host's protected APIs
+- `getHostUrl()` — returns the loopback base URL with the deployment path. Append `/api/v1/...` to call a host API
+- `getNetworkAddresses()` — returns local IPv4 base URLs for LAN access, each with the deployment path
 
 ### songloft.lyrics — Lyrics Provider
 
@@ -996,34 +1048,6 @@ Declare only the permissions you actually need to reduce security risk:
 }
 ```
 
-### HTTP scopes match the manifest
-
-The credential from `plugin.getToken()` only carries HTTP scopes declared in the manifest:
-
-| Path | Method | Required scope |
-|---|---|---|
-| `/api/v1/songs*` (including play/lyric/cover) | GET/HEAD | `songs.read` |
-| `/api/v1/songs*` | others | `songs.write` |
-| `/api/v1/playlists*` | GET/HEAD | `playlists.read` |
-| `/api/v1/playlists*` | others | `playlists.write` |
-| `/api/v1/song-tags*`, `/api/v1/songs/{id}/song-tags` | GET/HEAD | `tags.read` |
-| same | others | `tags.write` |
-| `/api/v1/play-history` | GET | `songs.read` |
-| `/api/v1/proxy*` | any | `net` |
-| `/api/v1/jsplugin/{own entryPath}/*` | any | no extra scope |
-
-Unclassified paths are rejected with 403, including `/api/v1/settings/*`, `/api/v1/configs/*`,
-`/api/v1/scan`, `/api/v1/auth/*`, `/api/v1/upgrade/*` and `/api/v1/jsplugins/*`. Wildcards
-(`songs.*` etc.) are expanded at issue time.
-
-> Compatibility window: for a bounded period after upgrade (14 days by default, controlled by
-> `plugin_credential_legacy_until`), the host still accepts the legacy `plugin-system` century
-> token and new tokens carrying all plugin scopes. A fresh install has no legacy consumers, so the
-> window is closed immediately and manifest scopes apply from day one. Inside the window the legacy
-> token keeps its old data-plane behaviour (including plugin self paths) but can never reach
-> management endpoints; after the window it is rejected outright.
-> `POST /api/v1/jsplugins/revoke-all-credentials` revokes everything and closes the window at once.
-
 ---
 
 ## 7. Inter-Plugin Communication
@@ -1188,6 +1212,14 @@ if (isClient()) {
 ```
 
 Build-free vanilla static pages need no install — just use the injected `window.SongloftPlugin.player` directly (only losing type hints).
+
+### Opening external links and fullscreen video
+
+Check `host.getInfo().capabilities` for `plugin.openUrl` or `player.openVideo`. WebView plugins use `host.openExternalUrl(url)` and `player.openVideo({ id })`. Native Lynx plugins use `invokeHost('plugin', 'openUrl', { url })` and `invokeHost('player', 'openVideo', { id })`. External links accept absolute HTTP(S) URLs. Fullscreen video accepts a library entry ID. See the [Lynx platform support table](https://github.com/songloft-org/songloft-player-lynx/blob/main/docs/en/reference/plugin-client-sdk.md#lynx-platform-support) for support and verification by platform.
+
+### Plugin audio effects
+
+Check `host.getInfo().capabilities` for `player.audioEffects`. Compatible hosts provide `player.getAudioEffects()`, `player.applyAudioEffects({ playbackId, effects })`, and `player.clearAudioEffects({ playbackId })`. Start host playback with a song or playlist, then use `supported` to display the effects available for the current output. Clearing effects restores user settings and playback continues. Lynx provides EQ presets on supported Android, iOS, macOS, Windows, and Web outputs. Native Lynx plugins use the same contract through `invokeHost('player', method, params)`. See the [Lynx plugin client SDK](https://github.com/songloft-org/songloft-player-lynx/blob/main/docs/en/reference/plugin-client-sdk.md#plugin-audio-effects).
 
 ### Favorite State Sync — Notify the Host After Changing Favorites
 
@@ -1621,18 +1653,8 @@ A new permission constant must be added in three places, or plugins cannot use i
 1. `AllPermissions` in the host's `internal/jsplugin/permissions.go`
 2. `VALID_PERMISSIONS` in `plugins/toolchain/packages/plugin-builder/src/manifest.ts` — **this one hard-fails at build time** (`unknown permission: xxx`), so missing it means the plugin cannot even produce an artifact
 3. `AVAILABLE_PERMISSIONS` in `plugins/toolchain/packages/create-songloft-plugin/src/index.ts` (the scaffold's checklist)
-4. If the permission gates plugin-credential HTTP access: the scope constant and `HTTPPluginScopes` in `internal/plugincred/scopes.go`, plus the `RequiredScope` path mapping; a `jsplugin` test locks scopes to permission constants
 
-`ValidatePermissions` deliberately **only warns on unknown permissions rather than rejecting**: it sits on the mandatory install/update path, and rejecting would make a plugin declaring a new permission uninstallable on older hosts. `minHostVersion` and `capabilities` are different: they are execution gates (S-02). When the host version is too old or the capability surface is unsupported, install, upload, registry install, update, auto-update, startup load and lazy load all fail closed; UI hints are not a security boundary.
-
-### Plugin credentials (S-02)
-
-- Credentials are issued per plugin principal (`plugin:<entryPath>`), valid for one hour by default, and carry a global generation and a per-plugin generation; any mismatch is rejected.
-- The global generation increments on every host start (persisted at `configs.plugin_credential_state`), so old signatures die immediately on restart instead of pretending a restart is revocation.
-- Plugin update, disable, uninstall and administrator revocation bump the plugin generation and clear the host cache; revocation never takes a DB-query bypass.
-- Scopes come from the manifest (`strict`) or all plugin scopes (`legacy`). The profile is managed at `/api/v1/jsplugins/credential-policy`, defaulting to `auto`: `legacy` inside the window and `strict` after it closes.
-- Scope checks live in `internal/plugincred`; the middleware fails closed on unclassified paths and a plugin credential can never act as an admin credential.
-- **Never** log or persist `access_token`; credentials are short-lived and revocable, call `plugin.getToken()` again when needed.
+`ValidatePermissions` deliberately **only warns on unknown permissions rather than rejecting**: it sits on the mandatory install/update path, and rejecting would make a plugin declaring a new permission uninstallable on older hosts. `minHostVersion` is purely informational and never enforced; still wait for host adoption before shipping a plugin that needs the new permission.
 
 ### Runtime projection of `net:insecure-tls`
 

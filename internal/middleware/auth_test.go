@@ -10,6 +10,7 @@ import (
 	"songloft/internal/database/testutil"
 	"songloft/internal/models"
 	"songloft/internal/services"
+	"songloft/internal/services/playactivity"
 )
 
 // newAuthServiceForTest 启动 :memory: SQLite 并构造一份可用的 AuthService。
@@ -46,6 +47,9 @@ func TestAuthMiddlewareSuccess(t *testing.T) {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := playactivity.SessionFromContext(r.Context()).ClientID; got == "" {
+			t.Error("play activity session client ID should be populated by auth middleware")
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("success"))
 	})
@@ -64,6 +68,31 @@ func TestAuthMiddlewareSuccess(t *testing.T) {
 
 	if rr.Body.String() != "success" {
 		t.Errorf("handler returned unexpected body: got %v want %v", rr.Body.String(), "success")
+	}
+}
+
+func TestAuthMiddlewareRestoresSpaceSeparatedPlaybackQuery(t *testing.T) {
+	authService := newAuthServiceForTest(t)
+	defer authService.Close()
+	login, err := authService.Login(context.Background(), "testuser", "testpass", "speaker")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := AuthMiddleware(authService)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for name, want := range map[string]string{"format": "mp3", "seek": "12", "speed": "1.25"} {
+			if got := r.URL.Query().Get(name); got != want {
+				t.Errorf("%s = %q, want %q", name, got, want)
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/songs/7/play?access_token="+
+		login.AccessToken+"%20format=mp3%20seek=12%20speed=1.25", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
 	}
 }
 

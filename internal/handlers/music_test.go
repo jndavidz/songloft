@@ -13,13 +13,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"songloft/internal/contextkeys"
 	"songloft/internal/database"
 	"songloft/internal/database/testutil"
 	"songloft/internal/models"
 	"songloft/internal/services"
+	"songloft/internal/services/playactivity"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -102,6 +105,45 @@ func TestListSongsWithFilter(t *testing.T) {
 
 	if resp["total"].(float64) != 2 {
 		t.Errorf("total = %v, want 2", resp["total"])
+	}
+}
+
+func TestListSongsWithCommaSeparatedTypes(t *testing.T) {
+	repo := newTestSongRepo(t)
+	songService := services.NewSongService(repo, nil, nil, nil, nil, nil)
+	handler := NewSongHandler(songService, nil, nil, nil, nil, nil)
+
+	seedSong(t, repo, &models.Song{Type: models.TypeLocal, Title: "本地", FilePath: "/music/local.mp3"})
+	seedSong(t, repo, &models.Song{Type: models.TypeRemote, Title: "网络", URL: "https://example.com/remote.mp3"})
+	seedSong(t, repo, &models.Song{Type: models.TypeRadio, Title: "电台", URL: "https://example.com/radio.m3u8"})
+
+	req := httptest.NewRequest("GET", "/api/v1/songs?type=local,remote", nil)
+	rr := httptest.NewRecorder()
+	handler.ListSongs(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handler returned status %d, want %d", rr.Code, http.StatusOK)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got := int(resp["total"].(float64)); got != 2 {
+		t.Fatalf("total = %d, want 2", got)
+	}
+}
+
+func TestListSongsRejectsUnsupportedType(t *testing.T) {
+	repo := newTestSongRepo(t)
+	songService := services.NewSongService(repo, nil, nil, nil, nil, nil)
+	handler := NewSongHandler(songService, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest("GET", "/api/v1/songs?type=unsupported", nil)
+	rr := httptest.NewRecorder()
+	handler.ListSongs(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("handler returned status %d, want %d", rr.Code, http.StatusBadRequest)
 	}
 }
 
@@ -837,6 +879,91 @@ func playSeekRequestMethod(t *testing.T, handler *SongHandler, id int64, query, 
 	return rr
 }
 
+type blockingResponseWriter struct {
+	header  http.Header
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	body    bytes.Buffer
+	status  int
+}
+
+func newBlockingResponseWriter() *blockingResponseWriter {
+	return &blockingResponseWriter{
+		header:  make(http.Header),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (w *blockingResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *blockingResponseWriter) WriteHeader(status int) {
+	w.status = status
+}
+
+func (w *blockingResponseWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	return w.body.Write(p)
+}
+
+func TestGetSongPlayTracksAndCancelsLocalStreams(t *testing.T) {
+	db := testutil.OpenMemoryDB(t)
+	repo := db.SongRepository()
+	songService := services.NewSongService(repo, nil, nil, nil, nil, nil)
+	activity := playactivity.New()
+	handler := NewSongHandler(songService, nil, nil, nil, nil, activity)
+
+	firstPath := writeSeekTestFile(t, "first.mp3")
+	secondPath := writeSeekTestFile(t, "second.mp3")
+	firstID := seedSong(t, repo, &models.Song{Type: models.TypeLocal, Title: "第一首", FilePath: firstPath})
+	secondID := seedSong(t, repo, &models.Song{Type: models.TypeLocal, Title: "第二首", FilePath: secondPath})
+	request := func(id int64) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/songs/"+strconv.FormatInt(id, 10)+"/play", nil)
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("id", strconv.FormatInt(id, 10))
+		ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
+		ctx = context.WithValue(ctx, contextkeys.ClientIDKey, "speaker-client")
+		return req.WithContext(ctx)
+	}
+
+	firstWriter := newBlockingResponseWriter()
+	firstDone := make(chan struct{})
+	go func() {
+		handler.GetSongPlay(firstWriter, request(firstID))
+		close(firstDone)
+	}()
+	select {
+	case <-firstWriter.started:
+	case <-time.After(time.Second):
+		t.Fatal("first local stream did not start")
+	}
+
+	sk := playactivity.SessionKey{ClientID: "speaker-client"}
+	if got := activity.Size(sk); got != 1 {
+		t.Fatalf("active local stream count = %d, want 1", got)
+	}
+
+	secondWriter := httptest.NewRecorder()
+	handler.GetSongPlay(secondWriter, request(secondID))
+	if secondWriter.Code != http.StatusOK || secondWriter.Body.String() != "audio-file-bytes" {
+		t.Fatalf("second local stream = %d %q", secondWriter.Code, secondWriter.Body.String())
+	}
+
+	close(firstWriter.release)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("canceled first local stream did not return")
+	}
+	if got := activity.Size(sk); got != 0 {
+		t.Fatalf("active local stream count after switch = %d, want 0", got)
+	}
+}
+
 // TestGetSongPlaySeekStreamsMP3 验证本地歌曲带 seek 时走流式 MP3：
 // chunked（无 Content-Length）、no-store，且 ffmpeg 参数契约完整。
 func TestGetSongPlaySeekStreamsMP3(t *testing.T) {
@@ -1005,6 +1132,10 @@ func TestGetSongPlaySeekRemote(t *testing.T) {
 	t.Run("已缓存走 seek 流", func(t *testing.T) {
 		handler, repo, _ := newSeekTestHandler(t, "/bin/echo")
 		cached := writeSeekTestFile(t, "cached.mp3")
+		// Remote cache hits now require real audio; this test isolates seek arguments.
+		if err := os.WriteFile(cached, cacheTestWAV(200), 0644); err != nil {
+			t.Fatal(err)
+		}
 		id := seedSong(t, repo, &models.Song{
 			Type: models.TypeRemote, Title: "网络歌", URL: "https://example.com/a.mp3",
 			Format: "mp3", Duration: 200,

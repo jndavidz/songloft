@@ -1,6 +1,7 @@
 package jsplugin
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -8,7 +9,146 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/fstest"
+
+	"github.com/go-chi/chi/v5"
 )
+
+func TestWebCoreAssets(t *testing.T) {
+	// 模拟正式镜像：有内嵌 Web 前端，没有独立 web-core 磁盘目录。
+	t.Chdir(t.TempDir())
+	_, _, repo, _ := setupTestEnv(t)
+	manager := NewManager(repo, t.TempDir(), t.TempDir(), "", nil, nil)
+	t.Cleanup(func() { manager.Close() })
+	runtimeFS := fstest.MapFS{
+		"static/js/client.js":                    {Data: []byte("export const runtime = 'embedded';")},
+		"static/js/async/web-core-main-chunk.js": {Data: []byte("export const main = true;")},
+		"static/css/client.css":                  {Data: []byte("lynx-view{display:block}")},
+		"static/wasm/runtime.module.wasm":        {Data: []byte{'\x00', 'a', 's', 'm', 1, 0, 0, 0}},
+	}
+	manager.SetWebCoreFS(runtimeFS)
+	router := chi.NewRouter()
+	manager.RegisterStaticRoutes(router)
+	const prefix = "/api/v1/jsplugin-assets/web-core/"
+	for file, want := range runtimeFS {
+		t.Run(file, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, prefix+file, nil))
+			if rec.Code != http.StatusOK || rec.Body.String() != string(want.Data) {
+				t.Fatalf("runtime asset = %d %q, want 200 %q", rec.Code, rec.Body.String(), want.Data)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+				t.Fatalf("fixed runtime filename must revalidate after upgrade, got %q", got)
+			}
+			if strings.HasSuffix(file, ".wasm") && rec.Header().Get("Content-Type") != "application/wasm" {
+				t.Fatalf("WASM MIME = %q", rec.Header().Get("Content-Type"))
+			}
+		})
+	}
+	for _, file := range []string{"", "static/js/missing.js", "static/js", "../secret", "static/../../../secret"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, prefix+file, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("invalid/missing asset %q = %d, want 404", file, rec.Code)
+		}
+	}
+	manager.SetWebCoreFS(nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, prefix+"static/js/client.js", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("lite without runtime = %d, want 404", rec.Code)
+	}
+}
+
+func TestLynxFallbackRealmHeaders(t *testing.T) {
+	pluginsDir, dataDir, repo, _ := setupTestEnv(t)
+	plugin := &JSPlugin{Name: "Lynx", Version: "1.0.0", EntryPath: "lynx", Main: "main.js", RenderEngine: RenderEngineLynx, Status: JSPluginStatusActive, FilePath: "lynx.zip"}
+	if err := repo.Create(context.Background(), plugin); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<head></head><lynx-view></lynx-view>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(repo, pluginsDir, dataDir, "", nil, nil)
+	t.Cleanup(func() { manager.Close() })
+	rec := httptest.NewRecorder()
+	if !manager.tryServeStaticFile(rec, httptest.NewRequest(http.MethodGet, "/api/v1/jsplugin/lynx/", nil), root, "index.html", "lynx") {
+		t.Fatal("fallback not served")
+	}
+	if got := rec.Header().Get("Cross-Origin-Embedder-Policy"); got != "" {
+		t.Fatalf("Lynx fallback must allow web-core srcdoc bootstrap, got %q", got)
+	}
+	for _, asset := range []string{"lynx-plugin-bridge-shim.js", "lynx-plugin-bridge-module.js"} {
+		if assetVersions[asset] == "" {
+			t.Fatalf("missing asset version: %s", asset)
+		}
+	}
+}
+
+func TestLynxFallbackVersionsHostAssets(t *testing.T) {
+	pluginsDir, dataDir, repo, _ := setupTestEnv(t)
+	ctx := context.Background()
+	plugin := &JSPlugin{Name: "Lynx", Version: "1.0.0", EntryPath: "lynx", Main: "main.js", RenderEngine: RenderEngineLynx, Status: JSPluginStatusActive, FilePath: "lynx.zip"}
+	if err := repo.Create(ctx, plugin); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dataDir, plugin.EntryPath, "static")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const shim = "lynx-plugin-bridge-shim.js"
+	const bridge = "lynx-plugin-bridge-module.js"
+	const html = `<head></head><lynx-view id="plugin-view"></lynx-view>
+<!-- <script src="../../jsplugin-assets/lynx-plugin-bridge-shim.js"></script> -->
+<script type='module' src='../../jsplugin-assets/lynx-plugin-bridge-shim.js' data-songloft-lynx-bundle='static/main.web.bundle?v=plugin'></script>`
+	for name, content := range map[string]string{"index.html": html, "main.web.bundle": "bundle"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const base = "/songloft"
+	manager := NewManager(repo, pluginsDir, dataDir, base, nil, nil)
+	t.Cleanup(func() { manager.Close() })
+	router := chi.NewRouter()
+	router.Route(base, manager.RegisterStaticRoutes)
+	get := func(path string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: HTTP %d: %s", path, rec.Code, rec.Body.String())
+		}
+		return rec
+	}
+	const assets = base + "/api/v1/jsplugin-assets/"
+	const entry = base + "/api/v1/jsplugin/lynx"
+	for _, path := range []string{entry + "?embed=1", entry + "/static/"} {
+		body := get(path).Body.String()
+		for _, want := range []string{
+			`src="` + assets + shim + "?v=" + assetVersions[shim] + `"`,
+			`data-songloft-lynx-bridge="` + assets + bridge + "?v=" + assetVersions[bridge] + `"`,
+			`data-songloft-lynx-bundle="static/main.web.bundle?v=plugin"`,
+		} {
+			if strings.Count(body, want) != 1 {
+				t.Errorf("expected one %s in fallback page %s", want, path)
+			}
+		}
+	}
+	if got := get(entry + "/static/main.web.bundle?v=plugin").Body.String(); got != "bundle" {
+		t.Fatalf("bundle payload = %q", got)
+	}
+	for _, asset := range []string{shim, bridge} {
+		if got := get(assets + asset + "?v=" + assetVersions[asset]).Header().Get("Cache-Control"); !strings.Contains(got, "immutable") {
+			t.Errorf("%s with current hash: %q", asset, got)
+		}
+		for _, query := range []string{"", "?v=old"} {
+			if got := get(assets + asset + query).Header().Get("Cache-Control"); got != "no-cache" {
+				t.Errorf("%s%s: cache policy %q", asset, query, got)
+			}
+		}
+	}
+}
 
 // TestInjectHTMLHeadAssetVersioning 验证注入的每个公共资源 URL 都带内容哈希版本号（#278）。
 // 若丢失版本号，jsplugin-assets 的 immutable 长缓存会让老浏览器永远拿不到资源更新。

@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -13,6 +14,18 @@ import (
 
 	"github.com/hanxi/tag"
 )
+
+func (s *SongService) writeTrackedSongTags(ctx context.Context, song *models.Song, fields []string) FileWriteStatus {
+	status := writeEditedSongTags(song, fields)
+	if status == FileWriteWritten {
+		if info, err := os.Stat(song.FilePath); err == nil {
+			if err := s.songs.UpdateFileObservation(context.WithoutCancel(ctx), song.ID, song.FilePath, info.Size(), info.ModTime()); err != nil {
+				slog.Warn("update song file observation", "songId", song.ID, "error", err)
+			}
+		}
+	}
+	return status
+}
 
 // FileWriteStatus 表示把 song 元数据回写到音频文件后的结果。
 //
@@ -60,6 +73,7 @@ func WriteSongTags(filePath string, song *models.Song) FileWriteStatus {
 		Album:       song.Album,
 		Lyrics:      mainLyric,
 		Track:       song.Track,
+		Disc:        song.Disc,
 	}
 
 	if song.Year > 0 {
@@ -138,6 +152,9 @@ func tagsUnchanged(filePath string, opts tag.WriteOptions) bool {
 		return false
 	}
 
+	if opts.Disc != "" && canonicalTrack(m.Disc()) != normalizeTrack(opts.Disc) {
+		return false
+	}
 	fileTrackNum, fileTrackTotal := m.Track()
 	if canonicalTrack(fileTrackNum, fileTrackTotal) != normalizeTrack(opts.Track) {
 		return false
@@ -178,4 +195,71 @@ func pictureEqual(a, b *tag.Picture) bool {
 		return false
 	}
 	return a.MIMEType == b.MIMEType && bytes.Equal(a.Data, b.Data)
+}
+
+func writeEditedSongTags(song *models.Song, fields []string) FileWriteStatus {
+	if len(fields) == 0 || song.FilePath == "" {
+		return FileWriteUnchanged
+	}
+	opts := tag.WriteOptions{Incremental: true}
+	for _, field := range fields {
+		var empty bool
+		switch field {
+		case tag.FieldTitle:
+			opts.Title = song.Title
+			empty = opts.Title == ""
+		case tag.FieldArtist:
+			opts.Artist = song.Artist
+			empty = opts.Artist == ""
+		case tag.FieldAlbum:
+			opts.Album = song.Album
+			empty = opts.Album == ""
+		case tag.FieldYear:
+			opts.Year = song.Year
+			empty = opts.Year == 0
+		case tag.FieldGenre:
+			opts.Genre = song.Genre
+			empty = opts.Genre == ""
+		case tag.FieldLanguage:
+			opts.Language = song.Language
+			empty = opts.Language == ""
+		case tag.FieldStyle:
+			opts.Style = song.Style
+			empty = opts.Style == ""
+		case tag.FieldTrack:
+			opts.Track = song.Track
+			empty = opts.Track == ""
+		case tag.FieldDisc:
+			opts.Disc = song.Disc
+			empty = opts.Disc == ""
+		case tag.FieldLyrics:
+			if song.LyricSource == models.LyricSourceURL {
+				continue
+			}
+			opts.Lyrics = models.UnmarshalLyric(song.Lyric).Lyric
+			empty = opts.Lyrics == ""
+		case tag.FieldPicture:
+			if song.CoverPath != "" {
+				data, err := os.ReadFile(song.CoverPath)
+				if err != nil {
+					slog.Warn("read cover for tag write", "error", err)
+					return FileWriteFailed
+				}
+				opts.Picture = &tag.Picture{MIMEType: tag.MIMETypeFromExt(filepath.Ext(song.CoverPath)), Data: data}
+			}
+			empty = song.CoverPath == "" && song.CoverURL == ""
+		}
+		if empty {
+			opts.ClearFields = append(opts.ClearFields, field)
+		}
+	}
+	err := tag.WriteTag(song.FilePath, opts)
+	if errors.Is(err, tag.ErrUnsupportedWrite) {
+		return FileWriteUnchanged
+	}
+	if err != nil {
+		slog.Warn("write edited tags", "path", song.FilePath, "error", err)
+		return FileWriteFailed
+	}
+	return FileWriteWritten
 }

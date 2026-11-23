@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"songloft/internal/config"
@@ -69,6 +71,17 @@ type App struct {
 	server              *http.Server
 }
 
+type readyListener struct {
+	net.Listener
+	ready func()
+	once  sync.Once
+}
+
+func (listener *readyListener) Accept() (net.Conn, error) {
+	listener.once.Do(listener.ready)
+	return listener.Listener.Accept()
+}
+
 // NewApp 创建新的应用程序实例
 func NewApp(cfg *config.AppConfig, webDist embed.FS) *App {
 	router := chi.NewRouter()
@@ -82,6 +95,9 @@ func NewApp(cfg *config.AppConfig, webDist embed.FS) *App {
 
 // Close 关闭应用程序资源
 func (a *App) Close() error {
+	if a.playlistService != nil {
+		a.playlistService.CloseFavoriteChanges()
+	}
 	if a.hlsTranscodeService != nil {
 		a.hlsTranscodeService.Close()
 	}
@@ -114,6 +130,9 @@ func (a *App) Close() error {
 
 // Shutdown 优雅关闭 HTTP 服务器并释放所有资源
 func (a *App) Shutdown(ctx context.Context) error {
+	if a.playlistService != nil {
+		a.playlistService.CloseFavoriteChanges()
+	}
 	if a.server != nil {
 		if err := a.server.Shutdown(ctx); err != nil {
 			slog.Warn("HTTP server shutdown error", "error", err)
@@ -223,7 +242,7 @@ func (a *App) Init() error {
 	}
 	if err := a.configService.GetJSON("scan_config", &scanConfigData); err != nil {
 		slog.Warn("读取扫描配置失败，使用默认值", "error", err)
-		scanConfigData.SupportedFormats = []string{"mp3", "flac", "wav", "ape", "ogg", "m4a", "mp4", "mov", "wma", "aif", "aiff", "mka", "mkv", "webm", "avi", "ts", "mpg", "opus", "m4b", "oga", "mpeg", "m4v", "flv", "wmv", "rm", "rmvb", "3gp", "dsf"}
+		scanConfigData.SupportedFormats = []string{"mp3", "flac", "wav", "ape", "ogg", "m4a", "mp4", "mov", "wma", "aif", "aiff", "mka", "mkv", "webm", "avi", "ts", "mpg", "opus", "m4b", "oga", "mpeg", "m4v", "flv", "wmv", "rm", "rmvb", "3gp", "dsf", "dts", "wv", "aac", "dff"}
 	}
 
 	// 读取标题来源配置
@@ -236,6 +255,9 @@ func (a *App) Init() error {
 	if err := a.configService.GetJSON("ffprobe_path", &ffprobeConfig); err != nil {
 		slog.Warn("读取 ffprobe 配置失败，使用默认值", "error", err)
 		ffprobeConfig.Path = "ffprobe"
+	}
+	if a.config.FFprobePath != "" {
+		ffprobeConfig.Path = a.config.FFprobePath
 	}
 
 	// 从数据库读取封面存储路径配置
@@ -280,13 +302,12 @@ func (a *App) Init() error {
 	a.songService = services.NewSongService(db.SongRepository(), db, a.metadataExtractor, a.scanner, a.configService, db.PlaylistRepository())
 	a.backupService = services.NewBackupService(db)
 	a.playHistoryService = services.NewPlayHistoryService(db)
-	a.songTagService = services.NewSongTagService(db.SongTagRepository())
+	a.songTagService = services.NewSongTagService(db.SongTagRepository(), db)
 	a.songService.SetSongTagService(a.songTagService)
 	a.themePackService = services.NewThemePackService(db.ThemePackRepository(), a.configService)
 	// play_history 的 context_key 是 TEXT，无法对 playlists 建外键做级联，删歌单时需显式清理
 	a.playlistService.SetPlayHistoryCleaner(db.PlayHistoryRepository())
 	// 同理，删标签时清理其 (tag, id) 播放历史
-	a.songTagService.SetPlayHistoryCleaner(db.PlayHistoryRepository())
 
 	// 创建认证服务
 	authService, err := services.NewAuthService(configRepo, db.TokenRepository(), a.config.Username, a.config.Password)
@@ -310,8 +331,13 @@ func (a *App) Init() error {
 		slog.Debug("读取 ffmpeg 配置失败，使用默认值", "error", err)
 		ffmpegConfig.Path = "ffmpeg"
 	}
+	if a.config.FFmpegPath != "" {
+		ffmpegConfig.Path = a.config.FFmpegPath
+	}
 	a.cacheService.SetFFmpegPath(ffmpegConfig.Path)
+	a.cacheService.SetBundledFFprobePath(a.config.FFprobePath)
 	proxySettings := handlers.NewProxyHandler(a.configService)
+	a.songService.SetRadioSourceProbe(services.NewRadioSourceProbe(proxySettings.GetPrivateAllowlist))
 	a.hlsTranscodeService, err = services.NewHLSTranscodeService(a.cacheService, proxySettings.GetPrivateAllowlist)
 	if err != nil {
 		return fmt.Errorf("创建直播转码服务失败: %w", err)
@@ -343,7 +369,7 @@ func (a *App) Init() error {
 		internalServerPort = p
 	}
 
-	a.urlResolver = services.NewInternalURLResolver(internalServerPort, internalToken)
+	a.urlResolver = services.NewInternalURLResolver(internalServerPort, internalToken, a.config.BasePath)
 	a.lyricFetcher = services.NewLyricFetcher(a.urlResolver, nil)
 
 	// 初始化 JS 插件管理器（必须在 setupRouter 之前，因为路由注册需要访问 jsPluginManager）
@@ -363,6 +389,9 @@ func (a *App) Init() error {
 	}
 	jsPluginRepo := a.db.JSPluginRepository()
 	a.jsPluginManager = jsplugin.NewManager(jsPluginRepo, jsPluginsDir, jsPluginsDataDir, a.config.BasePath, a.router, a.db)
+	if runtimeFS, err := fs.Sub(a.webDist, webEmbedRoot+"/web-core"); err == nil {
+		a.jsPluginManager.SetWebCoreFS(runtimeFS)
+	}
 	a.jsPluginManager.SetAuthService(a.authService, a.config.Port)
 
 	// 注入歌词提供者探测钩子：让 models.LyricURLPath 在存在歌词插件时,
@@ -412,6 +441,10 @@ func (a *App) Init() error {
 	})
 	a.sourceOrchestrator = sourceOrchestrator
 	a.cacheService.SetOrchestrator(sourceOrchestrator)
+	reassigner := &reassignAdapter{orch: sourceOrchestrator, s: a.songService}
+	a.cacheService.SetSourceValidation(a.metadataExtractor, a.sourceMetrics, func(song *models.Song) {
+		reassigner.AsyncReassign(song.ID, playactivity.SessionKey{})
+	})
 
 	// 注入缓存路径回调和歌曲查询
 	songRepo := a.db.SongRepository()
@@ -540,7 +573,7 @@ func (a *App) onMusicPathConfigChanged(scanHandler *handlers.ScanHandler) {
 	}
 	if err := a.configService.GetJSON("scan_config", &scanConfigData); err != nil {
 		slog.Warn("配置变更回调：读取 scan_config 失败，使用默认值", "error", err)
-		scanConfigData.SupportedFormats = []string{"mp3", "flac", "wav", "ape", "ogg", "m4a", "mp4", "mov", "wma", "aif", "aiff", "mka", "mkv", "webm", "avi", "ts", "mpg", "opus", "m4b", "oga", "mpeg", "m4v", "flv", "wmv", "rm", "rmvb", "3gp", "dsf"}
+		scanConfigData.SupportedFormats = []string{"mp3", "flac", "wav", "ape", "ogg", "m4a", "mp4", "mov", "wma", "aif", "aiff", "mka", "mkv", "webm", "avi", "ts", "mpg", "opus", "m4b", "oga", "mpeg", "m4v", "flv", "wmv", "rm", "rmvb", "3gp", "dsf", "dts", "wv", "aac", "dff"}
 	}
 
 	// 重建 Scanner
@@ -598,8 +631,33 @@ func (a *App) BuildHandler() http.Handler {
 	return handler
 }
 
+// SetListenerPort publishes the port selected by the HTTP listener to every
+// component that creates a local URL. Mobile Bundle mode owns the listener in
+// the mobile package, so it cannot rely on StartWithReady to do this.
+func (a *App) SetListenerPort(port int) {
+	actualPort := strconv.Itoa(port)
+	a.config.Port = actualPort
+	if a.configService != nil {
+		if err := a.configService.Set("server_port", actualPort); err != nil {
+			slog.Warn("回写监听端口配置失败", "error", err)
+		}
+	}
+	if a.urlResolver != nil {
+		a.urlResolver.SetServerPort(port)
+	}
+	if a.jsPluginManager != nil {
+		a.jsPluginManager.SetPort(actualPort)
+	}
+}
+
 // Start 启动应用程序（阻塞监听）
 func (a *App) Start() error {
+	return a.StartWithReady(nil)
+}
+
+// StartWithReady 启动应用程序，并在监听器和 HTTP Server 均就绪后调用 ready。
+// 桌面宿主用它协调父进程退出监测，避免 Shutdown 先于 Server 创建。
+func (a *App) StartWithReady(ready func()) error {
 	if a.config.UsingDefaultCredentials {
 		// 不打印密码明文：日志可能被导出提交到 issue，凭证不应落盘。
 		// 使用默认凭证时账号/密码均为 admin，用户已知；此处仅提示。
@@ -612,16 +670,10 @@ func (a *App) Start() error {
 	if err != nil {
 		return err
 	}
-	actualPort := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
-	if actualPort != a.config.Port {
-		a.config.Port = actualPort
-		// 回写真实端口（server_port 供插件/调试读取；Init 阶段写的是请求值，可能为 0）
-		if a.configService != nil {
-			if err := a.configService.Set("server_port", actualPort); err != nil {
-				slog.Warn("回写监听端口配置失败", "error", err)
-			}
-		}
-	}
+	actualPortNumber := ln.Addr().(*net.TCPAddr).Port
+	// Keep the runtime URL generators in sync even when the configured port was
+	// already the same as the listener's port.
+	a.SetListenerPort(actualPortNumber)
 
 	// 该行会被桌面端 DesktopBackendService 解析以获取实际端口，格式勿轻易变更
 	slog.Info(fmt.Sprintf("HTTP 访问地址: http://localhost:%s%s/", a.config.Port, a.config.BasePath))
@@ -634,6 +686,9 @@ func (a *App) Start() error {
 
 	a.server = &http.Server{
 		Handler: a.BuildHandler(),
+	}
+	if ready != nil {
+		ln = &readyListener{Listener: ln, ready: ready}
 	}
 	return a.server.Serve(ln)
 }
@@ -704,14 +759,15 @@ func normalizeBasePath(raw string) (string, error) {
 func ParseConfig() (*config.AppConfig, error) {
 	// 定义命令行参数
 	var (
-		port     = flag.String("port", "58091", "监听端口")
-		dbPath   = flag.String("db", "data/songloft.db", "数据库文件路径")
-		musicDir = flag.String("music", "", "音乐目录（Bundle 桌面模式由客户端传入，非空时覆盖 DB 中的 music_path）")
-		username = flag.String("username", "", "管理员用户名")
-		password = flag.String("password", "", "管理员密码")
-		basePath = flag.String("base-path", "", "URL 基础路径，用于反向代理子路径部署（如 /songloft）")
-		help     = flag.Bool("help", false, "显示帮助信息")
-		showVer  = flag.Bool("version", false, "显示版本信息")
+		port        = flag.String("port", "58091", "监听端口")
+		dbPath      = flag.String("db", "data/songloft.db", "数据库文件路径")
+		musicDir    = flag.String("music", "", "音乐目录（Bundle 桌面模式由客户端传入，非空时覆盖 DB 中的 music_path）")
+		username    = flag.String("username", "", "管理员用户名")
+		password    = flag.String("password", "", "管理员密码")
+		basePath    = flag.String("base-path", "", "URL 基础路径，用于反向代理子路径部署（如 /songloft）")
+		help        = flag.Bool("help", false, "显示帮助信息")
+		showVer     = flag.Bool("version", false, "显示版本信息")
+		parentWatch = flag.Bool("parent-watch-stdin", false, "stdin 管道关闭时退出（桌面宿主专用，默认关闭）")
 	)
 
 	// 解析命令行参数
@@ -801,5 +857,8 @@ func ParseConfig() (*config.AppConfig, error) {
 		BasePath:                normalizedBasePath,
 		UsingDefaultCredentials: usingDefaultCredentials,
 		MusicDir:                finalMusicDir,
+		ParentWatchStdin:        *parentWatch,
+		FFmpegPath:              os.Getenv("SONGLOFT_BUNDLE_FFMPEG"),
+		FFprobePath:             os.Getenv("SONGLOFT_BUNDLE_FFPROBE"),
 	}, nil
 }

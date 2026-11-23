@@ -1,8 +1,8 @@
 # Songloft Architecture Overview
 
-Songloft is a self-hosted local music server built with a decoupled frontend/backend architecture. It supports two run modes: **Server Mode** (deploying the Go backend standalone) and **Bundle Local Mode** (embedding the Go backend inside the Flutter client, with no need to deploy a separate server).
+Songloft is a self-hosted local music server built with a decoupled frontend/backend architecture. It supports two run modes: **Server Mode** (deploying the Go backend standalone) and **Bundle Local Mode** (shipping the Go backend with the client, with no separate server deployment). The backend Release fixes the full root and client-submodule SHAs, then publishes Flutter and Lynx Bundles. Standard, HarmonyOS, and Web packages remain in their client Releases.
 
-Server Mode supports Flutter, ReactLynx, official Electron Desktop, and Android TV clients. Lynx is an Android/iOS/HarmonyOS/Web preview with no desktop or Bundle mode; the client architecture diagram below describes the default Flutter setup.
+Server Mode supports Flutter, ReactLynx, official Electron Desktop, and Android TV clients. Flutter Bundle covers Android/iOS/macOS/Windows/Linux, and Lynx Bundle covers Android/iOS/Windows/macOS. Backend CI builds the Lynx desktop Bundles. Device installation and playback remain to be verified. The client architecture diagram below describes the Flutter client's own architecture.
 
 ## Architecture Documentation Navigation
 
@@ -10,6 +10,7 @@ Server Mode supports Flutter, ReactLynx, official Electron Desktop, and Android 
 - **[Frontend Architecture](./architecture_frontend.md)** - Detailed architecture of the Flutter cross-platform frontend
 - **[Choosing a Client](./clients.md)** - Flutter, Lynx, Electron Desktop, and TV platforms, capabilities, and downloads
 - **[Lynx Client](./player-lynx/index.md)** - Installation, builds, testing, and independent releases
+- **[Bundle Mode](./bundle-mode.md)** - Flutter/Lynx package sources, backend pins, and login/settings entry points
 - **[Color System](./color_system.md)** - Material 3 color system and theming conventions
 - **[Quick Start](./quick-start.md)** - Getting-started guide (generated in sync with README.md)
 
@@ -18,7 +19,7 @@ Server Mode supports Flutter, ReactLynx, official Electron Desktop, and Android 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  Flutter Cross-Platform Frontend                             │
-│  /clients/player (standalone repo: github.com/songloft-org/songloft-player) │
+│  /clients/player-flutter (standalone repo: github.com/songloft-org/songloft-player-flutter) │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
 │  │ Android  │ │   iOS    │ │  macOS   │ │ Windows  │       │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
@@ -148,13 +149,13 @@ songloft/
 | `make build-prod` | No tag | Production full build (default), embeds Lynx Web |
 | `make build-prod-lite` | `-tags lite` | Production lite build, without the frontend |
 | `make build-go-mobile-android` | `-tags lite` | Compiles the Go backend into an Android .aar (gomobile bind) |
-| `make build-go-mobile-ios` | `-tags lite` | Compiles the Go backend into an iOS .xcframework (gomobile bind) |
+| `make build-go-mobile-ios` | `-tags lite,bundle_ffmpeg` | gomobile packages the Go backend and verified FFmpeg static library into an iOS .xcframework. Set `SONGLOFT_FFMPEG_IOS_ASSET` to the staging directory. |
 | `make build-go-desktop-{linux,windows,macos}` | `-tags lite` | Compiles the Go backend into a desktop executable (for Bundle mode) |
 
 ### Build Parameters and Embedding
 
 - `VERSION` and `BUILD_TYPE` are orthogonal: `VERSION=dev` automatically enables `-tags dev` (Swagger + pprof), while releases use `X.Y.Z`; `BUILD_TYPE=lite` embeds no frontend, and empty means full. **Do not** use mixed values such as `BUILD_TYPE=dev`
-- The frontend embed path is always `clients/player-build/web-embedded` (**not** `clients/player/build/web-embedded`)
+- The frontend embed path is always `clients/player-build/web-embedded` (**not** `clients/player-flutter/build/web-embedded`)
 - SPA fallback returns `index.html` only for missing paths whose final segment contains no `.`; missing static assets must return 404, never HTML masquerading as JS/JSON
 - Sub-path deployment: pass `-base-path /xxx` or `BASE_PATH=/xxx` at startup; the entry point strips the prefix with `http.StripPrefix`, `embed.go` replaces `<base href="/">` with `<base href="/xxx/">` at runtime, and the Lynx host injects its deployment directory through `webBaseUrl` for API, Worker, and static URLs
 - Full builds use Node.js 22 + pnpm 11.15.1 for Lynx Web, apply engine patches explicitly, and precompress assets; `embedded-build.json` records client and server identities separately

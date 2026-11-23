@@ -11,7 +11,7 @@
 [![GitHub License](https://img.shields.io/github/license/songloft-org/songloft)](https://github.com/songloft-org/songloft)
 [![Docker Image Version](https://img.shields.io/docker/v/songloft/songloft?sort=semver&label=docker%20image)](https://hub.docker.com/r/songloft/songloft)
 [![Docker Pulls](https://img.shields.io/docker/pulls/songloft/songloft)](https://hub.docker.com/r/songloft/songloft)
-[![GitHub Release](https://img.shields.io/github/v/release/songloft-org/songloft)](https://github.com/songloft-org/songloft/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/songloft-org/songloft)](https://github.com/songloft-org/songloft/releases/latest)
 [![Visitors](https://api.visitorbadge.io/api/daily?path=songloft-org%2Fsongloft&label=daily%20visitor&countColor=%232ccce4&style=flat)](https://visitorbadge.io/status?path=songloft-org%2Fsongloft)
 [![Visitors](https://api.visitorbadge.io/api/visitors?path=songloft-org%2Fsongloft&label=total%20visitor&countColor=%232ccce4&style=flat)](https://visitorbadge.io/status?path=songloft-org%2Fsongloft)
 
@@ -23,7 +23,8 @@
 
 <p align="center">
   <a href="https://github.com/songloft-org/songloft">🏠 GitHub</a> •
-  <a href="https://github.com/songloft-org/songloft/releases">📥 下载</a> •
+  <a href="https://github.com/songloft-org/songloft/releases/latest">📥 最新正式版</a> •
+  <a href="https://github.com/songloft-org/songloft/releases/tag/dev">下载 dev</a> •
   <a href="https://songloft.hanxi.cc">📖 文档</a> •
   <a href="https://github.com/songloft-org/songloft/issues">💬 问题反馈</a> •
   <a href="https://github.com/songloft-org/songloft/issues/2">👥 微信群</a> •
@@ -44,15 +45,17 @@
 
 ## ✨ 核心功能
 
-- 🎵 **本地音乐管理** — 扫描本地目录，自动提取 MP3/FLAC/WAV/APE/OGG/Opus/M4A/M4B/WMA/AIF/AIFF/MKA/DSF（DSD）等格式的封面和元数据
+- 🎵 **本地音乐管理** — 扫描本地目录，自动提取 MP3/FLAC/WAV/APE/OGG/Opus/M4A/M4B/WMA/AIF/AIFF/MKA/DSF（DSD）/AAC（ADTS）/DFF/WavPack 等格式的封面和元数据
 - 🎬 **视频支持** — 扫描 MP4/MOV/M4V/MKV/WebM/AVI/TS/MPG/MPEG/FLV/WMV/RM/RMVB/3GP 等视频容器并探测真实视频轨，客户端内渲染画面
 - 🧩 **JS 插件体系** — 基于 QuickJS 沙箱运行，支持权限模型、健康检查、热更新，可自由扩展音源 / 元数据 / 设备控制等能力
-- 📱 **跨平台客户端** — Flutter 客户端支持 Android、iOS、macOS、Windows、Linux、Web 六端
+- 📱 **跨平台客户端** — Flutter 覆盖移动端、桌面与 Web。Lynx 覆盖 Android、iOS、Windows、macOS、HarmonyOS 与 Web
 - 📦 **Bundle 本地模式** — 客户端内嵌 Go 后端，无需部署服务器，手机/电脑直接播放本地音乐
 - 📺 **Kodi 插件客户端** — 支持 Xbox、Apple TV、树莓派、Android TV 等大屏设备，专为遥控器操作优化，带来流畅的客厅影音体验
 - 🌐 **Web 界面** — 完整版内置 Lynx Web 前端，支持根路径与子路径部署，开箱即用
-- 🔑 **JWT 认证** — 双 Token 机制（Access Token + Refresh Token），支持多设备管理
-- 📡 **网络歌曲 & 电台** — 支持添加网络音频 URL 与电台流，播放时透明缓存到服务端
+- 🗂️ **歌单组织与续播** — 歌曲与歌单共用自定义标签，普通歌单记住歌曲、毫秒位置和播放模式，支持[有声书继续收听](docs/playlist-resume.md)
+- 🔑 **认证与设备接入** — JWT 双 Token 登录，支持多设备管理；永久访问 Token 用于设备集成，可单独撤销
+- 📡 **网络歌曲与电台** — 网络歌曲可缓存。电台支持 HLS、HTTP-FLV 和纯音频模式，可对多条电台批量设置播放模式
+- 🎚️ **曲库筛选与评级** — 可组合本地、网络歌曲等类型进行查询。服务端支持歌曲评级、批量设置和筛选
 - 🔌 **完整 REST API** — 内置 Swagger 文档，方便集成和二次开发
 - ⚡ **轻量高效** — Go 编写，CGO-free，无外部依赖，适合 NAS / 树莓派等低功耗设备
 
@@ -97,7 +100,7 @@ Songloft 提供三种版本，满足不同使用场景：
 |------|------|------|----------|
 | 🌟 **完整版** | 无后缀 | 包含 Web 前端，开箱即用 | 推荐初次使用，访问服务地址即可看到 Web 界面 |
 | 📦 **精简版** | `-lite` | 不包含 Web 前端，体积更小 | 配合 Flutter 桌面/移动客户端，或前后端分离部署 |
-| 📱 **Bundle 版** | `bundled-` | Flutter 客户端内嵌 Go 后端 | 无需部署服务器，手机/电脑直接播放本地音乐 |
+| 📱 **Bundle 版** | 见客户端下载表 | Flutter 和 Lynx 客户端内嵌 Go 后端 | 无需部署服务器，手机或电脑可直接播放本地音乐 |
 
 > 💡 **推荐**：初次使用直接下载默认的 **完整版**，开箱即用，无需额外配置前端。
 > 想在手机或电脑上独立使用，无需部署服务器？可下载 **Bundle 版**。
@@ -134,17 +137,30 @@ Songloft 提供三种版本，满足不同使用场景：
 | 🪟 Windows | x86_64 | [songloft-windows-amd64-lite.exe](https://github.com/songloft-org/songloft/releases/latest/download/songloft-windows-amd64-lite.exe) |
 | 🪟 Windows | ARM64 | [songloft-windows-arm64-lite.exe](https://github.com/songloft-org/songloft/releases/latest/download/songloft-windows-arm64-lite.exe) |
 
-#### 📱 Bundle 版（内嵌后端，无需服务器）
+#### 📱 客户端 Bundle 本地模式（内嵌后端，无需服务器）
 
-客户端内嵌 Go 后端，首次启动点击「使用本地模式」选择音乐目录即可使用：
+Flutter Bundle 和 Lynx Bundle 由后端仓库的 Release 统一发布。Flutter 标准版和 Lynx 标准版仍由各自客户端 Release 发布。两个客户端都在登录页和设置页切换本地/远程模式；Android/桌面首次启用时选择音乐目录，iOS 使用应用 Documents 目录：
 
-| 平台 | 架构 | 下载链接 |
-|------|------|--------|
-| 🤖 Android | ARM64 + ARMv7 | [songloft-bundled-android-arm64-v8a.apk](https://github.com/songloft-org/songloft/releases/latest/download/songloft-bundled-android-arm64-v8a.apk) |
-| 🐧 Linux | x86_64 | [songloft-bundled-linux-x64.tar.gz](https://github.com/songloft-org/songloft/releases/latest/download/songloft-bundled-linux-x64.tar.gz) |
-| 🍎 macOS | ARM64 (Apple Silicon) | [songloft-bundled-macos-arm64.dmg](https://github.com/songloft-org/songloft/releases/latest/download/songloft-bundled-macos-arm64.dmg) |
-| 🪟 Windows | x86_64 | [songloft-bundled-windows-x64.zip](https://github.com/songloft-org/songloft/releases/latest/download/songloft-bundled-windows-x64.zip) |
-| 🍎 iOS | ARM64 | [songloft-bundled-ios-arm64.ipa](https://github.com/songloft-org/songloft/releases/latest/download/songloft-bundled-ios-arm64.ipa) |
+- Flutter 标准版见 [Flutter 客户端 Release](https://github.com/songloft-org/songloft-player-flutter/releases/latest)，Flutter Bundle 见[后端 Release](https://github.com/songloft-org/songloft/releases/latest)或[dev](https://github.com/songloft-org/songloft/releases/tag/dev)。
+- Lynx 标准版见 [Lynx 客户端 Release](https://github.com/songloft-org/songloft-player-lynx/releases/latest)，Lynx Bundle 见[后端 Release](https://github.com/songloft-org/songloft/releases/latest)或[dev](https://github.com/songloft-org/songloft/releases/tag/dev)。
+
+| 客户端与平台 | 架构 | **Assets** 中的文件名 |
+| --- | --- | --- |
+| Flutter · Android | ARM64 / ARMv7 / x86_64 | `songloft-bundled-android.apk` |
+| Flutter · iOS | ARM64（未签名，需自行重签） | `songloft-bundled-ios-nosign.ipa` |
+| Flutter · Linux | x86_64 | `songloft-bundled-linux-x64.tar.gz` |
+| Flutter · macOS | Apple Silicon | `songloft-bundled-macos.zip` |
+| Flutter · Windows | x86_64 | `songloft-bundled-windows-x64.zip` |
+| Lynx · Android 6.0+ | ARM64 / ARMv7 / x86_64 | `songloft-lynx-bundled-android.apk` |
+| Lynx · iOS | ARM64（未签名，需自行重签） | `songloft-lynx-bundled-ios-nosign.ipa` |
+| Lynx · Windows | x86_64 | `songloft-lynx-bundled-win32-x64.exe` |
+| Lynx · macOS | Apple Silicon / Intel | `songloft-lynx-bundled-darwin-arm64.dmg` / `songloft-lynx-bundled-darwin-x64.dmg` / `songloft-lynx-bundled-darwin-arm64.zip` / `songloft-lynx-bundled-darwin-x64.zip` |
+
+[全部包名](docs/release-packages.md)。
+
+Lynx HarmonyOS 和 Web 仍属于非 Bundle 产物。Bundle 资产的客户端 SHA、后端 SHA、版本、构建时间和 SHA-256 记录在后端 Release 的 `bundle-index.json`。详见[Bundle 模式说明](docs/bundle-mode.md)。
+
+Bundle 构建使用 `hanxi/ffmpeg-builder` 发布的多平台资产。流水线先解析 `dev` 或正式通道的具体 Release，再校验 manifest 中的平台、ABI、版本、源码提交和 SHA-256，并把同一解析结果复用到整个构建矩阵。Android 与桌面 Bundle 内置 `ffmpeg` 和 `ffprobe`。iOS Bundle 将 FFmpeg 静态链接进 Go 后端，在应用进程内完成探测和转码。
 
 ### 🐳 Docker 镜像
 
@@ -168,35 +184,32 @@ Songloft 提供三种版本，满足不同使用场景：
 
 除了 Web 界面，Songloft 还提供功能更强大的跨平台 Flutter 客户端，支持后台播放、本地缓存、媒体控制（耳机/锁屏/通知栏）等服务端 Web 界面无法实现的能力，覆盖 iOS、Android、macOS、Windows、Linux 和 Web 六端。
 
-🔗 **GitHub 仓库**：[songloft-org/songloft-player](https://github.com/songloft-org/songloft-player)
+🔗 **GitHub 仓库**：[songloft-org/songloft-player-flutter](https://github.com/songloft-org/songloft-player-flutter)
 
-- **标准版**（需连接服务器）：[songloft-player Releases](https://github.com/songloft-org/songloft-player/releases/latest)
-- **Bundle 版**（内嵌后端，无需服务器）：[songloft Releases](https://github.com/songloft-org/songloft/releases/latest)（下载 `songloft-bundled-*` 文件）
+- **标准版**（需连接服务器）：Android 通用包 `songloft-android.apk` 支持 ARM64、ARMv7 和 x86_64。[Flutter 正式版](https://github.com/songloft-org/songloft-player-flutter/releases/latest) · [开发版](https://github.com/songloft-org/songloft-player-flutter/releases/tag/dev)
+- **Bundle 本地模式**：从[后端正式版](https://github.com/songloft-org/songloft/releases/latest)或[开发版](https://github.com/songloft-org/songloft/releases/tag/dev)的 **Assets** 下载上表中的 `songloft-bundled-*` 文件。Flutter 标准版仍从 Flutter Release 下载。
 
 > 🪟 **Windows 用户**：可通过 [Scoop](https://scoop.sh) 一键安装与更新，该 Bucket 提供三个应用，可按需选择：
 > ```powershell
 > scoop bucket add songloft https://github.com/songloft-org/songloft-scoop
 > scoop install songloft-player    # Flutter 客户端（GUI，需连接服务器）
 > scoop install songloft-server    # 服务端（CLI，仅命令行程序）
-> scoop install songloft-bundled   # Bundle 版（服务端 + 客户端一体化，无需单独部署服务器）
 > # 更新：scoop update songloft-player（其余同理）
 > # 卸载：scoop uninstall songloft-player（加 --purge 一并删除配置数据）
 > ```
-> ⚠️ `songloft-bundled` 与 `songloft-server`、`songloft-player` 存在文件冲突，**不能同时安装**；`songloft-server` 与 `songloft-player` 可以共存。
+> `songloft-server` 与 `songloft-player` 可以共存。
 
-> 💡 **Bundle 版使用方式**：首次启动在登录页点击「使用本地模式」→ 选择音乐目录 → 自动完成。支持随时在设置页切换本地/远程模式。
+> 💡 使用 **精简版（-lite）** 服务端时，推荐直接搭配 Flutter 客户端使用（无需额外部署 Web 前端）；如确实需要独立 Web 前端，可参考 [songloft-player-flutter](https://github.com/songloft-org/songloft-player-flutter) 仓库的 `flutter build web` 流程自行构建并由 Nginx 等反向代理静态托管。
 
-> 💡 使用 **精简版（-lite）** 服务端时，推荐直接搭配 Flutter 客户端使用（无需额外部署 Web 前端）；如确实需要独立 Web 前端，可参考 [songloft-player](https://github.com/songloft-org/songloft-player) 仓库的 `flutter build web` 流程自行构建并由 Nginx 等反向代理静态托管。
+### 📱 Lynx 客户端
 
-### 📱 Lynx 客户端（预览版）
+[Songloft Player (Lynx)](https://github.com/songloft-org/songloft-player-lynx) 使用 [ReactLynx](https://lynxjs.org/react/) + TypeScript，支持 Android、iOS、HarmonyOS、Web 和 Windows/macOS 桌面。已实现核心播放、曲库/歌单、歌词、插件、主题、多服务器、Bundle 本地模式和桌面客户端内更新；Android/iOS/桌面均通过登录页和设置页切换运行模式。桌面设备最终验收仍在进行。
 
-[Songloft Player (Lynx)](https://github.com/songloft-org/songloft-player-lynx) 使用 [ReactLynx](https://lynxjs.org/react/) + TypeScript，支持 Android、iOS、HarmonyOS 和 Web。已实现核心播放、曲库/歌单、歌词、插件、主题与多服务器；目前没有桌面客户端、Bundle 本地后端或客户端内检查更新。
-
-- [开发版下载](https://github.com/songloft-org/songloft-player-lynx/releases/tag/dev)：main 代码推送后自动打包，五个产物全部成功才更新。
-- [正式版本](https://github.com/songloft-org/songloft-player-lynx/releases/latest)：通过版本 tag 发布；首次成功发版前可能尚无正式包。
+- [标准版开发/正式版本](https://github.com/songloft-org/songloft-player-lynx/releases/tag/dev) · [正式版](https://github.com/songloft-org/songloft-player-lynx/releases/latest)：Android、iOS、HarmonyOS、Web 和标准桌面包。
+- [Bundle 开发/正式版本](https://github.com/songloft-org/songloft/releases/tag/dev) · [正式版](https://github.com/songloft-org/songloft/releases/latest)：Lynx Bundle 和 Flutter Bundle。
 - [安装指南](https://songloft.hanxi.cc/player-lynx/installation) · [构建与运行](https://songloft.hanxi.cc/player-lynx/build-and-run) · [发版指南](https://songloft.hanxi.cc/player-lynx/releasing)。
 
-Android 提供 release 签名 APK，iOS 提供需自行重签的 IPA，HarmonyOS 提供签名 HAP（设备范围由 profile 决定），Web 提供 standalone/embedded 两种压缩包。HarmonyOS 为实验性支持；Web 需 HTTPS 与 COOP/COEP 响应头，子路径部署未验证。详见[客户端选择](docs/clients.md)。
+后端 Release 发布 Flutter Bundle、Lynx Bundle 以及 `bundle-index.json` 和客户端专用 manifest。Lynx 仓库 Release 发布标准版、签名 HAP（设备范围由 profile 决定）和 Web standalone/embedded 包。HarmonyOS 为实验性支持。Web 核心流程支持普通 HTTP，已验证根路径和子路径部署。桌面包在没有 Windows Authenticode、Apple Developer ID 和公证的情况下构建，更新清单使用独立 Ed25519 签名。详见[客户端选择](docs/clients.md)和[Bundle 模式说明](docs/bundle-mode.md)。
 
 ### 🖥️ Songloft Desktop（Electron 客户端）
 
@@ -233,6 +246,7 @@ Android 提供 release 签名 APK，iOS 提供需自行重签的 IPA，HarmonyOS
 | [音流](https://music.aqzscn.cn/) | Android / iOS / macOS / Windows | 跨平台 NAS 音乐播放器，支持多种自托管音乐服务 |
 | [流云音盒](https://xgplayer.com/) | HarmonyOS | HarmonyOS 无损音乐播放器，聚合本地、云盘、WebDAV 与 NAS 私有曲库 |
 | [流云音乐](http://music.lyzo.top/) | iOS | 网盘音乐播放器，支持 WebDAV、Navidrome 等多种云盘与自托管音乐服务 |
+| [棉花音乐](https://music.caij.xyz/) | Android / iOS / Windows / macOS | 音乐播放器，支持主流网盘、 WebDAV、NAS、Navidrome等多种自托管音乐服务 |
 
 > 💡 第三方客户端由各自开发者维护，与 Songloft 项目无直接关联。如遇问题请联系对应客户端的开发者。
 ## 🚀 快速开始
@@ -584,7 +598,7 @@ Songloft 内置 JS 插件引擎，插件运行在 QuickJS 沙箱中，支持权�
 
 - **Swagger API 文档**: [swagger.json](https://github.com/songloft-org/songloft/blob/main/docs/swagger.json)
 - **Swagger UI 在线查看**: [petstore.swagger.io](https://petstore.swagger.io/?url=https://raw.githubusercontent.com/songloft-org/songloft/refs/heads/main/docs/swagger.json)
-- **本地查看**: 启动服务后访问 `http://localhost:58091/swagger/index.html`
+- **本地查看**: 使用 `make run` 或带 `-tags dev` 的构建启动后，访问 `http://localhost:58091/swagger/index.html`；生产构建不提供 Swagger UI
 
 ### 主要接口概览
 
@@ -592,13 +606,14 @@ Songloft 内置 JS 插件引擎，插件运行在 QuickJS 沙箱中，支持权�
 |--------|------|------|
 | 认证 | `/api/v1/auth/*` | 登录、刷新 Token、登出、Token 管理 |
 | 歌曲 | `/api/v1/songs/*` | 歌曲 CRUD、封面、播放、歌词 |
-| 歌单 | `/api/v1/playlists/*` | 歌单 CRUD、歌单歌曲管理、导入导出 |
+| 歌单 | `/api/v1/playlists/*` | 歌单 CRUD、成员管理、共享标签、续播进度、导入导出 |
+| 标签 | `/api/v1/song-tags/*` | 共享标签定义、歌曲绑定与解绑 |
 | JS 插件 | `/api/v1/jsplugins/*` | 插件上传、启用、禁用、删除、检查更新 |
 | 扫描 | `/api/v1/scan/*` | 音乐库扫描 |
 | 配置 | `/api/v1/configs/*` | 系统配置管理（通用 KV） |
 | 设置 | `/api/v1/settings/*` | 业务功能设置（音乐目录、HLS 代理、HTTP 代理、自动扫描等） |
 | 缓存管理 | `/api/v1/cache-manage/*` | 缓存统计、清理、配置 |
-| 升级 | `/api/v1/upgrade/*` | 版本检查、升级（仅 Docker） |
+| 升级 | `/api/v1/upgrade/*` | 版本检查（所有部署）、执行升级 / 回退（仅 Docker） |
 | 版本 | `/api/v1/version` | 版本信息 |
 | 健康检查 | `/api/v1/health` | 服务健康状态 |
 | 资源代理 | `/api/v1/proxy` | 资源代理（解决 CORS 问题） |

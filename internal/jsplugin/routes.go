@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+	nethtml "golang.org/x/net/html"
 
 	"songloft/internal/services"
 )
@@ -29,6 +32,9 @@ import (
 var pluginAssets embed.FS
 
 const maxPluginBodySize = 50 << 20 // 50MB，对齐 multipart 上传需求
+
+// Compress complete Lynx bundles without changing media or range responses.
+var compressLynxBundle = chiMiddleware.Compress(5, "application/octet-stream")
 
 func init() {
 	// GENA uses extension methods. Register before any chi router is built;
@@ -49,8 +55,8 @@ func init() {
 var assetVersions = computeAssetVersions()
 
 func computeAssetVersions() map[string]string {
-	versions := make(map[string]string, 3)
-	for _, name := range []string{"theme.css", "components.css", "common.js"} {
+	versions := make(map[string]string, 5)
+	for _, name := range []string{"theme.css", "components.css", "common.js", "lynx-plugin-bridge-shim.js", "lynx-plugin-bridge-module.js"} {
 		data, err := pluginAssets.ReadFile("assets/" + name)
 		if err != nil {
 			continue
@@ -93,7 +99,7 @@ func (m *Manager) RegisterStaticRoutes(r chi.Router) {
 	r.Get("/api/v1/jsplugin/{entryPath}/", m.handlePluginStatic)
 	r.Get("/api/v1/jsplugin/{entryPath}/static", m.handlePluginStaticSubdir)
 	r.Get("/api/v1/jsplugin/{entryPath}/static/*", m.handlePluginStaticSubdirFiles)
-	r.Get("/api/v1/jsplugin-assets/web-core/*", handleWebCoreAssets)
+	r.Get("/api/v1/jsplugin-assets/web-core/*", m.handleWebCoreAssets)
 	r.Get("/api/v1/jsplugin-assets/*", handlePluginAssets)
 
 	// publicPaths：为声明了 publicPaths 的插件注册无需 JWT 的路由
@@ -132,6 +138,9 @@ func handlePluginAssets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	if (subPath == "lynx-plugin-bridge-shim.js" || subPath == "lynx-plugin-bridge-module.js") && r.URL.Query().Get("v") != assetVersions[subPath] {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 
 	seeker, ok := f.(io.ReadSeeker)
 	if !ok {
@@ -173,45 +182,54 @@ func resolveWebCoreDir() string {
 }
 
 // handleWebCoreAssets 服务 @lynx-js/web-core 的静态资源（Lynx 插件在 Flutter
-// WebView 中渲染时需要）。资源从磁盘目录读取（不嵌入二进制，约 620KB）。
+// WebView 中渲染时需要）。优先使用磁盘目录，否则复用完整版内嵌的运行时。
 //
 // @Summary     Web-core 静态资源
-// @Description 服务 Lynx 渲染引擎的 Web 端运行时（CSS/JS/WASM），供声明 renderEngine=lynx 的插件在系统 WebView 中使用。
+// @Description 服务 Lynx 渲染引擎的 Web 端运行时（CSS/JS/WASM），供声明 renderEngine=lynx 的插件在系统 WebView 中使用。优先读取磁盘 web-core 目录，否则读取完整版内嵌资源；两者均无对应文件时返回 404。
 // @Tags        JS 插件
 // @Produce     octet-stream
 // @Param       * path string true "资源路径（如 static/js/client.js）"
 // @Success     200 "资源文件"
-// @Failure     404 {object} map[string]string "资源不存在或 web-core 目录未配置"
+// @Failure     404 {object} map[string]string "资源不存在或未提供 Web 运行时"
 // @Router      /jsplugin-assets/web-core/{path} [get]
-func handleWebCoreAssets(w http.ResponseWriter, r *http.Request) {
-	dir := resolveWebCoreDir()
-	if dir == "" {
-		http.NotFound(w, r)
-		return
-	}
-
+func (m *Manager) handleWebCoreAssets(w http.ResponseWriter, r *http.Request) {
 	subPath := chi.URLParam(r, "*")
-	if subPath == "" {
+	if !fs.ValidPath(subPath) {
 		http.NotFound(w, r)
 		return
 	}
-
-	// 安全：防止路径遍历
-	clean := filepath.Clean(subPath)
-	if strings.Contains(clean, "..") {
+	runtimeFS := m.webCoreFS
+	// 旧部署可继续覆盖整套运行时，避免混用不同版本的 JS/WASM。
+	if dir := resolveWebCoreDir(); dir != "" {
+		runtimeFS = os.DirFS(dir)
+	}
+	if runtimeFS == nil {
 		http.NotFound(w, r)
 		return
 	}
-
-	filePath := filepath.Join(dir, clean)
-	info, err := os.Stat(filePath)
+	f, err := runtimeFS.Open(subPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
 	if err != nil || info.IsDir() {
 		http.NotFound(w, r)
 		return
 	}
-
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	http.ServeFile(w, r, filePath)
+	seeker, ok := f.(io.ReadSeeker)
+	if !ok {
+		data, err := fs.ReadFile(runtimeFS, subPath)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		seeker = bytes.NewReader(data)
+	}
+	// client.js 等固定文件名会随宿主升级变化，不能 immutable 缓存一年。
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeContent(w, r, info.Name(), info.ModTime(), seeker)
 }
 
 // RegisterAPIRoutes 注册 JS 插件 API 转发路由（需要认证，由调用方添加 AuthMiddleware）
@@ -509,6 +527,11 @@ func (m *Manager) tryServeStaticFile(w http.ResponseWriter, r *http.Request, sta
 			slog.Warn("jsplugin-static: 读取 HTML 失败", "absFile", absFile, "error", readErr)
 			return false
 		}
+		plugin, err := m.repo.GetByEntryPath(r.Context(), entryPath)
+		isLynx := err == nil && plugin.RenderEngine == RenderEngineLynx
+		if isLynx {
+			content = versionLynxFallback(content, m.basePath)
+		}
 		content = injectHTMLHead(content, entryPath, m.basePath)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -525,14 +548,71 @@ func (m *Manager) tryServeStaticFile(w http.ResponseWriter, r *http.Request, sta
 		// Firefox 119+ 支持此响应头；Safari 不支持，启用隔离的 standalone
 		// 宿主在 Safari 下跨源嵌入仍受限（embedded 部署同源，无此问题）。
 		w.Header().Set("Cross-Origin-Embedder-Policy", "credentialless")
+		// Web-core's srcdoc MTS realm does not finish its bootstrap under COEP
+		// in Chromium 121 (the WebView fallback baseline). Native Lynx frames
+		// load bundles directly; only their HTML fallback needs this exception.
+		if isLynx {
+			w.Header().Del("Cross-Origin-Embedder-Policy")
+		}
 		_, _ = w.Write(content)
 		return true
 	}
 
 	// 其他静态资源：强缓存
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	if strings.HasSuffix(lower, ".bundle") && r.Method == http.MethodGet && r.Header.Get("Range") == "" {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		compressLynxBundle(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFile(w, r, absFile)
+		})).ServeHTTP(w, r)
+		return true
+	}
 	http.ServeFile(w, r, absFile)
 	return true
+}
+
+// Update the generated bootstrap script before the browser can request the old URL.
+// Keep the rest of the plugin's HTML byte-for-byte intact.
+func versionLynxFallback(content []byte, basePath string) []byte {
+	const shim = "lynx-plugin-bridge-shim.js"
+	if !bytes.Contains(content, []byte(shim)) {
+		return content
+	}
+	const publicAssets = "/api/v1/jsplugin-assets/"
+	assetsBase := basePath + publicAssets
+	tokenizer := nethtml.NewTokenizer(bytes.NewReader(content))
+	offset := 0
+	for tokenType := tokenizer.Next(); tokenType != nethtml.ErrorToken; tokenType = tokenizer.Next() {
+		start := offset
+		offset += len(tokenizer.Raw())
+		if tokenType != nethtml.StartTagToken {
+			continue
+		}
+		token := tokenizer.Token()
+		if token.Data != "script" {
+			continue
+		}
+		for i, attr := range token.Attr {
+			if attr.Key != "src" {
+				continue
+			}
+			src, err := url.Parse(attr.Val)
+			if err != nil || src.IsAbs() || src.Host != "" {
+				continue
+			}
+			switch src.Path {
+			case "../../jsplugin-assets/" + shim, publicAssets + shim, assetsBase + shim:
+				token.Attr[i].Val = assetURL(assetsBase, shim)
+				token.Attr = append(token.Attr,
+					nethtml.Attribute{Key: "data-songloft-lynx-bridge", Val: assetURL(assetsBase, "lynx-plugin-bridge-module.js")},
+				)
+				result := append([]byte(nil), content[:start]...)
+				result = append(result, token.String()...)
+				return append(result, content[offset:]...)
+			}
+		}
+	}
+	return content
 }
 
 // injectHTMLHead 在 HTML 的 <head> 后（紧跟开标签）注入 <base> 标签、auth bridge 脚本和公共资源引用。
