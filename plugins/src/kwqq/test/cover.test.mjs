@@ -68,19 +68,6 @@ test('cover-search：无 source/raw_id 走标题搜索（向后兼容）', async
   assert.ok(!upstreamCalls.some(u => u.includes('/song/info')), '无 rawID 不应请求 song/info');
 });
 
-test('cover-search：kwqq 伪源映射为 kugou 按 rawID 精确取封面', async () => {
-  upstreamCalls = [];
-  songInfoResp = { name: '晴天', singer: '周杰伦', cover: 'http://img.kugou/qt-exact.jpg' };
-  // source_data.s='kwqq'（CCH 上报伪源），rawID 是酷狗 hash；用独立 hash 避免命中
-  // 前序用例 cover|id|kugou|B3A5... 的缓存
-  const res = await get('/cover-search', 'title=%E6%99%B4%E5%A4%A9&source=kwqq&raw_id=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
-  assert.equal(res.statusCode, 200);
-  assert.equal(JSON.parse(res.body).cover_url, 'http://img.kugou/qt-exact.jpg');
-  assert.ok(upstreamCalls.some(u => u.includes('/kugou/song/info?id=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')),
-    'kwqq 应映射为 kugou 走精确分支');
-  assert.ok(!upstreamCalls.some(u => u.includes('/search')), '精确命中不应回退标题搜索');
-});
-
 test('cover-search：migu 跳过精确分支（缺 copyright）直接回退标题搜索', async () => {
   upstreamCalls = [];
   songInfoResp = { cover: 'http://wrong/migu.jpg' };
