@@ -39,11 +39,8 @@ type LyricSearcher interface {
 }
 
 // CoverSearcher 封面搜索接口（由 JS 插件管理器实现）
-// source/rawID 来自歌曲 source_data（平台+平台内 id），让封面提供者可按 rawID 精确取封面
-// （如 kwqq /{source}/song/info?id={rawID}），避免仅按 title 模糊回搜命中错误歌曲。
-// 无 source_data 的旧歌曲传空串，提供者应回退到 title/artist 搜索。
 type CoverSearcher interface {
-	SearchCover(ctx context.Context, title, artist, album string, fingerprint string, isrc string, source string, rawID string) (string, error)
+	SearchCover(ctx context.Context, title, artist, album string, fingerprint string, isrc string) (string, error)
 }
 
 // PlayHistoryRecorder 记录「某播放上下文内播了某首歌」（由 PlayHistoryService 实现）
@@ -1383,35 +1380,9 @@ func (h *SongHandler) GetSongCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 本地封面和远程 URL 都不存在时，尝试从已注册的封面提供者插件获取。
-	// 从 source_data 解析平台+rawID 传给插件，让其按 rawID 精确取封面（避免仅按 title
-	// 模糊回搜命中同名错曲）。解析失败传空串，插件回退 title 搜索。
-	var coverSource, coverRawID string
-	if song.SourceData != "" {
-		var identity struct {
-			S string          `json:"s"`
-			I json.RawMessage `json:"i"`
-		}
-		if err := json.Unmarshal([]byte(song.SourceData), &identity); err == nil {
-			coverSource = strings.TrimSpace(identity.S)
-			// i 可能是字符串（32 位 hash）或数字（平台内 id）：
-			// 字符串直接取；数字按 json.Number 原样保留，避免 float64 精度丢失/科学计数法。
-			// 只接受 string/number，其它形态（bool/object）当空串，插件回退 title 搜索。
-			if len(identity.I) > 0 {
-				var s string
-				if json.Unmarshal(identity.I, &s) == nil {
-					coverRawID = strings.TrimSpace(s)
-				} else {
-					var num json.Number
-					if json.Unmarshal(identity.I, &num) == nil {
-						coverRawID = strings.TrimSpace(num.String())
-					}
-				}
-			}
-		}
-	}
+	// 本地封面和远程 URL 都不存在时，尝试从已注册的封面提供者插件获取
 	if h.coverSearcher != nil && !song.MetadataOverrideMask.Has(models.MetadataOverridePicture) {
-		if coverURL, err := h.coverSearcher.SearchCover(ctx, song.Title, song.Artist, song.Album, song.Fingerprint, song.ISRC, coverSource, coverRawID); err == nil && coverURL != "" && !referencesLocalCover(r, h.urlResolver, coverURL) {
+		if coverURL, err := h.coverSearcher.SearchCover(ctx, song.Title, song.Artist, song.Album, song.Fingerprint, song.ISRC); err == nil && coverURL != "" && !referencesLocalCover(r, h.urlResolver, coverURL) {
 			go h.songService.UpdateCoverURL(context.Background(), song.ID, coverURL)
 			proxyRemoteCover(w, r, h.urlResolver, coverURL, false)
 			return
