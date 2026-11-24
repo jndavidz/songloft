@@ -400,6 +400,9 @@ router.get('/cover-search', async (req) => {
   const title = q.title || '', artist = q.artist || ''
   let source = String(q.source || '').trim().toLowerCase()
   const rawID = String(q.raw_id || '').trim()
+  // 'kwqq' 是 CCH 设备上报的伪源：其 rawID 是酷狗 hash（32 位 hex，如
+  // B3A52A7A958BF0AED0EBFBA2E9A818B7=/kugou/song/info 可精确取封面），映射为 kugou。
+  if (source === 'kwqq') source = 'kugou'
   // source 必须走白名单：既是 URL path 注入防护，也避免非法源拼出畸形请求。
   // migu 的 song/info 必需 copyrightId（query 未传 c），精确分支对它不可靠 →
   // 置空让其回退标题搜索，避免 8s 无效请求与错封面缓存。
