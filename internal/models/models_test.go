@@ -600,6 +600,54 @@ func TestSongMarshalJSON_DoesNotMutateReceiver(t *testing.T) {
 	}
 }
 
+// TestSongMarshalJSON_PlatformName：§2.77-53 —— Song 序列化时从 source_data.s
+// 派生中文平台名 platform_name，供 HTTP API / 各端统一展示。
+func TestSongMarshalJSON_PlatformName(t *testing.T) {
+	cases := []struct {
+		name       string
+		sourceData string
+		want       string
+	}{
+		{"kugou", `{"s":"kugou","i":"x"}`, "酷狗"},
+		{"netease", `{"s":"netease","i":"x"}`, "网易云"},
+		{"qq", `{"s":"qq","i":"x"}`, "QQ"},
+		{"kuwo", `{"s":"kuwo","i":"x"}`, "酷我"},
+		{"migu", `{"s":"migu","i":"x"}`, "咪咕"},
+		{"qianqian", `{"s":"qianqian","i":"x"}`, "千千"},
+		{"case-insensitive", `{"s":"KUGOU","i":"x"}`, "酷狗"},
+		{"unknown", `{"s":"spotify","i":"x"}`, ""},
+		{"empty", "", ""},
+		{"not-json", `garbage`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Song{ID: 1, Type: TypeRemote, Title: "歌", SourceData: tc.sourceData}
+			b, err := json.Marshal(s)
+			if err != nil {
+				t.Fatalf("MarshalJSON failed: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(b, &got); err != nil {
+				t.Fatalf("unmarshal failed: %v", err)
+			}
+			// 不污染 receiver（所有 case 都检查，含空平台名分支）
+			if s.SourceData != tc.sourceData {
+				t.Errorf("SourceData mutated: %q", s.SourceData)
+			}
+			v, exists := got["platform_name"]
+			if tc.want == "" {
+				if exists && v != "" {
+					t.Errorf("platform_name = %v, want empty/absent", v)
+				}
+				return
+			}
+			if !exists || v != tc.want {
+				t.Errorf("platform_name = %v (exists=%v), want %q", v, exists, tc.want)
+			}
+		})
+	}
+}
+
 func TestPlaylistMarshalJSON_DoesNotMutateReceiver(t *testing.T) {
 	originalCoverURL := "https://example.com/playlist-cover.jpg"
 	p := &Playlist{

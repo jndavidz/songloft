@@ -342,7 +342,47 @@ func (s *Song) MarshalJSON() ([]byte, error) {
 		cp.CoverURL = cp.CoverURLPath()
 		cp.LyricURL = cp.LyricURLPath()
 	}
-	return json.Marshal((*songAlias)(&cp))
+	// platform_name 派生字段：匿名嵌入 songAlias + 独立字段，避免污染 DB 模型。
+	return json.Marshal(struct {
+		*songAlias
+		PlatformName string `json:"platform_name,omitempty"`
+	}{
+		songAlias:    (*songAlias)(&cp),
+		PlatformName: platformNameFromSourceData(cp.SourceData),
+	})
+}
+
+// platformNameFromSourceData 从 opaque source_data.s 派生中文平台名（§2.77-53）。
+// 派生字段不入库、不改 Song 结构，仅在序列化时注入 platform_name 供各端统一展示。
+// 映射与 Flutter kSongPlatformNames 对齐；未知/空源返回空串（omitempty 省略）。
+func platformNameFromSourceData(sourceData string) string {
+	if sourceData == "" {
+		return ""
+	}
+	var identity struct {
+		S string `json:"s"`
+	}
+	if err := json.Unmarshal([]byte(sourceData), &identity); err != nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(identity.S)) {
+	case "kugou":
+		return "酷狗"
+	case "netease":
+		return "网易云"
+	case "qq":
+		return "QQ"
+	case "kuwo":
+		return "酷我"
+	case "migu":
+		return "咪咕"
+	case "qianqian":
+		return "千千"
+	case "bilibili":
+		return "哔哩哔哩"
+	default:
+		return ""
+	}
 }
 
 // Validate 验证歌曲数据有效性
