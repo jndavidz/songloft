@@ -704,7 +704,7 @@ type BridgeHandler struct {
 	localOperations                 map[string]context.CancelFunc
 	localClosed                     bool
 	lookupLyrics                    func(context.Context, string, string, string, float64, string, string) (*models.LyricPayload, error)
-	lookupCover                     func(context.Context, string, string, string, string, string) (string, error)
+	lookupCover                     func(context.Context, string, string, string, string, string, string, string) (string, error)
 	playlistService                 *services.PlaylistService             // 歌单服务（playlists 写操作）
 	songTagService                  *services.SongTagService              // 标签服务（tags.* bridge 调用）
 	metadataRefresher               *services.MetadataRefresher           // 元数据刷新服务（songs.refreshMetadata bridge 调用）

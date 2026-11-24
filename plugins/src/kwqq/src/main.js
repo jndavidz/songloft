@@ -392,13 +392,41 @@ router.get('/lyric-search', async (req) => {
 })
 
 // 封面提供者（宿主对无封面歌曲调用）
+// 宿主可传 source + raw_id（来自歌曲 source_data.s/i）：优先按 rawID 精确取封面
+// （/{source}/song/info?id={rawID} 返回 cover，避免仅按 title 模糊回搜命中同名错曲）。
+// 无 source/raw_id 或精确取失败 → 回退 findHit(title, artist)。
 router.get('/cover-search', async (req) => {
   const q = parseQuery(req.query)
   const title = q.title || '', artist = q.artist || ''
-  if (!title) return jsonResponse({ cover_url: '' })
-  const key = 'cover|' + title + '|' + artist
+  let source = String(q.source || '').trim().toLowerCase()
+  const rawID = String(q.raw_id || '').trim()
+  // source 必须走白名单：既是 URL path 注入防护，也避免非法源拼出畸形请求。
+  // migu 的 song/info 必需 copyrightId（query 未传 c），精确分支对它不可靠 →
+  // 置空让其回退标题搜索，避免 8s 无效请求与错封面缓存。
+  if (ALL_SOURCES.indexOf(source) < 0 || source === 'migu') source = ''
+  // 精确分支缓存键含 source+rawID（同名不同曲不串味）；模糊分支沿用旧键。
+  const key = (source && rawID) ? ('cover|id|' + source + '|' + rawID)
+                                : ('cover|' + title + '|' + artist)
   const cached = coverCache.get(key)
   if (cached) return jsonResponse(cached)
+
+  // 1) 精确：按 rawID 调 song/info 取 cover（复用 creditsFor 同款路径）
+  if (source && rawID) {
+    try {
+      const cfg = await getConfig()
+      const path = '/' + source + '/song/info?id=' + encodeURIComponent(rawID)
+      const data = await kwqq(cfg, path, 8000)
+      const cover = data && String(data.cover || '').trim()
+      if (cover) {
+        const payload = { cover_url: cover }
+        coverCache.set(key, payload)
+        return jsonResponse(payload)
+      }
+    } catch (e) { /* 精确失败 → 回退标题搜索 */ }
+  }
+
+  // 2) 回退：按 title + artist 模糊回搜（兼容无 source_data 的旧歌/老宿主/migu）
+  if (!title) return jsonResponse({ cover_url: '' })
   const hit = await findHit(title, artist)
   const payload = { cover_url: (hit && hit.cover_url) || '' }
   coverCache.set(key, payload)

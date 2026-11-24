@@ -91,7 +91,9 @@ func (h *BridgeHandler) handleLocalSongs(action, data string) (string, error) {
 			}
 		}
 		if args.WantCover && h.lookupCover != nil {
-			if cover, err := h.lookupCover(ctx, args.Title, artist, args.Album, args.Fingerprint, args.ISRC); err == nil {
+			// songs.lookupMetadata 桥接路径无 source/rawID 上下文（args 不含这两项），
+			// 传空串让封面提供者回退 title 搜索。
+			if cover, err := h.lookupCover(ctx, args.Title, artist, args.Album, args.Fingerprint, args.ISRC, "", ""); err == nil {
 				media["cover_url"] = cover
 			}
 		}

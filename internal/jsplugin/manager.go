@@ -755,7 +755,7 @@ func (m *Manager) UnregisterCoverProvider(entryPath string) {
 
 // SearchCover 遍历已知封面提供者插件，通过 InvokeHTTP 调用其 /cover-search 端点。
 // 第一个返回非空封面 URL 的结果即停止。语义与 SearchLyrics 完全一致。
-func (m *Manager) SearchCover(ctx context.Context, title, artist, album string, fingerprint string, isrc string) (string, error) {
+func (m *Manager) SearchCover(ctx context.Context, title, artist, album string, fingerprint string, isrc string, source string, rawID string) (string, error) {
 	query := url.Values{
 		"title":  {title},
 		"artist": {artist},
@@ -766,6 +766,14 @@ func (m *Manager) SearchCover(ctx context.Context, title, artist, album string, 
 	}
 	if isrc != "" {
 		query.Set("isrc", isrc)
+	}
+	// 平台+rawID：封面提供者可按 rawID 精确取封面（如 kwqq /{source}/song/info），
+	// 避免只按 title 模糊回搜命中同名错曲。空则提供者回退 title 搜索。
+	if source != "" {
+		query.Set("source", source)
+	}
+	if rawID != "" {
+		query.Set("raw_id", rawID)
 	}
 
 	var result string
