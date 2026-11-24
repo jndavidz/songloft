@@ -602,7 +602,9 @@ router.post('/import', async (req) => {
       duration: Number(it.duration || sd.d) || 0,
       plugin_entry_path: 'kwqq',
       source_data: JSON.stringify(sd),
-      dedup_key: 'kwqq_' + sd.s + '_' + sd.i,
+      // 去重键以 rawID 为唯一基准：source 在手机插件(真实平台名)与 CCH 设备上报
+      // (KWQQ)间摇摆，带 source 会把同一首歌拆成两条 → Songloft 收藏重复。
+      dedup_key: 'kwqq_' + sd.i,
     }
   })
   const resp = await withTimeout(fetch(host + '/api/v1/songs/remote', {
@@ -621,18 +623,18 @@ router.post('/import', async (req) => {
 // 逐源能力（musicdl API-REFERENCE §4/§5.1，2026-10-29 v1.12）：专辑/歌手/歌单/榜单/推荐/评论
 // 走 netease 透传（形状已实测）；专辑另支持精装 /{source}/album（netease/kugou/migu/qianqian ✅，
 // kuwo/qq 501）。music 类型沿用 /api/search 的多源聚合。所有音乐条目自带 dedup_key
-// （与 /import 同式：'kwqq_' + s + '_' + i），player 点播直接透传 /songs/remote，不在客户端拼格式。
-
-// 专辑精装检索支持源（P6：2026-11-03 v1.13 起 kuwo/qq 也接入，六源全通）
+// （与 /import 同式：'kwqq_' + rawID），player 点播直接透传 /songs/remote，不在客户端拼格式。
+// 去重键以 rawID 为唯一基准（不带平台名，与 bridge ensure_song 一致）：同一首歌的 source
+// 在手机插件(真实平台名)与 CCH 设备上报(KWQQ)间摇摆，带平台名会拆成两条 → 收藏重复。
 const BROWSE_SOURCES_WITH_ALBUM = ['netease', 'kugou', 'migu', 'qianqian', 'kuwo', 'qq']
 const NETEASE_SEARCH_TYPE = { album: 10, artist: 100, sheet: 1000 }
 
 // —— P9 门面契约映射：server 归一形状（SearchItem/PlaylistEntry/AlbumEntry）→ browse 契约 ——
-// SearchItem → browse track（source_data 由 itemToResult 拼，dedup_key 统一 kwqq_<source>_<id>）
+// SearchItem → browse track（source_data 由 itemToResult 拼，dedup_key 统一 kwqq_<rawID>）
 function itemToTrack(it) {
   const r = itemToResult(it)
   r.source = it.source
-  r.dedup_key = 'kwqq_' + it.source + '_' + it.id
+  r.dedup_key = 'kwqq_' + it.id
   return r
 }
 // PlaylistEntry → browse sheet（meta.extra 携带平台专有字段）
@@ -807,7 +809,7 @@ async function searchMusicAggregated(cfg, keyword, page, limit) {
     return (data.items || []).map(it => {
       const r = itemToResult(it)
       r.source = it.source
-      r.dedup_key = 'kwqq_' + it.source + '_' + it.id
+      r.dedup_key = 'kwqq_' + it.id
       return r
     })
   }))
@@ -952,7 +954,7 @@ async function kuwoToplistDetail(cfg, id, page, limit) {
   const data = await kwqq(cfg, '/kuwo/toplist/songs?id=' + encodeURIComponent(id) +
     '&page=' + page + '&limit=' + limit, 20000)
   const tracks = ((data && data.items) || []).map(itemToResult)
-  for (const t of tracks) { t.source = 'kuwo'; t.dedup_key = 'kwqq_kuwo_' + t.source_data.i }
+  for (const t of tracks) { t.source = 'kuwo'; t.dedup_key = 'kwqq_' + t.source_data.i }
   await attachCredits(cfg, tracks, 2000)
   return { page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined, tracks }
 }
@@ -961,7 +963,7 @@ async function kuwoSheetInfo(cfg, id, page, limit) {
   const data = await kwqq(cfg, '/kuwo/playlist/songs?id=' + encodeURIComponent(id) +
     '&page=' + page + '&limit=' + limit, 20000)
   const tracks = ((data && data.items) || []).map(itemToResult)
-  for (const t of tracks) { t.source = 'kuwo'; t.dedup_key = 'kwqq_kuwo_' + t.source_data.i }
+  for (const t of tracks) { t.source = 'kuwo'; t.dedup_key = 'kwqq_' + t.source_data.i }
   await attachCredits(cfg, tracks, 2000)
   const out = {
     page, isEnd: !!(data && data.is_end), total: (data && data.total) || undefined,

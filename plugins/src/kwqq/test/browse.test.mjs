@@ -94,7 +94,8 @@ test('browse/search：music 类型多源聚合精装 /{source}/search（不变�
   const out = JSON.parse(res.body);
   // 单曲同样按 SEARCH_SOURCE_ORDER 交错：酷狗在前，其次网易云
   assert.deepEqual(out.items.map(x => x.source), ['kugou', 'netease']);
-  assert.equal(out.items[1].dedup_key, 'kwqq_netease_1');
+  // dedup_key 以 rawID 为唯一基准，不带平台名（§2.77-48 收藏去重）
+  assert.equal(out.items[1].dedup_key, 'kwqq_1');
 });
 
 test('browse/search：缺 keywords 返回 400', async () => {
@@ -166,7 +167,7 @@ test('album/info：netease id 走 P9b /album/detail，extra 元数据 + track_no
   assert.equal(a.album.name, 'Jay');
   assert.equal(a.album.company, 'JM');
   assert.equal(a.album.publish_time, 973526400000);
-  assert.equal(a.tracks[0].dedup_key, 'kwqq_netease_186145');
+  assert.equal(a.tracks[0].dedup_key, 'kwqq_186145');
   assert.equal(a.tracks[0].track_no, 1);
   assert.equal(a.tracks[1].track_no, 2);
   assert.ok(upstreamCalls.some(u => u.includes('/netease/album/detail?id=18918')));
@@ -183,7 +184,7 @@ test('album/info：非 netease 无 id 走精装二段式 /{source}/album?name=&a
   assert.equal(res.statusCode, 200);
   const a = JSON.parse(res.body);
   assert.equal(a.album.name, '测试专辑');
-  assert.equal(a.tracks[0].dedup_key, 'kwqq_migu_m2');
+  assert.equal(a.tracks[0].dedup_key, 'kwqq_m2');
 });
 
 test('album/info：bilibili 无精装通道 → 501 envelope', async () => {
@@ -213,7 +214,7 @@ test('artist/info + artist/works：P9 门面双源（music→itemToTrack，album
 
   const r2 = await post('/artist/works', { id: '6452', type: 'music', source: 'netease' });
   const a2 = JSON.parse(r2.body);
-  assert.equal(a2.items[0].dedup_key, 'kwqq_netease_186145');
+  assert.equal(a2.items[0].dedup_key, 'kwqq_186145');
 
   const r3 = await post('/artist/info', { id: '3520', source: 'kugou' });
   assert.equal(JSON.parse(r3.body).artist.avatar_url, 'http://a2.jpg');
@@ -248,7 +249,7 @@ test('sheet/info：netease/kugou/kuwo 三源门面（meta→sheet，extra.play_c
   const a1 = JSON.parse(r1.body);
   assert.equal(a1.sheet.name, 'N歌单');
   assert.equal(a1.sheet.play_count, 12345);
-  assert.equal(a1.tracks[0].dedup_key, 'kwqq_netease_186145');
+  assert.equal(a1.tracks[0].dedup_key, 'kwqq_186145');
 
   const r2 = await post('/sheet/info', { id: '2399331172', source: 'kuwo' });
   const a2 = JSON.parse(r2.body);
@@ -278,7 +279,7 @@ test('toplists + toplist/detail：P8 门面三源聚合与分发', async () => {
   const r2 = await post('/toplist/detail', { id: '16', source: 'kuwo' });
   const a2 = JSON.parse(r2.body);
   assert.equal(a2.total, 300);
-  assert.equal(a2.tracks[0].dedup_key, 'kwqq_kuwo_624683929');
+  assert.equal(a2.tracks[0].dedup_key, 'kwqq_624683929');
   assert.equal(a2.isEnd, false);
 });
 
