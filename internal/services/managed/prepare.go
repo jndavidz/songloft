@@ -284,15 +284,19 @@ func (m *Manager) run(op *PrepareOp, ref *Ref) {
 		}()
 		return VerifyMP3(finalPath, expect)
 	}()
+	// 三态写入 prepare 结果：即使验证失败（rejected），也要把等级与原因
+	// 留给票据/诊断面——error 只表达「不进 ready」，不丢弃验证事实（M-1）。
+	if rep != nil {
+		m.mu.Lock()
+		op.DurationSec = rep.DurationEstSec
+		op.ValidationLevel = rep.ValidationLevel
+		op.ValidationReason = rep.ValidationReason
+		m.mu.Unlock()
+	}
 	if err != nil {
 		m.fail(op, err)
 		return
 	}
-	m.mu.Lock()
-	op.DurationSec = rep.DurationEstSec
-	op.ValidationLevel = rep.ValidationLevel
-	op.ValidationReason = rep.ValidationReason
-	m.mu.Unlock()
 
 	// 验证通过的表示落位为最终名（票据指向 final.mp3）：
 	// 拷贝而非改名——原始 source.* 与中间 intermediate.mp3 保留（表示隔离，

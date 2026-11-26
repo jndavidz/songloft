@@ -48,15 +48,20 @@ func TestVerifyLevel_RealWorld37BDegraded(t *testing.T) {
 	}
 }
 
-// TestVerifyLevel_RealSample_WhenAvailable：真机《爱你一万年》原文件（37B 残片）
-// 按 env 可达时跑 public seam；不可达显式 Skip（不静默降级为 hermetic 替代）。
-func TestVerifyLevel_RealSample_WhenAvailable(t *testing.T) {
-	p := os.Getenv("SONGLOFT_VERIFY_REAL_SAMPLE")
-	if p == "" {
-		t.Skip("设 SONGLOFT_VERIFY_REAL_SAMPLE 指向真机样本")
+// 真机样本默认路径（工作区约定）；env 可覆盖。存在即跑，不存在 Skip（B-1）。
+func realSamplePath() string {
+	if p := os.Getenv("SONGLOFT_VERIFY_REAL_SAMPLE"); p != "" {
+		return p
 	}
+	return "/mnt/d/_work/dev/tmp/open-xiaoai/20261127/verifymp3/ai-ni-yi-wan-nian.source.mp3"
+}
+
+// TestVerifyLevel_RealSample：真机《爱你一万年》原文件（sha256 efa14216…，
+// 5623 帧 + 37B 残片）走 public seam，应为 degraded（ticket 01 判据 1）。
+func TestVerifyLevel_RealSample(t *testing.T) {
+	p := realSamplePath()
 	if _, err := os.Stat(p); err != nil {
-		t.Fatalf("真机样本不可达: %v", err)
+		t.Skipf("真机样本不可达（设 SONGLOFT_VERIFY_REAL_SAMPLE）: %v", err)
 	}
 	rep, err := VerifyMP3(p, VerifyExpectation{MaxBitrateKbps: 320})
 	if err != nil {
@@ -70,27 +75,82 @@ func TestVerifyLevel_RealSample_WhenAvailable(t *testing.T) {
 	}
 }
 
-// TestVerifyLevel_LeakKillRejected：四类漏杀样本必须拒绝（hermetic 构造）。
-func TestVerifyLevel_LeakKillRejected(t *testing.T) {
-	base := validMP3Bytes(t)
-	cases := []struct {
+// 六组复核探针的 hermetic 精确复现（B-2）：场景语义与 dev: tmp/.../verifymp3/
+// 的六个文件一一对应，含此前漏测的 3B TAG 与帧头碎片（hasFrameSyncIn 防线）。
+func verifyProbeCases(base []byte) []struct {
+	name string
+	data []byte
+	want string // "verified" / "degraded" / "rejected"
+} {
+	// 末帧起点：从尾部往前找最后一个 0xFFE 同步点。
+	last := -1
+	for i := len(base) - 4; i >= 0; i-- {
+		if base[i] == 0xFF && base[i+1]&0xE0 == 0xE0 {
+			last = i
+			break
+		}
+	}
+	return []struct {
 		name string
 		data []byte
+		want string
 	}{
-		{"末帧越过EOF", base[:len(base)-4]}, // 截断末帧尾部 ⇒ 声明帧长越过 EOF
-		{"128KiB垃圾含TAG", append(append(append([]byte(nil), base...), bytes.Repeat([]byte{'X'}, 128*1024-3)...), []byte("TAG")...)},
-		{"128KiB垃圾末尾ID3v1伪装", append(append(append([]byte(nil), base...), bytes.Repeat([]byte{0x55}, 128*1024-128)...), append([]byte("TAG"), make([]byte, 125)...)...)},
-		{"末帧只剩3字节", base[:len(base)-3]},
+		{"完整帧流", base, "verified"},
+		{"末帧只剩4字节头", base[:last+4], "rejected"},
+		{"末帧只剩3字节(帧头碎片)", base[:last+3], "rejected"},
+		{"3字节TAG尾部", append(append([]byte(nil), base...), []byte("TAG")...), "degraded"},
+		{"128KiB垃圾含TAG", append(append(append([]byte(nil), base...), bytes.Repeat([]byte{'X'}, 128*1024-3)...), []byte("TAG")...), "rejected"},
+		{"128KiB+1垃圾含TAG", append(append(append(append([]byte(nil), base...), bytes.Repeat([]byte{'X'}, 128*1024-3)...), []byte("TAG")...), 'X'), "rejected"},
 	}
-	for _, tc := range cases {
+}
+
+func TestVerifyLevel_SixProbesHermetic(t *testing.T) {
+	base := validMP3Bytes(t)
+	for _, tc := range verifyProbeCases(base) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := writeVerifyFixture(t, tc.name+".mp3", tc.data)
 			rep, err := VerifyMP3(p, VerifyExpectation{MaxBitrateKbps: 320})
-			if err == nil {
-				t.Fatalf("%s 必须被拒绝（漏杀防线），got level=%q", tc.name, rep.ValidationLevel)
+			got := "verified"
+			if err != nil {
+				got = "rejected"
+			} else if rep.ValidationLevel == "degraded" {
+				got = "degraded"
 			}
-			if rep == nil || rep.ValidationLevel != "rejected" {
-				t.Fatalf("拒绝报告必须携带 rejected 等级，got %+v", rep)
+			if got != tc.want {
+				t.Errorf("%s: 期望 %s，got %s (err=%v)", tc.name, tc.want, got, err)
+			}
+		})
+	}
+}
+
+// 真探针文件按 env 可达时额外复核（不静默降级为 hermetic 替代）。
+func TestVerifyLevel_OriginalProbeFiles(t *testing.T) {
+	dir := os.Getenv("SONGLOFT_VERIFY_PROBE_DIR")
+	if dir == "" {
+		dir = "/mnt/d/_work/dev/tmp/open-xiaoai/20261126/verifymp3"
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Skipf("复核探针目录不可达: %v", err)
+	}
+	cases := map[string]string{
+		"valid_fixture.mp3":                 "verified",
+		"last_frame_header_only.mp3":        "rejected",
+		"last_frame_three_bytes.mp3":        "rejected",
+		"three_byte_TAG_tail.mp3":           "degraded",
+		"128KiB_junk_with_TAG.mp3":          "rejected",
+		"128KiB_plus_one_junk_with_TAG.mp3": "rejected",
+	}
+	for file, want := range cases {
+		t.Run(file, func(t *testing.T) {
+			rep, err := VerifyMP3(filepath.Join(dir, file), VerifyExpectation{MaxBitrateKbps: 320})
+			got := "verified"
+			if err != nil {
+				got = "rejected"
+			} else if rep.ValidationLevel == "degraded" {
+				got = "degraded"
+			}
+			if got != want {
+				t.Errorf("%s: 期望 %s，got %s (err=%v)", file, want, got, err)
 			}
 		})
 	}

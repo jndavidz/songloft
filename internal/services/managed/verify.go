@@ -71,6 +71,9 @@ func VerifyMP3(path string, exp VerifyExpectation) (rep *VerifyReport, err error
 	if err != nil {
 		if rep == nil {
 			rep = &VerifyReport{}
+			if fi, serr := os.Stat(path); serr == nil {
+				rep.SizeBytes = fi.Size()
+			}
 		}
 		rep.ValidationLevel = ValidationRejected
 		if rep.ValidationReason == "" || rep.ValidationReason == reasonComplete {
@@ -231,6 +234,10 @@ func verifyMP3(path string, exp VerifyExpectation) (*VerifyReport, error) {
 		if dur > 0 && abs64(dur-rep.DurationEstSec) > tol {
 			return nil, fmt.Errorf("probe duration %.2fs diverges from frame estimate %.2fs beyond %.2fs", dur, rep.DurationEstSec, tol)
 		}
+		rep.ValidationReason += "/probe-cross-checked"
+	} else {
+		// 不静默：交叉验证缺失必须记入原因（M-3），供票据/诊断解释信任等级。
+		rep.ValidationReason += "/probe-unavailable"
 	}
 	return rep, nil
 }
