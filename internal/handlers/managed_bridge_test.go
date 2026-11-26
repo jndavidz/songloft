@@ -37,6 +37,10 @@ func (f *fakeBridge) handler() http.Handler {
 		case strings.HasSuffix(r.URL.Path, "/commands"):
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"code":200,"data":{"receipt_id":"r-1","state":"accepted"}}`))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/api/music/sessions/"):
+			// State read-through：返回 bridge 快照（含 entries/current_index）。
+			_, _ = w.Write([]byte(`{"code":200,"data":{"session_id":"ms-9","epoch":1,"phase":"playing",` +
+				`"entries":[{"entry_id":"e-b1"},{"entry_id":"e-b2"}],"current_index":1}}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/music/sessions":
 			_, _ = w.Write([]byte(`{"code":200,"data":{"session_id":"ms-9"}}`))
 		default:

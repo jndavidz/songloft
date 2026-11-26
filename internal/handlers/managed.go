@@ -439,7 +439,74 @@ func (h *ManagedHandler) State(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "session required"})
 		return
 	}
-	respondJSON(w, http.StatusOK, h.bff.State(session))
+	local := h.bff.State(session)
+	// read-through（P4/ticket 05a）：已 handoff 的会话以 bridge 快照为权威，
+	// 本地 BFF 仅作未 handoff / bridge 不可达时的回落（fail-soft）。
+	if h.bridge != nil {
+		st := h.bridgeState(fmt.Sprintf("%s|%d", session, local.Epoch))
+		if st.sid != "" {
+			snap, err := h.bridge.Snapshot(r.Context(), st.sid)
+			if err == nil {
+				respondJSON(w, http.StatusOK, projectBridgeState(snap, st))
+				return
+			}
+		}
+	}
+	respondJSON(w, http.StatusOK, local)
+}
+
+// projectBridgeState 把 bridge 快照映射成对外 BFFSession 同形态（只读投影）。
+// bridge entries[].entry_id → BFF entry 的翻译走 bridgeKeyState.entries（唯一翻译层）。
+func projectBridgeState(snap map[string]any, st *bridgeKeyState) managed.BFFSession {
+	out := managed.BFFSession{Session: strVal(snap["session_id"])}
+	if e, ok := toInt64(snap["epoch"]); ok {
+		out.Epoch = e
+	}
+	out.Phase = managed.BFFPhase(strVal(snap["phase"]))
+	entries, _ := snap["entries"].([]any)
+	for _, raw := range entries {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		bid := strVal(item["entry_id"])
+		be := bid // 未登记翻译时用 bridge id 原值（fail-soft）
+		for bff, bridged := range st.entries {
+			if bridged == bid {
+				be = bff
+				break
+			}
+		}
+		out.Queue = append(out.Queue, managed.QueueEntry{Entry: be})
+	}
+	if idx, ok := toInt(snap["current_index"]); ok {
+		out.Current = idx
+	}
+	return out
+}
+
+func strVal(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int64(n), true
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	}
+	return 0, false
+}
+
+func toInt(v any) (int, bool) {
+	n, ok := toInt64(v)
+	return int(n), ok
 }
 
 // @Summary 准备当前曲的固定表示
