@@ -514,7 +514,8 @@ func (h *ManagedHandler) PrepareState(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"state": op.State, "ref_digest": op.RefDigest,
 		"resolved_source": op.ResolvedSource, "fallback_reason": op.FallbackReason,
-		"duration_s": op.DurationSec}
+		"duration_s":        op.DurationSec,
+		"validation_status": op.ValidationLevel, "validation_reason": op.ValidationReason}
 	if op.Error != "" {
 		out["error"] = op.Error
 	}
