@@ -137,7 +137,8 @@ func TestVerifyMP3_TruncatedTailNeverPanics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读 fixture 失败: %v", err)
 	}
-	knownRejects := []string{"not a recognizable", "expected frame sync", "trailing bytes"}
+	// "incomplete last frame" = split-v2 的末帧不完整规范拒绝（F10 漏杀修复）。
+	knownRejects := []string{"not a recognizable", "expected frame sync", "trailing bytes", "incomplete last frame"}
 	for _, cutRel := range []int{1, 2, 3, 4, 10, 36, 50, 100, 200, 400} {
 		cut := len(data) - cutRel
 		if cut <= 0 {

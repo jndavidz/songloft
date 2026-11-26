@@ -36,6 +36,18 @@ type VerifyExpectation struct {
 	ToleranceSec   float64 // ffprobe 与帧估计时长容差，默认 1.5s
 }
 
+// ValidationLevel 三态验证等级（legacy proxy 路径不得产出 verified）。
+const (
+	ValidationVerified = "verified" // 完整帧流、结构干净、无良性尾部
+	ValidationDegraded = "degraded" // 音频主体完整且解码通过，仅有已知良性尾部（带原因）
+	ValidationRejected = "rejected" // 截断/垃圾/参数漂移——不进入 ready
+)
+
+const verifierVersion = "split-v2-20261127"
+
+// reasonComplete 是「干净帧流」初始原因；wrapper 用它判断是否需覆盖为 rejected。
+const reasonComplete = "complete-frame-stream/" + verifierVersion
+
 // VerifyReport 汇总一次完整验证的实测事实。
 type VerifyReport struct {
 	SizeBytes         int64   `json:"size_bytes"`
@@ -47,16 +59,38 @@ type VerifyReport struct {
 	MaxFrameKbps      int     `json:"max_frame_kbps"`
 	AvgKbps           int     `json:"avg_kbps"`
 	TrailingJunkBytes int     `json:"trailing_junk_bytes"`
+	ValidationLevel   string  `json:"validation_level"`            // verified / degraded / rejected
+	ValidationReason  string  `json:"validation_reason,omitempty"` // 判定原因（含验证器版本）
 }
 
 // VerifyMP3 对最终表示做完整验证；任何一项不满足都返回 error，
-// 绝不降级为「原样投送」。
-func VerifyMP3(path string, exp VerifyExpectation) (*VerifyReport, error) {
+// 绝不降级为「原样投送」。三态契约：error 非 nil 时 rep.ValidationLevel = rejected
+// （调用方可读原因）；通过时 rep 为 verified 或 degraded。
+func VerifyMP3(path string, exp VerifyExpectation) (rep *VerifyReport, err error) {
+	rep, err = verifyMP3(path, exp)
+	if err != nil {
+		if rep == nil {
+			rep = &VerifyReport{}
+		}
+		rep.ValidationLevel = ValidationRejected
+		if rep.ValidationReason == "" || rep.ValidationReason == reasonComplete {
+			rep.ValidationReason = "rejected/" + verifierVersion + ": " + err.Error()
+		}
+	}
+	return rep, err
+}
+
+// verifyMP3 是验证内核：所有拒绝路径返回 error，三态与原因由外层 VerifyMP3 统一收口。
+func verifyMP3(path string, exp VerifyExpectation) (*VerifyReport, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read final representation: %w", err)
 	}
-	rep := &VerifyReport{SizeBytes: int64(len(data))}
+	rep := &VerifyReport{
+		SizeBytes:        int64(len(data)),
+		ValidationLevel:  ValidationVerified,
+		ValidationReason: reasonComplete,
+	}
 
 	if exp.DeclaredSize > 0 && rep.SizeBytes != exp.DeclaredSize {
 		return nil, fmt.Errorf("size mismatch: declared %d, actual %d", exp.DeclaredSize, rep.SizeBytes)
@@ -83,21 +117,19 @@ func VerifyMP3(path string, exp VerifyExpectation) (*VerifyReport, error) {
 		maxTotalGap = 4 * 1024
 	}
 	scan := off
-	lastFrameLen := 0 // 循环外留底：末帧声明长度越界时的残余计算用
 	for scan+4 <= len(data) {
 		if !frameSyncAt(data, scan) {
 			// 非帧头：真实世界文件存在厂商填充/垃圾（如 kuwo 尾部 0x55 块）。
 			// 有界重同步：窗口内找「连续两帧都合法」的位置继续；预算超限即拒。
 			next, ok := resync(data, scan, sampleRate, maxKbps)
 			if !ok {
-				// 无法重同步 → 视作尾部：残余必须在预算内且含标签标记
-				// （截断的帧碎片不含标记，照旧拒绝——截断防线不放松）
-				tail := data[scan:]
-				if len(tail) <= 128*1024 && containsTagMarker(tail) {
-					rep.TrailingJunkBytes = len(tail)
-					break
+				// 无法重同步 → 视作尾部，交给统一裁决原语（F10 漏杀修复）。
+				// 不提前 return：继续走后面的帧数/时长校验，防止无帧垃圾被
+				// 「小良性残片」分支误放行。
+				if err := applyTailDecision(rep, data[scan:]); err != nil {
+					return rep, err
 				}
-				return nil, fmt.Errorf("expected frame sync at offset %d (after %d audio bytes): not a recognizable frame stream or tagged tail", scan, scan-off)
+				break
 			}
 			gapBytes += next - scan
 			if gapBytes > maxTotalGap {
@@ -146,7 +178,6 @@ func VerifyMP3(path string, exp VerifyExpectation) (*VerifyReport, error) {
 		}
 		spf := mp3SamplesPerMPEG[version]
 		frameLen := (spf/8)*kbps*1000/sr + padding // L3: 144 或 72 = spf/8
-		lastFrameLen = frameLen
 		if frameLen <= 0 {
 			return nil, fmt.Errorf("frame at offset %d: non-positive frame length", scan)
 		}
@@ -159,20 +190,14 @@ func VerifyMP3(path string, exp VerifyExpectation) (*VerifyReport, error) {
 	}
 	if scan != len(data) && rep.TrailingJunkBytes == 0 {
 		if scan > len(data) {
-			// 末帧头声明长度越过 EOF（截断/VBR 常见伪影，2026-11-22 线上 panic 源
-			// slice bounds [9607900:9607864]）：文件可正常播放——按尾部残余标记
-			// 处理并跳过尾标签检查（原 data[scan:] 越界 panic 杀死整个进程）。
-			rep.TrailingJunkBytes = len(data) - (scan - lastFrameLen)
-			if rep.TrailingJunkBytes < 0 {
-				rep.TrailingJunkBytes = 0
-			}
-		} else {
-			// 循环自然退出（残余 <4 字节）：残余必须含标签标记，截断防线不放松。
-			tail := data[scan:]
-			if !isRecognizedTailTag(tail) {
-				return nil, fmt.Errorf("%d trailing bytes after last frame at %d are not a recognized tag", len(tail), scan)
-			}
-			rep.TrailingJunkBytes = len(tail)
+			// 末帧头声明长度越过 EOF = 帧本身不完整（F10 漏杀源），
+			// 不是尾部残片，故不经过 applyTailDecision（它裁决的是完整帧之后的残余）。
+			// 拒绝同时避免 data[scan:] 越界 panic。
+			return nil, fmt.Errorf("incomplete last frame at %d: declared frame length overruns EOF by %d bytes", scan-off, scan-len(data))
+		}
+		// 循环自然退出（残余 <4 字节）：统一尾部裁决。
+		if err := applyTailDecision(rep, data[scan:]); err != nil {
+			return rep, fmt.Errorf("tail after last frame at %d: %w", scan, err)
 		}
 	}
 	if rep.FrameCount == 0 {
@@ -230,22 +255,26 @@ func skipID3v2(data []byte) (int, error) {
 	return int(total), nil
 }
 
-// isRecognizedTailTag 报告末尾残余是否是已知标签：ID3v1（TAG+128）、
-// APEv2（APETAGEX 前缀）、Lyrics3v2（LYRICS200）。其余一律不是。
-func isRecognizedTailTag(tail []byte) bool {
-	if len(tail) == 0 {
-		return true
+// applyTailDecision 是尾部裁决的唯一入口：把残余字节映射到三态并写入 rep。
+// 规则集中于此，所有尾部出现位置（重同步失败、自然残余）共享同一判据。
+func applyTailDecision(rep *VerifyReport, tail []byte) error {
+	rep.TrailingJunkBytes = len(tail)
+	switch {
+	case len(tail) == 0:
+		rep.ValidationLevel = ValidationVerified
+		rep.ValidationReason = "no-tail/" + verifierVersion
+	case isStructuredTagTail(tail):
+		rep.ValidationLevel = ValidationVerified
+		rep.ValidationReason = "structured-tag-tail/" + verifierVersion
+	case len(tail) <= maxBenignTailBytes && !hasFrameSyncIn(tail):
+		rep.ValidationLevel = ValidationDegraded
+		rep.ValidationReason = "benign-untagged-tail/" + verifierVersion
+	default:
+		rep.ValidationLevel = ValidationRejected
+		rep.ValidationReason = "unrecognized-tail/" + verifierVersion
+		return fmt.Errorf("%d trailing bytes are not a structured tag or benign tail", len(tail))
 	}
-	if len(tail) >= 3 && string(tail[:3]) == "TAG" {
-		return true
-	}
-	if len(tail) >= 8 && string(tail[:8]) == "APETAGEX" {
-		return true
-	}
-	if len(tail) >= 9 && string(tail[:9]) == "LYRICS200" {
-		return true
-	}
-	return false
+	return nil
 }
 
 func abs64(f float64) float64 {
@@ -331,28 +360,39 @@ func parseFrameHeader(data []byte, off int, maxKbps int) (int, int, bool) {
 	return frameLen, sampleTbl[srIdx], true
 }
 
-// containsTagMarker 报告尾部残余里是否含可识别的标签标记
-// （ID3v1 TAG / APEv2 / Lyrics3 / 结尾 ID3v2）——厂商垃圾包裹的标签也算。
-func containsTagMarker(tail []byte) bool {
-	for _, marker := range []string{"TAG", "APETAGEX", "LYRICS200", "ID3"} {
-		if bytesIndex(tail, marker) {
-			return true
-		}
+// maxBenignTailBytes：无帧同步的小残片上限（真机 37B 零填充残片在此范围内）。
+// 大于此值的尾部一律按垃圾/截断拒绝，关闭「128KiB 垃圾含 TAG」漏杀。
+const maxBenignTailBytes = 4 * 1024
+
+// isStructuredTagTail 按结构而非任意子串判定标签尾部（F10 漏杀修复）：
+//   - ID3v1：末 128B 且以 TAG 起头
+//   - APEv2：以 APETAGEX 起头（含 footer 位置）
+//   - Lyrics3：以 LYRICS200 起头
+//
+// 任意位置的 TAG 子串不再视为合法标签。
+func isStructuredTagTail(tail []byte) bool {
+	// 结构标签必须有界（F10：128KiB 垃圾 + 末尾 TAG 不得伪装 ID3v1）。
+	// 真实 ID3v1 = 128B；APEv2/Lyrics3 也不应超过良性尾部上限。
+	if len(tail) == 0 || len(tail) > maxBenignTailBytes {
+		return false
+	}
+	if len(tail) >= 128 && string(tail[len(tail)-128:len(tail)-125]) == "TAG" {
+		return true
+	}
+	if len(tail) >= 8 && string(tail[:8]) == "APETAGEX" {
+		return true
+	}
+	if len(tail) >= 9 && string(tail[:9]) == "LYRICS200" {
+		return true
 	}
 	return false
 }
 
-func bytesIndex(hay []byte, needle string) bool {
-	n := len(needle)
-	for i := 0; i+n <= len(hay); i++ {
-		match := true
-		for j := 0; j < n; j++ {
-			if hay[i+j] != needle[j] {
-				match = false
-				break
-			}
-		}
-		if match {
+// hasFrameSyncIn 报告尾部残余里是否含 0xFFE 帧同步前缀——
+// 含之说明可能是被截断的帧碎片，不得按良性尾部放行。
+func hasFrameSyncIn(tail []byte) bool {
+	for i := 0; i+1 < len(tail); i++ {
+		if frameSyncAt(tail, i) {
 			return true
 		}
 	}

@@ -59,6 +59,11 @@ type PrepareOp struct {
 	// DurationSec 是验证得到的最终表示时长（MP3 帧估计）。
 	// 投送层用它做「可信时长」EOF 判定，避免队列项缺时长导致永不推进。
 	DurationSec float64
+	// ValidationLevel/Reason 把三态验证结果带到票据与诊断面（ticket 01）。
+	// verified 才进入 managed ready 的完整保证；degraded 带原因可被解释，
+	// 但不得与 verified 共用信任等级（legacy proxy 路径同理）。
+	ValidationLevel  string
+	ValidationReason string
 }
 
 // PrepareDeps 注入准备链的外部能力；全部可 fake。
@@ -263,7 +268,7 @@ func (m *Manager) run(op *PrepareOp, ref *Ref) {
 		}
 	}
 
-	expect := VerifyExpectation{MinDurationSec: 1, MaxBitrateKbps: 320}
+	expect := VerifyExpectation{MinDurationSec: 1, MaxBitrateKbps: 320, Prober: DefaultProber()}
 	// 声明的大小只对「直投 MP3」有意义：转码后的 final 是另一份字节，
 	// 拿输入声明大小去校验输出必然不符（bilibili 等源的真实情况）。
 	if result.SizeBytes > 0 && !result.Verification.RequiresTranscode {
@@ -285,6 +290,8 @@ func (m *Manager) run(op *PrepareOp, ref *Ref) {
 	}
 	m.mu.Lock()
 	op.DurationSec = rep.DurationEstSec
+	op.ValidationLevel = rep.ValidationLevel
+	op.ValidationReason = rep.ValidationReason
 	m.mu.Unlock()
 
 	// 验证通过的表示落位为最终名（票据指向 final.mp3）：
