@@ -213,7 +213,10 @@ func (s *HLSTranscodeService) run(session *hlsSession, opts HLSTranscodeOptions,
 	input := gateway.URL(opts.URL)
 	// 只接受 HLS / MPEG-TS / MP4 媒体；所有网络引用先经过受控网关。
 	// FFmpeg 只连接本机网关，不能继承环境 http_proxy 把能力 URL 发给外部代理。
-	inputArgs := []string{"-http_proxy", "", "-protocol_whitelist", "http,tcp,crypto", "-format_whitelist", "hls,mpegts,mov"}
+	// 与预开放路径 hlsInputArgs 的 hls,mpegts,mov,flv 保持一致：
+	// 电台 FLV 经受控 hlsPullGateway 从本机网关出字节（FFmpeg 不直连上游），
+	// 格式白名单不是 SSRF 边界，缺 flv 只会让 FLV 电台 HLS 会话 probe 502。
+	inputArgs := []string{"-http_proxy", "", "-protocol_whitelist", "http,tcp,crypto", "-format_whitelist", "hls,mpegts,mov,flv"}
 	probeCtx, probeCancel := context.WithTimeout(processCtx, s.startupTimeout)
 	probeArgs := append([]string{"-v", "error"}, inputArgs...)
 	probeArgs = append(probeArgs, "-analyzeduration", "2000000", "-probesize", "2097152", "-show_entries", "stream=codec_type,codec_name,field_order:stream_disposition=attached_pic", "-of", "json", input)
