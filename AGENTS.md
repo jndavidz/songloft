@@ -13,7 +13,7 @@
 | API 响应格式 / Swagger UI | [docs/api_response.md](docs/api_response.md) / 开发模式 `/swagger/index.html` |
 | 前端踩坑 / UI 验证 | [docs/frontend_gotchas.md](docs/frontend_gotchas.md) |
 | 文档站维护 | [docs/development.md](docs/development.md) |
-| 待办 / 后续优化 | [docs/plan/](docs/plan/)（当前：[投送时歌词不跟随](docs/plan/dlna-lyrics-follow.md)） |
+| 待办 / 后续优化 | 三仓联合索引 `open-xiaoai/docs/plan/pending-followups.md` **SL 区**（本仓 SL-001 投送歌词不跟随；详情在 `open-xiaoai/docs/plan/pending-followups/`）。原 `docs/plan/dlna-lyrics-follow.md` 已迁出为墓碑 |
 | 部署与生态集成 | [Songloft 部署现状与生态集成（2026-10-28）](docs/plan/songloft-deployment-and-integration-20261028.md)（NAS 部署、musicdl/bridge 交互与缺口） |
 | JS 插件 / 插件源 | [插件开发指南](docs/js-plugin-development-guide.md)、[插件源制作](docs/plugin_registry.md)、`plugins/toolchain/README.md` |
 
